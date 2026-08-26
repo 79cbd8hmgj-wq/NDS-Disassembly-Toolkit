@@ -17,8 +17,8 @@ def require_range(data: Buffer, offset: int, size: int, label: str) -> memoryvie
 
 
 def read_u16_le(data: Buffer, offset: int, label: str) -> int:
-    return struct.unpack_from("<H", require_range(data, offset, 2, label))[0]
+    return int(struct.unpack_from("<H", require_range(data, offset, 2, label))[0])
 
 
 def read_u32_le(data: Buffer, offset: int, label: str) -> int:
-    return struct.unpack_from("<I", require_range(data, offset, 4, label))[0]
+    return int(struct.unpack_from("<I", require_range(data, offset, 4, label))[0])
