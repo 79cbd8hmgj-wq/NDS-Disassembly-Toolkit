@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - phase-1-low-level-core
+      - phase-2-workspace-roundtrip
   pull_request:
 
 jobs:
