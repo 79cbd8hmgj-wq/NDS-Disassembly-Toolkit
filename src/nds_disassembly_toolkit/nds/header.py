@@ -49,7 +49,7 @@ class NdsHeader:
     rom_size_field: int
 
     @classmethod
-    def from_bytes(cls, data: Buffer) -> "NdsHeader":
+    def from_bytes(cls, data: Buffer) -> NdsHeader:
         header = require_range(data, 0, 0x200, "NDS header")
         result = cls(
             title=_decode_ascii(header[0x00:0x0C]),
