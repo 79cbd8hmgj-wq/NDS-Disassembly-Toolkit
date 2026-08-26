@@ -16,14 +16,14 @@ from nds_disassembly_toolkit.nds.overlays import (
 )
 
 __all__ = [
+    "OVERLAY_ENTRY_SIZE",
+    "ROOT_DIRECTORY_ID",
     "FatEntry",
     "FntDirectory",
     "FntFile",
     "FntTree",
     "NdsHeader",
-    "OVERLAY_ENTRY_SIZE",
     "OverlayEntry",
-    "ROOT_DIRECTORY_ID",
     "SectionRange",
     "parse_arm7_overlays",
     "parse_arm9_overlays",
