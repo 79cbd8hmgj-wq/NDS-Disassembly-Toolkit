@@ -8,7 +8,11 @@ from pathlib import Path
 from nds_disassembly_toolkit.compression.blz import compress_blz
 from nds_disassembly_toolkit.errors import WorkspaceError
 from nds_disassembly_toolkit.profile import RomProfile
-from nds_disassembly_toolkit.source_compile import CompiledSource, SourceToolchain, compile_source_patch
+from nds_disassembly_toolkit.source_compile import (
+    CompiledSource,
+    SourceToolchain,
+    compile_source_patch,
+)
 from nds_disassembly_toolkit.source_patch import (
     SourceHook,
     SourcePatchManifest,
@@ -164,7 +168,8 @@ def build_patched_runtime(
 def encode_target_storage(target: SourceTarget, runtime_image: bytes) -> bytes:
     if len(runtime_image) != target.runtime_size:
         raise WorkspaceError(
-            f"patched runtime size changed: expected {target.runtime_size}, got {len(runtime_image)}"
+            "patched runtime size changed: "
+            f"expected {target.runtime_size}, got {len(runtime_image)}"
         )
     if target.storage_encoding in {"decoded-overlay", "raw-arm"}:
         if len(runtime_image) != target.stored_size:
@@ -183,7 +188,9 @@ def encode_target_storage(target: SourceTarget, runtime_image: bytes) -> bytes:
                 target_size=target.stored_size,
             )
         except (ValueError, AssertionError) as exc:
-            raise WorkspaceError(f"cannot re-encode BLZ target at exact stored size: {exc}") from exc
+            raise WorkspaceError(
+                f"cannot re-encode BLZ target at exact stored size: {exc}"
+            ) from exc
     raise WorkspaceError(f"unsupported source target storage encoding: {target.storage_encoding}")
 
 
@@ -219,7 +226,9 @@ def _commit_target_and_report(
         try:
             current_stored = target_path.read_bytes()
         except OSError as exc:
-            raise WorkspaceError(f"cannot revalidate source patch target {target_path}: {exc}") from exc
+            raise WorkspaceError(
+                f"cannot revalidate source patch target {target_path}: {exc}"
+            ) from exc
         if current_stored != original_stored:
             raise WorkspaceError("source patch target changed during build; refusing stale write")
         target_temp.replace(target_path)
@@ -243,9 +252,7 @@ def apply_source_patch(
 ) -> SourcePatchReport:
     manifest = load_source_patch_manifest(manifest_path)
     resolve_source_target(workspace, manifest, profile)
-    compiled = compile_source_patch(
-        manifest_path, manifest, toolchain or SourceToolchain()
-    )
+    compiled = compile_source_patch(manifest_path, manifest, toolchain or SourceToolchain())
     target = resolve_source_target(workspace, manifest, profile)
     original_stored = target.path.read_bytes()
     patched_runtime, hooks = build_patched_runtime(target, manifest, compiled)
