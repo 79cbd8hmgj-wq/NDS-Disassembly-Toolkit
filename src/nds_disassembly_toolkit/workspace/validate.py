@@ -168,7 +168,9 @@ def validate_workspace(
         modified_hash = sha256_bytes(modified)
         raw_override = raw_by_path.get(entry.path)
         if raw_override is not None:
-            if raw_override.file_id != entry.file_id or raw_by_id.get(entry.file_id) != raw_override:
+            wrong_file_id = raw_override.file_id != entry.file_id
+            wrong_mapping = raw_by_id.get(entry.file_id) != raw_override
+            if wrong_file_id or wrong_mapping:
                 raise WorkspaceError(
                     f"raw override mapping does not match manifest for {entry.path}"
                 )
