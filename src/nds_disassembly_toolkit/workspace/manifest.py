@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import hashlib
 import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from nds_disassembly_toolkit.errors import WorkspaceError
@@ -104,7 +104,10 @@ def _optional_profile_id(value: object) -> str | None:
 
 def load_workspace_manifest(path: Path) -> WorkspaceManifest:
     try:
-        payload = _require_object(json.loads(path.read_text(encoding="utf-8")), "workspace manifest")
+        payload = _require_object(
+            json.loads(path.read_text(encoding="utf-8")),
+            "workspace manifest",
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise WorkspaceError(f"cannot load workspace manifest {path}: {exc}") from exc
 
