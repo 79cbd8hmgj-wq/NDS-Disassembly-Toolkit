@@ -1,5 +1,5 @@
-from collections.abc import Callable
 import struct
+from collections.abc import Callable
 
 import pytest
 
@@ -8,7 +8,10 @@ from nds_disassembly_toolkit.nds.fat import parse_fat
 from nds_disassembly_toolkit.nds.header import NdsHeader
 
 
-def build_rom_with_fat(make_nds_header: Callable[[], bytes], entries: list[tuple[int, int]]) -> bytes:
+def build_rom_with_fat(
+    make_nds_header: Callable[[], bytes],
+    entries: list[tuple[int, int]],
+) -> bytes:
     header_bytes = bytearray(make_nds_header())
     fat_offset = 0x300
     fat_size = len(entries) * 8
