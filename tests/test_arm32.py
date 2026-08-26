@@ -49,7 +49,10 @@ def test_branch_encodings_and_validation() -> None:
 
 
 def test_data_processing_encodings() -> None:
-    assert encode_data_processing_immediate(DataOpcode.MOV, rd=Register.R0, immediate=1) == 0xE3A00001
+    assert (
+        encode_data_processing_immediate(DataOpcode.MOV, rd=Register.R0, immediate=1)
+        == 0xE3A00001
+    )
     assert (
         encode_data_processing_immediate(
             DataOpcode.ADD,
