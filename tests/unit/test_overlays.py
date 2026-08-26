@@ -1,5 +1,5 @@
-from collections.abc import Callable
 import struct
+from collections.abc import Callable
 
 import pytest
 
