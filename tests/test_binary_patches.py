@@ -11,11 +11,10 @@ from nds_disassembly_toolkit.patches.model import load_patch_set
 from nds_disassembly_toolkit.workspace.manifest import (
     ExtractedFile,
     ExtractedOverlay,
-    sha256_bytes,
     WorkspaceManifest,
+    sha256_bytes,
 )
 from nds_disassembly_toolkit.workspace.model import WorkspaceLayout
-
 
 TEST_PROFILE = "test_rev0"
 
