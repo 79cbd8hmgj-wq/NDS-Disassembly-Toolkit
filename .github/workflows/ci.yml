@@ -6,6 +6,7 @@ on:
       - main
       - phase-1-low-level-core
       - phase-2-workspace-roundtrip
+      - phase-3-disassembly-analysis
   pull_request:
 
 jobs:
