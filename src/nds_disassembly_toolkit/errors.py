@@ -20,3 +20,7 @@ class BoundsError(RomFormatError):
 
 class WorkspaceError(NdsToolkitError):
     """Raised when a workspace cannot be safely created or replaced."""
+
+
+class DisassemblyError(NdsToolkitError):
+    """Raised when executable/disassembly operations cannot be completed safely."""

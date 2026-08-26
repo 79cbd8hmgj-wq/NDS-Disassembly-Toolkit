@@ -4,6 +4,11 @@ import argparse
 import sys
 from pathlib import Path
 
+from nds_disassembly_toolkit.analysis.cli import add_analysis_parser, run_analysis_command
+from nds_disassembly_toolkit.disassembly_cli import (
+    add_disassembly_parser,
+    run_disassembly_command,
+)
 from nds_disassembly_toolkit.errors import NdsToolkitError
 from nds_disassembly_toolkit.inspection import inspect_rom
 from nds_disassembly_toolkit.profile import RomProfile, load_profile
@@ -42,6 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_parser.add_argument("--profile", type=Path)
     rebuild_parser.add_argument("--require-supported", action="store_true")
     rebuild_parser.add_argument("--force", action="store_true")
+
+    add_disassembly_parser(subparsers)
+    add_analysis_parser(subparsers)
     return parser
 
 
@@ -76,6 +84,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        if arguments.command == "disasm":
+            return run_disassembly_command(arguments)
+        if arguments.command == "analyze":
+            return run_analysis_command(arguments)
+
         profile = _optional_profile(arguments.profile)
         _require_profile_if_requested(profile, arguments.require_supported)
         if arguments.command == "inspect":
