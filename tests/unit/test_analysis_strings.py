@@ -1,5 +1,5 @@
-from pathlib import Path
 import struct
+from pathlib import Path
 
 from nds_disassembly_toolkit.analysis.model import Component
 from nds_disassembly_toolkit.analysis.strings import (
