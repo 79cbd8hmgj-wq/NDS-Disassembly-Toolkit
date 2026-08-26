@@ -93,6 +93,12 @@ def _require_hash(value: object, label: str) -> str:
     return result
 
 
+def _integer(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise WorkspaceError(f"{label} must be an integer")
+    return value
+
+
 def _optional_profile_id(value: object) -> str | None:
     if value is None:
         return None
@@ -112,15 +118,15 @@ def load_workspace_manifest(path: Path) -> WorkspaceManifest:
         raise WorkspaceError(f"cannot load workspace manifest {path}: {exc}") from exc
 
     try:
-        format_version = int(payload["format_version"])
+        format_version = _integer(payload["format_version"], "format_version")
         profile_id = _optional_profile_id(payload.get("profile_id"))
         rom_sha256 = _require_hash(payload["rom_sha256"], "rom_sha256")
-        rom_size = int(payload["rom_size"])
+        rom_size = _integer(payload["rom_size"], "rom_size")
         arm9_sha256 = _require_hash(payload["arm9_sha256"], "arm9_sha256")
         arm7_sha256 = _require_hash(payload["arm7_sha256"], "arm7_sha256")
         file_payloads = _require_array(payload["files"], "files")
         overlay_payloads = _require_array(payload["overlays"], "overlays")
-    except (KeyError, TypeError, ValueError) as exc:
+    except KeyError as exc:
         raise WorkspaceError(f"invalid workspace manifest field: {exc}") from exc
 
     if format_version != 1:
@@ -134,28 +140,28 @@ def load_workspace_manifest(path: Path) -> WorkspaceManifest:
     for index, value in enumerate(file_payloads):
         item = _require_object(value, f"files[{index}]")
         try:
-            entry = ExtractedFile(
-                file_id=int(item["file_id"]),
+            file_entry = ExtractedFile(
+                file_id=_integer(item["file_id"], f"files[{index}].file_id"),
                 path=str(item["path"]),
-                raw_size=int(item["raw_size"]),
-                decoded_size=int(item["decoded_size"]),
+                raw_size=_integer(item["raw_size"], f"files[{index}].raw_size"),
+                decoded_size=_integer(item["decoded_size"], f"files[{index}].decoded_size"),
                 compression=str(item["compression"]),
                 raw_sha256=_require_hash(item["raw_sha256"], f"files[{index}].raw_sha256"),
                 decoded_sha256=_require_hash(
                     item["decoded_sha256"], f"files[{index}].decoded_sha256"
                 ),
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except KeyError as exc:
             raise WorkspaceError(f"invalid files[{index}] field: {exc}") from exc
-        if entry.file_id < 0 or entry.file_id in file_ids:
-            raise WorkspaceError(f"duplicate or invalid file ID: {entry.file_id}")
-        if entry.raw_size < 0 or entry.decoded_size < 0:
+        if file_entry.file_id < 0 or file_entry.file_id in file_ids:
+            raise WorkspaceError(f"duplicate or invalid file ID: {file_entry.file_id}")
+        if file_entry.raw_size < 0 or file_entry.decoded_size < 0:
             raise WorkspaceError(f"files[{index}] sizes must be nonnegative")
-        if entry.compression not in {"none", "lz10"}:
-            raise WorkspaceError(f"unsupported file compression: {entry.compression}")
-        file_ids.add(entry.file_id)
-        paths.append(entry.path)
-        files.append(entry)
+        if file_entry.compression not in {"none", "lz10"}:
+            raise WorkspaceError(f"unsupported file compression: {file_entry.compression}")
+        file_ids.add(file_entry.file_id)
+        paths.append(file_entry.path)
+        files.append(file_entry)
     try:
         ensure_unique_relative_paths(paths)
     except ValueError as exc:
@@ -167,14 +173,14 @@ def load_workspace_manifest(path: Path) -> WorkspaceManifest:
     for index, value in enumerate(overlay_payloads):
         item = _require_object(value, f"overlays[{index}]")
         try:
-            entry = ExtractedOverlay(
-                overlay_id=int(item["overlay_id"]),
-                file_id=int(item["file_id"]),
-                ram_address=int(item["ram_address"]),
-                ram_size=int(item["ram_size"]),
-                bss_size=int(item["bss_size"]),
-                raw_size=int(item["raw_size"]),
-                decoded_size=int(item["decoded_size"]),
+            overlay_entry = ExtractedOverlay(
+                overlay_id=_integer(item["overlay_id"], f"overlays[{index}].overlay_id"),
+                file_id=_integer(item["file_id"], f"overlays[{index}].file_id"),
+                ram_address=_integer(item["ram_address"], f"overlays[{index}].ram_address"),
+                ram_size=_integer(item["ram_size"], f"overlays[{index}].ram_size"),
+                bss_size=_integer(item["bss_size"], f"overlays[{index}].bss_size"),
+                raw_size=_integer(item["raw_size"], f"overlays[{index}].raw_size"),
+                decoded_size=_integer(item["decoded_size"], f"overlays[{index}].decoded_size"),
                 raw_sha256=_require_hash(
                     item["raw_sha256"], f"overlays[{index}].raw_sha256"
                 ),
@@ -183,24 +189,29 @@ def load_workspace_manifest(path: Path) -> WorkspaceManifest:
                 ),
                 compression=str(item["compression"]),
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except KeyError as exc:
             raise WorkspaceError(f"invalid overlays[{index}] field: {exc}") from exc
-        if entry.overlay_id < 0 or entry.overlay_id in overlay_ids:
-            raise WorkspaceError(f"duplicate or invalid overlay ID: {entry.overlay_id}")
-        if entry.file_id < 0 or entry.file_id in overlay_file_ids:
-            raise WorkspaceError(f"duplicate or invalid overlay file ID: {entry.file_id}")
-        if min(entry.ram_size, entry.bss_size, entry.raw_size, entry.decoded_size) < 0:
+        if overlay_entry.overlay_id < 0 or overlay_entry.overlay_id in overlay_ids:
+            raise WorkspaceError(f"duplicate or invalid overlay ID: {overlay_entry.overlay_id}")
+        if overlay_entry.file_id < 0 or overlay_entry.file_id in overlay_file_ids:
+            raise WorkspaceError(f"duplicate or invalid overlay file ID: {overlay_entry.file_id}")
+        if min(
+            overlay_entry.ram_size,
+            overlay_entry.bss_size,
+            overlay_entry.raw_size,
+            overlay_entry.decoded_size,
+        ) < 0:
             raise WorkspaceError(f"overlays[{index}] sizes must be nonnegative")
-        if entry.decoded_size != entry.ram_size:
+        if overlay_entry.decoded_size != overlay_entry.ram_size:
             raise WorkspaceError(
-                f"overlay {entry.overlay_id} decoded size {entry.decoded_size} "
-                f"does not equal RAM size {entry.ram_size}"
+                f"overlay {overlay_entry.overlay_id} decoded size {overlay_entry.decoded_size} "
+                f"does not equal RAM size {overlay_entry.ram_size}"
             )
-        if entry.compression not in {"none", "blz"}:
-            raise WorkspaceError(f"unsupported overlay compression: {entry.compression}")
-        overlay_ids.add(entry.overlay_id)
-        overlay_file_ids.add(entry.file_id)
-        overlays.append(entry)
+        if overlay_entry.compression not in {"none", "blz"}:
+            raise WorkspaceError(f"unsupported overlay compression: {overlay_entry.compression}")
+        overlay_ids.add(overlay_entry.overlay_id)
+        overlay_file_ids.add(overlay_entry.file_id)
+        overlays.append(overlay_entry)
 
     return WorkspaceManifest(
         format_version=format_version,
