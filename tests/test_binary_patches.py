@@ -11,8 +11,8 @@ from nds_disassembly_toolkit.patches.model import load_patch_set
 from nds_disassembly_toolkit.workspace.manifest import (
     ExtractedFile,
     ExtractedOverlay,
-    WorkspaceManifest,
     sha256_bytes,
+    WorkspaceManifest,
 )
 from nds_disassembly_toolkit.workspace.model import WorkspaceLayout
 
@@ -183,7 +183,7 @@ def test_apply_rejects_profile_mismatch(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkspaceError, match="profile"):
-        apply_patch_set(workspace, path)
+        apply_patch_set(path=path, workspace=workspace)
 
 
 def test_profile_free_patch_set_applies_to_profile_free_workspace(tmp_path: Path) -> None:
