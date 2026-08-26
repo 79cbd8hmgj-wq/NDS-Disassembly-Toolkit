@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from nds_disassembly_toolkit.errors import ProfileError, UnsupportedRomError
-from nds_disassembly_toolkit.profile import load_profile, read_rom_identity, sha256_file, validate_rom
+from nds_disassembly_toolkit.profile import (
+    load_profile,
+    read_rom_identity,
+    sha256_file,
+    validate_rom,
+)
 
 
 def make_identity_rom(path: Path, *, size: int = 0x200) -> bytes:
