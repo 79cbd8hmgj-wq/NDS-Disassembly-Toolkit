@@ -183,7 +183,7 @@ def test_apply_rejects_profile_mismatch(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkspaceError, match="profile"):
-        apply_patch_set(path=path, workspace=workspace)
+        apply_patch_set(workspace, path)
 
 
 def test_profile_free_patch_set_applies_to_profile_free_workspace(tmp_path: Path) -> None:
