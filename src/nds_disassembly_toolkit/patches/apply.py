@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
-from pathlib import Path
 import tempfile
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from nds_disassembly_toolkit.errors import WorkspaceError
 from nds_disassembly_toolkit.patches.model import BinaryPatch, load_patch_set
