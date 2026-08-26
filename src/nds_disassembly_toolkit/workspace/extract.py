@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import shutil
 import tempfile
+from contextlib import suppress
+from dataclasses import dataclass
+from pathlib import Path
 
 from nds_disassembly_toolkit.compression.blz import decompress_blz, is_blz
 from nds_disassembly_toolkit.compression.lz10 import decompress_lz10, is_lz10
@@ -45,14 +46,10 @@ def _make_tree_writable(root: Path) -> None:
     if not root.exists():
         return
     for path in root.rglob("*"):
-        try:
+        with suppress(OSError):
             path.chmod(0o755 if path.is_dir() else 0o644)
-        except OSError:
-            pass
-    try:
+    with suppress(OSError):
         root.chmod(0o755)
-    except OSError:
-        pass
 
 
 def _remove_tree(root: Path) -> None:
