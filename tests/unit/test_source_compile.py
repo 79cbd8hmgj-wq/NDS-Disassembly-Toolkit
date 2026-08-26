@@ -114,7 +114,8 @@ def test_compile_source_patch_returns_deterministic_image_and_hashes(tmp_path: P
             return ""
         if command[0] == "ld.lld":
             output = Path(command[command.index("-o") + 1])
-            output.write_bytes(bytes.fromhex("0100a0e3") if "--oformat=binary" in command else b"elf")
+            binary = bytes.fromhex("0100a0e3") if "--oformat=binary" in command else b"elf"
+            output.write_bytes(binary)
             return ""
         if command[0] == "nm":
             return "02200100 T entry\n02001000 A helper\n"
