@@ -1,6 +1,6 @@
 # Phase 2: Generic Inspection and Workspace Round-Trip
 
-**Status:** Core implementation migrated; CI and regression verification in progress.
+**Status:** Complete; Python 3.11 CI, pytest, Ruff, and strict mypy pass.
 
 ## Goal
 
@@ -30,6 +30,14 @@ Reuse the Bakugan implementation unless a change is required to make it game-agn
 7. Deterministic rebuild and structural verification.
 8. CLI commands for inspect/extract/rebuild.
 9. Synthetic no-profile extraction/rebuild round-trip verification.
+
+## Verification
+
+- Python 3.11 installation: pass.
+- Unit/regression suite: 62 tests passed.
+- Ruff: pass.
+- Strict mypy: pass.
+- Synthetic profile-free extract/rebuild: byte-for-byte exact round trip.
 
 ## Safety invariants
 
