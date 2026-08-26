@@ -1,5 +1,7 @@
 # Phase 2: Generic Inspection and Workspace Round-Trip
 
+**Status:** RED contract committed; implementation pending.
+
 ## Goal
 
 Migrate the proven ROM inspection, workspace extraction/validation, manifest, override, and rebuild machinery from `Bakugan-DS-` into the standalone toolkit while preserving behavior and removing game-specific policy.
