@@ -118,7 +118,8 @@ def apply_patch_set(workspace: Path, patch_path: Path) -> PatchApplicationReport
         end = patch.offset + len(patch.expected)
         if end > len(buffer):
             raise WorkspaceError(
-                f"patch {patch.patch_id} range {patch.offset}:{end} is outside target size {len(buffer)}"
+                f"patch {patch.patch_id} range {patch.offset}:{end} is outside target size "
+                f"{len(buffer)}"
             )
         actual = bytes(buffer[patch.offset:end])
         if actual != patch.expected:

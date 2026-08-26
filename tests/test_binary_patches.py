@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
@@ -13,7 +15,6 @@ from nds_disassembly_toolkit.workspace.manifest import (
     sha256_bytes,
 )
 from nds_disassembly_toolkit.workspace.model import WorkspaceLayout
-
 
 TEST_PROFILE = "test_rev0"
 
