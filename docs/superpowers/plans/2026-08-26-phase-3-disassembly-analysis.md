@@ -1,6 +1,6 @@
 # Phase 3: Generic Disassembly and Analysis Core
 
-**Status:** Contract tests first; implementation pending.
+**Status:** Complete and verified.
 
 ## Goal
 
@@ -43,3 +43,14 @@ Reuse existing tested algorithms unless a change is required to remove game coup
 - Label requests outside a component are rejected.
 - Reports are deterministic and written atomically.
 - No ROMs, extracted assets, or game-specific proprietary data are committed.
+
+## Verification
+
+- Python 3.11 editable install: pass.
+- Full pytest suite: pass, including Phase 3 library and top-level CLI regression coverage.
+- Ruff: pass.
+- Strict mypy across `src/nds_disassembly_toolkit`: pass.
+- `disasm module-params` top-level CLI path: covered.
+- `analyze` top-level CLI path: covered.
+- Objdump nonzero-exit diagnostic wrapping: covered.
+- Phase 3 diff audit: Bakugan/B6RE/G-Power terms appear only in this design document to identify explicitly excluded consumer-specific behavior; runtime code and neutral tests remain game-agnostic.
