@@ -7,6 +7,7 @@ on:
       - phase-1-low-level-core
       - phase-2-workspace-roundtrip
       - phase-3-disassembly-analysis
+      - phase-4-guarded-source-patching
   pull_request:
 
 jobs:
