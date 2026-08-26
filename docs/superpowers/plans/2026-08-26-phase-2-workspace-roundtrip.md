@@ -1,6 +1,6 @@
 # Phase 2: Generic Inspection and Workspace Round-Trip
 
-**Status:** RED contract committed; implementation pending.
+**Status:** Core implementation migrated; CI and regression verification in progress.
 
 ## Goal
 
