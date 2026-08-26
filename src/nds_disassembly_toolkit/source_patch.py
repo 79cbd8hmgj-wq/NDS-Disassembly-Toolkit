@@ -433,7 +433,9 @@ def _validate_runtime_ranges(target: SourceTarget, manifest: SourcePatchManifest
     for hook in manifest.hooks:
         hook_end = hook.runtime_address + len(hook.expected)
         if hook.runtime_address < target.runtime_base or hook_end > runtime_end:
-            raise WorkspaceError(f"hook {hook.hook_id!r} is outside {manifest.target} runtime image")
+            raise WorkspaceError(
+                f"hook {hook.hook_id!r} is outside {manifest.target} runtime image"
+            )
 
 
 def resolve_source_target(
