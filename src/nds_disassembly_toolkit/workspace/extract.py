@@ -186,6 +186,8 @@ def _populate_workspace(
         arm7_sha256=sha256_bytes(arm7),
         files=tuple(extracted_files),
         overlays=tuple(extracted_overlays),
+        arm9_ram_address=inspection.header.arm9_ram_address,
+        arm7_ram_address=inspection.header.arm7_ram_address,
     )
     payload = manifest.to_dict()
     write_json_atomic(layout.manifests / "workspace.json", payload)

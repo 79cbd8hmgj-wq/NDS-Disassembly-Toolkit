@@ -13,6 +13,10 @@ from nds_disassembly_toolkit.disassembly_cli import (
 from nds_disassembly_toolkit.errors import NdsToolkitError
 from nds_disassembly_toolkit.inspection import inspect_rom
 from nds_disassembly_toolkit.profile import RomProfile, load_profile
+from nds_disassembly_toolkit.source_patch_cli import (
+    add_source_patch_parser,
+    run_source_patch_command,
+)
 from nds_disassembly_toolkit.workspace.extract import ExtractionOptions, extract_workspace
 from nds_disassembly_toolkit.workspace.rebuild import RebuildOptions, rebuild_rom
 
@@ -52,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_disassembly_parser(subparsers)
     add_analysis_parser(subparsers)
     add_assets_parser(subparsers)
+    add_source_patch_parser(subparsers)
     return parser
 
 
@@ -92,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_analysis_command(arguments)
         if arguments.command == "assets":
             return run_assets_command(arguments)
+        if arguments.command == "source-patch":
+            return run_source_patch_command(arguments)
 
         profile = _optional_profile(arguments.profile)
         _require_profile_if_requested(profile, arguments.require_supported)

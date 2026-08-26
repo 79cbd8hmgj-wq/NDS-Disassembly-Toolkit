@@ -44,9 +44,11 @@ class WorkspaceManifest:
     arm7_sha256: str
     files: tuple[ExtractedFile, ...]
     overlays: tuple[ExtractedOverlay, ...]
+    arm9_ram_address: int | None = None
+    arm7_ram_address: int | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "format_version": self.format_version,
             "profile_id": self.profile_id,
             "rom_sha256": self.rom_sha256,
@@ -58,6 +60,11 @@ class WorkspaceManifest:
                 asdict(item) for item in sorted(self.overlays, key=lambda item: item.overlay_id)
             ],
         }
+        if self.arm9_ram_address is not None:
+            payload["arm9_ram_address"] = self.arm9_ram_address
+        if self.arm7_ram_address is not None:
+            payload["arm7_ram_address"] = self.arm7_ram_address
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
@@ -99,6 +106,15 @@ def _integer(value: object, label: str) -> int:
     return value
 
 
+def _optional_u32(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    result = _integer(value, label)
+    if not 0 <= result <= 0xFFFFFFFF:
+        raise WorkspaceError(f"{label} must fit unsigned 32-bit")
+    return result
+
+
 def _optional_profile_id(value: object) -> str | None:
     if value is None:
         return None
@@ -124,6 +140,8 @@ def load_workspace_manifest(path: Path) -> WorkspaceManifest:
         rom_size = _integer(payload["rom_size"], "rom_size")
         arm9_sha256 = _require_hash(payload["arm9_sha256"], "arm9_sha256")
         arm7_sha256 = _require_hash(payload["arm7_sha256"], "arm7_sha256")
+        arm9_ram_address = _optional_u32(payload.get("arm9_ram_address"), "arm9_ram_address")
+        arm7_ram_address = _optional_u32(payload.get("arm7_ram_address"), "arm7_ram_address")
         file_payloads = _require_array(payload["files"], "files")
         overlay_payloads = _require_array(payload["overlays"], "overlays")
     except KeyError as exc:
@@ -222,4 +240,6 @@ def load_workspace_manifest(path: Path) -> WorkspaceManifest:
         arm7_sha256=arm7_sha256,
         files=tuple(sorted(files, key=lambda item: item.file_id)),
         overlays=tuple(sorted(overlays, key=lambda item: item.overlay_id)),
+        arm9_ram_address=arm9_ram_address,
+        arm7_ram_address=arm7_ram_address,
     )
