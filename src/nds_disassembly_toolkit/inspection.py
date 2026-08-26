@@ -1,14 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from nds_disassembly_toolkit.nds.fat import FatEntry, parse_fat
 from nds_disassembly_toolkit.nds.fnt import FntTree, parse_fnt
 from nds_disassembly_toolkit.nds.header import NdsHeader
-from nds_disassembly_toolkit.nds.overlays import OverlayEntry, parse_arm7_overlays, parse_arm9_overlays
-from nds_disassembly_toolkit.profile import RomIdentity, RomProfile, read_rom_identity, validate_rom
+from nds_disassembly_toolkit.nds.overlays import (
+    OverlayEntry,
+    parse_arm7_overlays,
+    parse_arm9_overlays,
+)
+from nds_disassembly_toolkit.profile import (
+    RomIdentity,
+    RomProfile,
+    read_rom_identity,
+    validate_rom,
+)
 from nds_disassembly_toolkit.util import require_range
 
 
