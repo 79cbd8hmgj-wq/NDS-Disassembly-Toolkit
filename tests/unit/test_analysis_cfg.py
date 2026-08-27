@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 from nds_disassembly_toolkit.analysis.cfg import build_function_cfg
-from nds_disassembly_toolkit.analysis.model import Component, FunctionCandidate, InstructionSet
+from nds_disassembly_toolkit.analysis.model import (
+    CFGEdgeKind,
+    Component,
+    ControlFlowKind,
+    FunctionCandidate,
+    InstructionSet,
+)
 
 BASE = 0x02000000
 
@@ -117,3 +123,96 @@ def test_backward_branch_splits_earlier_linear_code_at_target() -> None:
         (BASE + 4, "branch", BASE + 4),
         (BASE + 4, "fallthrough", BASE + 12),
     ]
+
+
+def test_direct_call_records_edge_and_does_not_traverse_callee() -> None:
+    data = bytearray(0x24)
+    data[:8] = _arm_words(
+        0xEB000006,  # bl BASE + 0x20
+        0xE12FFF1E,  # bx lr
+    )
+    struct.pack_into("<I", data, 0x20, 0xE12FFF1E)
+
+    cfg = build_function_cfg(_component(bytes(data)), _function())
+
+    assert [block.address for block in cfg.blocks] == [BASE, BASE + 4]
+    assert [
+        (edge.kind, edge.target_address, edge.target_instruction_set)
+        for edge in cfg.edges
+    ] == [
+        (CFGEdgeKind.CALL, BASE + 0x20, InstructionSet.ARM),
+        (CFGEdgeKind.FALLTHROUGH, BASE + 4, InstructionSet.ARM),
+    ]
+    assert all(block.address != BASE + 0x20 for block in cfg.blocks)
+
+
+def test_arm_blx_call_edge_targets_thumb_without_traversal() -> None:
+    data = bytearray(0x14)
+    data[:8] = _arm_words(
+        0xFA000002,  # blx BASE + 0x10
+        0xE12FFF1E,  # bx lr
+    )
+    struct.pack_into("<H", data, 0x10, 0x4770)
+
+    cfg = build_function_cfg(_component(bytes(data)), _function())
+
+    call = next(edge for edge in cfg.edges if edge.kind is CFGEdgeKind.CALL)
+    assert call.target_address == BASE + 0x10
+    assert call.target_instruction_set is InstructionSet.THUMB
+    assert all(block.address != BASE + 0x10 for block in cfg.blocks)
+
+
+def test_external_direct_branch_is_edge_without_traversal() -> None:
+    component = _component(
+        _arm_words(
+            0xEA00003E,  # b BASE + 0x100
+            0xE12FFF1E,
+        )
+    )
+
+    cfg = build_function_cfg(component, _function())
+
+    assert len(cfg.blocks) == 1
+    assert [(edge.kind, edge.target_address) for edge in cfg.edges] == [
+        (CFGEdgeKind.BRANCH, BASE + 0x100)
+    ]
+    assert cfg.unresolved_transfers == ()
+
+
+def test_indirect_branch_is_unresolved_and_stops_path() -> None:
+    component = _component(
+        _arm_words(
+            0xE12FFF10,  # bx r0
+            0xE12FFF1E,
+        )
+    )
+
+    cfg = build_function_cfg(component, _function())
+
+    assert len(cfg.blocks) == 1
+    assert [item.address for item in cfg.blocks[0].instructions] == [BASE]
+    assert cfg.edges == ()
+    unresolved = cfg.unresolved_transfers[0]
+    assert unresolved.source_address == BASE
+    assert unresolved.instruction_set is InstructionSet.ARM
+    assert unresolved.control_flow is ControlFlowKind.BRANCH
+    assert unresolved.mnemonic == "bx"
+    assert unresolved.operands == "r0"
+
+
+def test_indirect_call_is_unresolved_but_keeps_fallthrough() -> None:
+    component = _component(
+        _arm_words(
+            0xE12FFF30,  # blx r0
+            0xE12FFF1E,
+        )
+    )
+
+    cfg = build_function_cfg(component, _function())
+
+    assert [block.address for block in cfg.blocks] == [BASE, BASE + 4]
+    assert [(edge.kind, edge.target_address) for edge in cfg.edges] == [
+        (CFGEdgeKind.FALLTHROUGH, BASE + 4)
+    ]
+    assert len(cfg.unresolved_transfers) == 1
+    assert cfg.unresolved_transfers[0].control_flow is ControlFlowKind.CALL
