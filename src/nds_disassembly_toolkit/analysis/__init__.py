@@ -5,13 +5,18 @@ from nds_disassembly_toolkit.analysis.arm import (
     function_address_for_reference,
     nearest_function_start,
 )
+from nds_disassembly_toolkit.analysis.cfg import build_function_cfg
 from nds_disassembly_toolkit.analysis.decoder import decode_instruction
 from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import (
+    BasicBlock,
+    CFGEdge,
+    CFGEdgeKind,
     Component,
     ControlFlowKind,
     DecodedInstruction,
     FunctionCandidate,
+    FunctionControlFlowGraph,
     FunctionDiscoveryResult,
     FunctionSeed,
     InstructionSet,
@@ -19,6 +24,7 @@ from nds_disassembly_toolkit.analysis.model import (
     PointerReference,
     StringRecord,
     SymbolCandidate,
+    UnresolvedTransfer,
 )
 from nds_disassembly_toolkit.analysis.numeric import (
     cluster_numeric_matches,
@@ -32,10 +38,14 @@ from nds_disassembly_toolkit.analysis.strings import (
 )
 
 __all__ = [
+    "BasicBlock",
+    "CFGEdge",
+    "CFGEdgeKind",
     "Component",
     "ControlFlowKind",
     "DecodedInstruction",
     "FunctionCandidate",
+    "FunctionControlFlowGraph",
     "FunctionDiscoveryResult",
     "FunctionSeed",
     "InstructionSet",
@@ -43,8 +53,10 @@ __all__ = [
     "PointerReference",
     "StringRecord",
     "SymbolCandidate",
+    "UnresolvedTransfer",
     "analyze_components",
     "arm_function_starts",
+    "build_function_cfg",
     "cluster_numeric_matches",
     "decode_instruction",
     "discover_functions",
