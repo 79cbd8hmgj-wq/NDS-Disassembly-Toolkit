@@ -135,7 +135,33 @@ result = discover_functions(
 
 Each function candidate preserves its runtime address, component-relative offset, instruction set, confidence, and stable evidence strings. Direct calls outside the component are reported separately as unresolved calls. Decode failures terminate only the affected path.
 
-Phase 7A intentionally does **not** guess indirect targets, treat every prologue-like byte sequence as authoritative code, recover jump tables, or build full control-flow graphs. The older ARM prologue helpers remain available as heuristics. Later CFG/xref phases should consume the same decoder and discovery records rather than introducing a second instruction backend.
+Phase 7A intentionally does **not** guess indirect targets, treat every prologue-like byte sequence as authoritative code, or recover jump tables. The older ARM prologue helpers remain available as heuristics.
+
+## Phase 7B control-flow graphs
+
+`build_function_cfg()` consumes a Phase 7A `FunctionCandidate` and builds a deterministic intraprocedural graph from the same toolkit-owned decoded-instruction records.
+
+```python
+from nds_disassembly_toolkit.analysis import build_function_cfg
+
+cfg = build_function_cfg(component, result.functions[0])
+```
+
+CFG construction first traverses reachable instructions and records successors, then derives basic-block leaders and edges in a second pass. This allows forward and backward branch targets to split earlier linear code without overlapping blocks.
+
+The graph records:
+
+- immutable basic blocks with runtime addresses, component offsets, mode, instructions, size, and end address;
+- direct branch and fallthrough edges;
+- direct call edges without traversing callee bodies inside the caller graph;
+- ARM/Thumb target mode for direct interworking calls;
+- direct external branch/call targets without decoding outside the component;
+- stable unresolved records for indirect calls/branches;
+- decode failures for reachable paths that cannot be decoded.
+
+Indirect targets are never guessed. Indirect calls keep their intraprocedural fallthrough, while indirect unconditional branches terminate the affected path. Calls deliberately start a new fallthrough block so later call-graph/xref analysis can reason about the call site explicitly.
+
+Phase 7B does not add a graph-library dependency or leak Capstone objects into public data models. Phase 7C can build xrefs and call graphs directly from these records rather than introducing a second decoding/CFG implementation.
 
 ## Ownership boundary
 
