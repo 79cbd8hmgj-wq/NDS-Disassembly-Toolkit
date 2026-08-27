@@ -1,6 +1,6 @@
 # Disassembly and static-analysis helpers
 
-The toolkit provides game-neutral preparation and comparison helpers for Nintendo DS ARM9, ARM7, and overlay binaries. It does not attempt to infer game semantics.
+The toolkit provides game-neutral preparation, comparison, and program-analysis helpers for Nintendo DS ARM9, ARM7, and overlay binaries. It does not assign game-specific semantics.
 
 ## Locate ARM9 Nitro module parameters
 
@@ -69,7 +69,7 @@ Use `--thumb` for Thumb regions, `--processor` to override the default `armv5te`
 
 The result is a deterministic unified text diff. Matching disassembly is useful reconstruction evidence, but it is not proof of semantic equivalence.
 
-## Generic static analysis
+## Generic static analysis report
 
 The `analyze` command scans arbitrary flat executable components. Each component is supplied with a name, file path, and runtime base:
 
@@ -107,6 +107,77 @@ nds-toolkit analyze \
 
 `--numeric-values-key` and `--numeric-divisor` are meaningful only with `--numeric-records`.
 
+## Phase 7A: ARM/Thumb function discovery
+
+Phase 7A adds a program-analysis layer above the earlier byte-oriented scanners. Capstone performs ARM/Thumb instruction decoding, but Capstone objects do not escape the toolkit boundary. The public analysis API uses toolkit-owned models such as `DecodedInstruction`, `ExecutionMode`, `FunctionSeed`, and `FunctionCandidate`.
+
+Function discovery is intentionally conservative. It starts from explicit evidence and recursively follows decoded control flow:
+
+- an explicit seed becomes a function candidate;
+- an in-component direct call target becomes high-confidence function evidence;
+- an ordinary branch target is followed as control flow but is **not** promoted to a function merely because it is branched to;
+- direct `BLX` mode transitions propagate ARM/Thumb mode;
+- returns stop the current path;
+- unresolved indirect transfers are reported instead of guessed;
+- duplicate discoveries merge evidence and retain the strongest confidence.
+
+### Python API
+
+```python
+from pathlib import Path
+
+from nds_disassembly_toolkit.analysis import (
+    Component,
+    ExecutionMode,
+    FunctionSeed,
+    arm_prologue_seeds,
+    discover_functions,
+)
+
+arm9_path = Path("arm9.bin")
+component = Component(
+    name="arm9",
+    path=arm9_path,
+    base_address=0x02000000,
+    data=arm9_path.read_bytes(),
+)
+
+seeds = [
+    FunctionSeed(
+        address=0x02000800,
+        mode=ExecutionMode.ARM,
+        evidence="arm9-entry",
+        confidence="high",
+    ),
+    *arm_prologue_seeds(component),
+]
+
+result = discover_functions(component, seeds)
+
+for function in result.functions:
+    print(
+        hex(function.address),
+        function.mode,
+        function.confidence,
+        function.evidence,
+    )
+
+for address in result.unresolved_indirect_transfers:
+    print("unresolved indirect transfer:", hex(address))
+```
+
+ARM function seeds must be 4-byte aligned and Thumb seeds 2-byte aligned. Seeds outside the supplied component are rejected.
+
+### Legacy prologue heuristic
+
+`arm_function_starts`, `nearest_function_start`, and `function_address_for_reference` remain available with their original offset-based behavior. `arm_prologue_seeds` is an adapter that converts those matches to medium-confidence, runtime-addressed ARM `FunctionSeed` records for the new discovery engine.
+
+A prologue match is evidence, not proof. Functions can omit a conventional prologue, and data can occasionally resemble one.
+
+### Current Phase 7 boundary
+
+Phase 7A1 provides decoding and recursive function discovery. It does **not** yet provide persistent basic-block/control-flow graphs, a cross-reference database, symbol recovery, data-flow analysis, an analysis-project database, emulator traces, or pseudo-C. Those are later Phase 7 capability slices and should build on the decoder/discovery models rather than bypassing them.
+
 ## Ownership boundary
 
-The toolkit owns the mechanics above. A game project should own the interpretation layer: known strings, record schemas, confirmed addresses, symbol names, confidence rules, and runtime evidence. Those facts should not be promoted into the generic toolkit unless they are Nintendo DS format behavior rather than game behavior.
+The toolkit owns the mechanics above. A game project should own the interpretation layer: known strings, record schemas, confirmed addresses, symbol names, confidence overrides, game-specific entry points, and runtime evidence. Those facts should not be promoted into the generic toolkit unless they are Nintendo DS format/runtime behavior rather than game behavior.
