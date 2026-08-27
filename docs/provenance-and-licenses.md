@@ -31,7 +31,7 @@ This is an engineering provenance record, not a substitute for legal advice.
 | ndstool | https://github.com/devkitPro/ndstool | GNU GPL v3 (`COPYING`) | Comparison/reference for conventional NDS extraction/repacking behavior | No ndstool source vendored or copied; the toolkit's parser/rebuilder remains its own implementation |
 | pret DS disassembly tools | https://github.com/pret/ds_disassembly_tools | **No explicit license found** in the repository root or README during this audit | Workflow concepts such as finding Nitro module parameters, overlay-layout investigation, labelled binary regions, and disassembly comparison | Implementation source is treated as unavailable for copying; toolkit behavior was reimplemented independently and extended with its own validation/error model |
 | Capstone | https://github.com/capstone-engine/capstone | BSD 3-Clause-style license (`LICENSES/LICENSE.TXT` in supplied `capstone-next.zip`) | ARM/Thumb instruction decoding and semantic instruction metadata for Phase 7 analysis | Added as `capstone>=5,<7` runtime dependency; no Capstone source is vendored or copied into toolkit modules |
-| angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied `angr-master.zip`) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, and analysis persistence | Reference only in Phase 7A; no angr runtime dependency or source incorporation |
+| angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied `angr-master.zip`) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, and analysis persistence | Reference only during Phase 7 design; no angr runtime dependency or source incorporation |
 | melonDS | https://github.com/melonDS-emu/melonDS | GNU GPL v3 (`LICENSE` in supplied `melonDS-master.zip`) | Nintendo DS runtime/emulator behavior and future debugger/trace integration concepts | Reference/external-integration boundary only; no melonDS implementation source is copied or linked into the MIT toolkit |
 
 ### Archive-origin caveats
@@ -90,7 +90,7 @@ The toolkit does not contain the upstream scripts `asmdiff.sh`, `dump_fs.py`, `f
 
 Capstone is intentionally different from the earlier clean-room references: it is a permissively licensed runtime dependency used through its public Python API. `analysis/decoder.py` is toolkit-owned code that converts Capstone results into toolkit-owned immutable models, so Capstone objects do not become the public analysis data model.
 
-angr is being used to study mature approaches to function discovery, CFG recovery, data-flow analysis, and persistent analysis state. Phase 7A does not import angr or copy its analysis implementation.
+angr is being used to study mature approaches to function discovery, CFG recovery, data-flow analysis, and persistent analysis state. Phase 7A and 7B do not import angr or copy its analysis implementation. The Phase 7B CFG implementation uses its own two-pass reachable-instruction/basic-block design and only consumes toolkit-owned decoder records.
 
 melonDS is GPL-licensed and therefore remains on the same strict reference boundary as the earlier GPL Nintendo DS tools. Future dynamic-analysis work should prefer process/debugger integration or documented interfaces rather than incorporating melonDS implementation source into this MIT repository.
 
@@ -104,7 +104,7 @@ During Phase 6 consolidation:
 - historical design documents explicitly state that the supplied upstream archives were reference material only and that GPL/upstream implementation source was not vendored or copied;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems rather than transferring game-specific material into the toolkit.
 
-Phase 7A deliberately adds Capstone only as a package dependency; angr and melonDS remain non-vendored reference material.
+Phase 7A deliberately adds Capstone only as a package dependency. Phase 7B adds only toolkit-owned CFG models/logic; angr and melonDS remain non-vendored reference material.
 
 Text search and manual comparison are useful audit evidence but cannot mathematically prove independent authorship. Future contributors should preserve the boundary above and document any deliberate third-party code incorporation before merging it.
 
