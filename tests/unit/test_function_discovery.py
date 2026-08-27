@@ -7,7 +7,6 @@ from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import Component, ExecutionMode, FunctionSeed
 from nds_disassembly_toolkit.arm32 import Register, encode_branch, encode_bx
 
-
 BASE = 0x02000000
 
 
