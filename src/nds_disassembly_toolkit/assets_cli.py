@@ -13,6 +13,9 @@ from nds_disassembly_toolkit.profile import RomProfile, load_profile
 
 def add_assets_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    *,
+    default_profile: Path | None = None,
+    supported_by_default: bool = False,
 ) -> None:
     assets_parser = subparsers.add_parser("assets", help="inspect Nintendo DS game assets")
     asset_subparsers = assets_parser.add_subparsers(dest="assets_command")
@@ -22,8 +25,17 @@ def add_assets_parser(
         help="inventory recognized NitroFS asset formats",
     )
     inventory_parser.add_argument("rom", type=Path)
-    inventory_parser.add_argument("--profile", type=Path)
-    inventory_parser.add_argument("--require-supported", action="store_true")
+    inventory_parser.add_argument("--profile", type=Path, default=default_profile)
+    if supported_by_default:
+        inventory_parser.add_argument(
+            "--allow-unsupported",
+            dest="require_supported",
+            action="store_false",
+            default=True,
+            help="inspect a ROM that does not match the selected profile",
+        )
+    else:
+        inventory_parser.add_argument("--require-supported", action="store_true")
     inventory_parser.add_argument("--output", type=Path)
     inventory_parser.add_argument(
         "--include-unknown",
