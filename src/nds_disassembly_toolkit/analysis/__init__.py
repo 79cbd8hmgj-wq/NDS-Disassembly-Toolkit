@@ -2,11 +2,20 @@
 
 from nds_disassembly_toolkit.analysis.arm import (
     arm_function_starts,
+    arm_prologue_seeds,
     function_address_for_reference,
     nearest_function_start,
 )
+from nds_disassembly_toolkit.analysis.decoder import CapstoneArmDecoder, InstructionDecoder
+from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import (
     Component,
+    ControlFlowKind,
+    DecodedInstruction,
+    ExecutionMode,
+    FunctionCandidate,
+    FunctionDiscoveryResult,
+    FunctionSeed,
     NumericMatch,
     PointerReference,
     StringRecord,
@@ -24,14 +33,24 @@ from nds_disassembly_toolkit.analysis.strings import (
 )
 
 __all__ = [
+    "CapstoneArmDecoder",
     "Component",
+    "ControlFlowKind",
+    "DecodedInstruction",
+    "ExecutionMode",
+    "FunctionCandidate",
+    "FunctionDiscoveryResult",
+    "FunctionSeed",
+    "InstructionDecoder",
     "NumericMatch",
     "PointerReference",
     "StringRecord",
     "SymbolCandidate",
     "analyze_components",
     "arm_function_starts",
+    "arm_prologue_seeds",
     "cluster_numeric_matches",
+    "discover_functions",
     "extract_ascii_strings",
     "filter_strings",
     "find_pointer_references",
