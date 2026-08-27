@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "NDS Disassembly Toolkit contributors" }]
-dependencies = []
+dependencies = [
+  "capstone>=5,<7",
+]
 
 [project.optional-dependencies]
 dev = [
