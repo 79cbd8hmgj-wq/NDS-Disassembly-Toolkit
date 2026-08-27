@@ -107,6 +107,36 @@ nds-toolkit analyze \
 
 `--numeric-values-key` and `--numeric-divisor` are meaningful only with `--numeric-records`.
 
+## Phase 7A function discovery
+
+The analysis package now provides a Capstone-backed ARM/Thumb decoder and conservative function discovery for executable components. Callers provide explicit runtime-address seeds; direct `BL`/`BLX` call targets inside the same component are then discovered recursively.
+
+```python
+from pathlib import Path
+
+from nds_disassembly_toolkit.analysis import (
+    Component,
+    FunctionSeed,
+    InstructionSet,
+    discover_functions,
+)
+
+component = Component(
+    "arm9",
+    Path("arm9.bin"),
+    0x02000000,
+    Path("arm9.bin").read_bytes(),
+)
+result = discover_functions(
+    component,
+    seeds=(FunctionSeed(0x02000000, InstructionSet.ARM),),
+)
+```
+
+Each function candidate preserves its runtime address, component-relative offset, instruction set, confidence, and stable evidence strings. Direct calls outside the component are reported separately as unresolved calls. Decode failures terminate only the affected path.
+
+Phase 7A intentionally does **not** guess indirect targets, treat every prologue-like byte sequence as authoritative code, recover jump tables, or build full control-flow graphs. The older ARM prologue helpers remain available as heuristics. Later CFG/xref phases should consume the same decoder and discovery records rather than introducing a second instruction backend.
+
 ## Ownership boundary
 
 The toolkit owns the mechanics above. A game project should own the interpretation layer: known strings, record schemas, confirmed addresses, symbol names, confidence rules, and runtime evidence. Those facts should not be promoted into the generic toolkit unless they are Nintendo DS format behavior rather than game behavior.
