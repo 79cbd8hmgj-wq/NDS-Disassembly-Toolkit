@@ -60,6 +60,7 @@ The toolkit itself contains no canonical commercial-game profile.
 - [Nitro asset inventory](docs/assets.md)
 - [Guarded binary patching](docs/binary-patching.md)
 - [Guarded ARM/Thumb source patching](docs/source-patching.md)
+- [Provenance and third-party reference audit](docs/provenance-and-licenses.md)
 
 Architecture and migration history remain under `docs/superpowers/`.
 
@@ -76,6 +77,12 @@ Game-specific repositories remain responsible for knowledge and policy such as:
 - stricter profile/application policy layered around generic toolkit operations.
 
 Thin compatibility adapters are acceptable when they preserve an existing consumer API or enforce game-specific policy. They should delegate the underlying Nintendo DS mechanics to this toolkit.
+
+## License and provenance
+
+The toolkit is distributed under the [MIT License](LICENSE).
+
+External Nintendo DS projects used during research are treated as reference material unless a separately reviewed incorporation decision says otherwise. The [provenance audit](docs/provenance-and-licenses.md) records the GPL/unlicensed upstream boundaries and the project's clean-room policy. Commercial ROMs, extracted copyrighted assets, and rebuilt ROMs are not part of this repository.
 
 ## Legal boundary
 
