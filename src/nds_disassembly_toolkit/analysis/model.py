@@ -183,3 +183,41 @@ class CrossReference:
     source_instruction_set: InstructionSet | None
     target_address: int
     target_instruction_set: InstructionSet | None
+
+
+@dataclass(frozen=True)
+class CrossReferenceIndex:
+    references: tuple[CrossReference, ...]
+
+    def to_address(
+        self,
+        address: int,
+        *,
+        kind: CrossReferenceKind | None = None,
+    ) -> tuple[CrossReference, ...]:
+        return tuple(
+            reference
+            for reference in self.references
+            if reference.target_address == address and (kind is None or reference.kind is kind)
+        )
+
+    def from_address(
+        self,
+        address: int,
+        *,
+        kind: CrossReferenceKind | None = None,
+    ) -> tuple[CrossReference, ...]:
+        return tuple(
+            reference
+            for reference in self.references
+            if reference.source_address == address and (kind is None or reference.kind is kind)
+        )
+
+
+@dataclass(frozen=True)
+class CallGraphEdge:
+    caller_component: str
+    caller_function_address: int
+    callsite_address: int
+    target_address: int
+    target_instruction_set: InstructionSet | None
