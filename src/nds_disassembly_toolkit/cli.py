@@ -13,6 +13,7 @@ from nds_disassembly_toolkit.disassembly_cli import (
 )
 from nds_disassembly_toolkit.errors import NdsToolkitError
 from nds_disassembly_toolkit.inspection import inspect_rom
+from nds_disassembly_toolkit.patches.apply import apply_patch_set
 from nds_disassembly_toolkit.profile import RomProfile, load_profile
 from nds_disassembly_toolkit.source_patch_cli import (
     add_source_patch_parser,
@@ -94,6 +95,16 @@ def add_rom_parsers(
     rebuild_parser.add_argument("--force", action="store_true")
 
 
+def add_patch_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    patch_parser = subparsers.add_parser(
+        "patch", help="apply guarded binary replacements to a workspace"
+    )
+    patch_parser.add_argument("workspace", type=Path)
+    patch_parser.add_argument("patch_file", type=Path)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nds-toolkit",
@@ -102,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     add_rom_parsers(subparsers)
+    add_patch_parser(subparsers)
     add_disassembly_parser(subparsers)
     add_analysis_parser(subparsers)
     add_assets_parser(subparsers)
@@ -171,6 +183,18 @@ def run_rom_command(arguments: argparse.Namespace) -> int:
     raise NdsToolkitError("an inspect, extract, or rebuild command is required")
 
 
+def run_patch_command(arguments: argparse.Namespace) -> int:
+    workspace = arguments.workspace.expanduser().resolve()
+    patch_file = arguments.patch_file.expanduser().resolve()
+    report = apply_patch_set(workspace, patch_file)
+    report_path = workspace / "manifests" / f"patch-{patch_file.stem}.json"
+    print(
+        f"Applied {len(report.applied)} patches to {workspace}; "
+        f"report: {report_path}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     parser = build_parser()
@@ -191,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_assets_command(arguments)
         if arguments.command == "source-patch":
             return run_source_patch_command(arguments)
+        if arguments.command == "patch":
+            return run_patch_command(arguments)
         if arguments.command in _ROM_COMMANDS:
             return run_rom_command(arguments)
     except ValueError as exc:
