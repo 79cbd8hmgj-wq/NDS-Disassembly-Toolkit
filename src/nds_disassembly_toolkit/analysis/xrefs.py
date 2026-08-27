@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from nds_disassembly_toolkit.analysis.model import (
-    CFGEdgeKind,
     CallGraphEdge,
+    CFGEdgeKind,
     CrossReference,
     CrossReferenceIndex,
     CrossReferenceKind,
