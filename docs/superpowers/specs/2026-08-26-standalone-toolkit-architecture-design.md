@@ -1,7 +1,7 @@
 # Standalone NDS Disassembly Toolkit Architecture
 
 Date: 2026-08-26
-Status: Approved architecture, pending implementation plan
+Status: Implemented through Phase 6 consolidation on 2026-08-27
 
 ## Purpose
 
@@ -292,11 +292,14 @@ The first milestone is complete only when the standalone generic core passes its
 
 ### Phase 6 — Consolidation
 
-- audit remaining duplicated generic code
-- documentation and migration notes
-- CI for standalone toolkit
-- compatibility cleanup
-- provenance/license audit for third-party-derived integrations
+Completed on 2026-08-27:
+
+- audited remaining duplicated generic code;
+- handed generic workflow documentation to the standalone toolkit;
+- verified standalone toolkit CI and Bakugan consumer CI;
+- retained only intentional Bakugan compatibility/policy adapters;
+- completed the provenance/license audit for third-party reference material in `docs/provenance-and-licenses.md`;
+- added the repository's explicit MIT `LICENSE` file.
 
 ## Compatibility strategy
 
@@ -307,6 +310,8 @@ This avoids turning the repository split into a simultaneous rewrite.
 ## Third-party source reuse
 
 Prior research and integrations involving NDSFactory, Tinke, NitroPacker, ndstool, DS disassembly tools, and similar projects remain valuable inputs. Reuse must preserve applicable licenses and attribution. When direct copying is not license-compatible or provenance is unclear, the toolkit may reuse documented behavior, format knowledge, test vectors, and architectural lessons while implementing compatible functionality independently.
+
+The completed audit and contributor rules are recorded in `docs/provenance-and-licenses.md`.
 
 ## Success criteria
 
