@@ -5,8 +5,16 @@ from nds_disassembly_toolkit.analysis.arm import (
     function_address_for_reference,
     nearest_function_start,
 )
+from nds_disassembly_toolkit.analysis.decoder import decode_instruction
+from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import (
     Component,
+    ControlFlowKind,
+    DecodedInstruction,
+    FunctionCandidate,
+    FunctionDiscoveryResult,
+    FunctionSeed,
+    InstructionSet,
     NumericMatch,
     PointerReference,
     StringRecord,
@@ -25,6 +33,12 @@ from nds_disassembly_toolkit.analysis.strings import (
 
 __all__ = [
     "Component",
+    "ControlFlowKind",
+    "DecodedInstruction",
+    "FunctionCandidate",
+    "FunctionDiscoveryResult",
+    "FunctionSeed",
+    "InstructionSet",
     "NumericMatch",
     "PointerReference",
     "StringRecord",
@@ -32,6 +46,8 @@ __all__ = [
     "analyze_components",
     "arm_function_starts",
     "cluster_numeric_matches",
+    "decode_instruction",
+    "discover_functions",
     "extract_ascii_strings",
     "filter_strings",
     "find_pointer_references",

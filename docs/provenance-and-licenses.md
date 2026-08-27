@@ -2,21 +2,22 @@
 
 Audit date: 2026-08-27
 
-This document records the provenance boundary for external Nintendo DS tools that informed the development of `NDS-Disassembly-Toolkit` and its predecessor work in `Bakugan-DS-`.
+This document records the provenance boundary for external Nintendo DS and reverse-engineering tools that informed the development of `NDS-Disassembly-Toolkit` and its predecessor work in `Bakugan-DS-`.
 
 The toolkit itself is distributed under the MIT License. See the repository root `LICENSE` file.
 
 ## Policy
 
-External repositories listed here were used as **reference material**, not as vendored implementation dependencies.
+External repositories listed here are either **reference material** or explicitly documented runtime dependencies. No external implementation source is vendored unless a future audit records that decision here.
 
-The migration policy is:
+The migration and capability-development policy is:
 
 1. reuse the project's own proven game-independent Python code when it was already independently implemented;
-2. use external tools to understand public Nintendo DS formats, expected behavior, workflow ideas, and interoperability constraints;
+2. use external tools to understand public Nintendo DS formats, expected behavior, workflow ideas, interoperability constraints, and mature reverse-engineering architecture;
 3. do not copy GPL implementation source into the MIT toolkit unless the licensing model is deliberately changed and the required GPL obligations are satisfied;
 4. treat source with no explicit license as unavailable for implementation copying;
-5. keep direct third-party dependencies, copied code, or incorporated licensed assets out of the repository unless they are separately reviewed and their license/attribution obligations are documented here.
+5. document direct third-party runtime dependencies and their licensing boundary before merging them;
+6. keep copied code or incorporated licensed assets out of the repository unless they are separately reviewed and their license/attribution obligations are documented here.
 
 This is an engineering provenance record, not a substitute for legal advice.
 
@@ -29,10 +30,15 @@ This is an engineering provenance record, not a substitute for legal advice.
 | NitroPacker | https://github.com/haroohie-club/NitroPacker | GNU GPL v3 (`LICENSE`) | Architectural reference for an external ARM source-compilation workflow | No NitroPacker source vendored or copied; source compilation/application is independently implemented in Python around user-selected LLVM/binutils-compatible tools |
 | ndstool | https://github.com/devkitPro/ndstool | GNU GPL v3 (`COPYING`) | Comparison/reference for conventional NDS extraction/repacking behavior | No ndstool source vendored or copied; the toolkit's parser/rebuilder remains its own implementation |
 | pret DS disassembly tools | https://github.com/pret/ds_disassembly_tools | **No explicit license found** in the repository root or README during this audit | Workflow concepts such as finding Nitro module parameters, overlay-layout investigation, labelled binary regions, and disassembly comparison | Implementation source is treated as unavailable for copying; toolkit behavior was reimplemented independently and extended with its own validation/error model |
+| Capstone | https://github.com/capstone-engine/capstone | BSD 3-Clause-style license (`LICENSES/LICENSE.TXT` in supplied `capstone-next.zip`) | ARM/Thumb instruction decoding and semantic instruction metadata for Phase 7 analysis | Added as `capstone>=5,<7` runtime dependency; no Capstone source is vendored or copied into toolkit modules |
+| angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied `angr-master.zip`) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, and analysis persistence | Reference only in Phase 7A; no angr runtime dependency or source incorporation |
+| melonDS | https://github.com/melonDS-emu/melonDS | GNU GPL v3 (`LICENSE` in supplied `melonDS-master.zip`) | Nintendo DS runtime/emulator behavior and future debugger/trace integration concepts | Reference/external-integration boundary only; no melonDS implementation source is copied or linked into the MIT toolkit |
 
-### ndstool archive-origin caveat
+### Archive-origin caveats
 
 Earlier project work used a supplied archive named `ndstool-master.zip`. That filename alone does not preserve a verifiable remote repository origin in the current source tree. This audit records `devkitPro/ndstool` as the examined upstream repository for the ndstool lineage. If the exact supplied archive is later identified as a different fork or commit, add its repository, commit/hash, and license here rather than assuming equivalence.
+
+Phase 7 reference archives were supplied as `capstone-next.zip`, `angr-master.zip`, and `melonDS-master.zip`. Their exact commit hashes are not encoded in this repository, so the audit records the canonical project lineage and the license text observed inside each supplied archive rather than asserting an exact upstream commit.
 
 ## Clean-room implementation notes
 
@@ -80,6 +86,14 @@ A direct audit of the shortest overlapping helpers illustrates the separation:
 
 The toolkit does not contain the upstream scripts `asmdiff.sh`, `dump_fs.py`, `find_module_params.py`, `get_overlay_load_order.py`, `insert_labels.py`, `merge_nef.py`, `ntruncompbw.c`, or their source text.
 
+### Phase 7 analysis references
+
+Capstone is intentionally different from the earlier clean-room references: it is a permissively licensed runtime dependency used through its public Python API. `analysis/decoder.py` is toolkit-owned code that converts Capstone results into toolkit-owned immutable models, so Capstone objects do not become the public analysis data model.
+
+angr is being used to study mature approaches to function discovery, CFG recovery, data-flow analysis, and persistent analysis state. Phase 7A does not import angr or copy its analysis implementation.
+
+melonDS is GPL-licensed and therefore remains on the same strict reference boundary as the earlier GPL Nintendo DS tools. Future dynamic-analysis work should prefer process/debugger integration or documented interfaces rather than incorporating melonDS implementation source into this MIT repository.
+
 ## Repository audit observations
 
 During Phase 6 consolidation:
@@ -90,17 +104,19 @@ During Phase 6 consolidation:
 - historical design documents explicitly state that the supplied upstream archives were reference material only and that GPL/upstream implementation source was not vendored or copied;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems rather than transferring game-specific material into the toolkit.
 
+Phase 7A deliberately adds Capstone only as a package dependency; angr and melonDS remain non-vendored reference material.
+
 Text search and manual comparison are useful audit evidence but cannot mathematically prove independent authorship. Future contributors should preserve the boundary above and document any deliberate third-party code incorporation before merging it.
 
 ## Contributor checklist
 
-Before adding code based on an external NDS project:
+Before adding code based on an external NDS or reverse-engineering project:
 
-1. identify the exact repository and commit/release;
+1. identify the exact repository and commit/release when available;
 2. record the license before reading/copying implementation source for reuse;
-3. decide whether the need is a public format fact, behavioral reference, or actual code reuse;
+3. decide whether the need is a public format fact, behavioral reference, architecture reference, runtime dependency, or actual code reuse;
 4. prefer independent implementation for format facts/behavior when the upstream license is incompatible with the toolkit's MIT distribution goals;
 5. never copy code from a repository with no explicit reuse license;
-6. if direct licensed code reuse is intentional, preserve notices/attribution and review whether the toolkit's distribution license must change;
+6. if a direct dependency or licensed code reuse is intentional, preserve required notices/attribution and review whether the toolkit's distribution license must change;
 7. add the source and decision to this document;
 8. keep commercial ROMs, extracted copyrighted assets, and rebuilt ROM images out of the repository.
