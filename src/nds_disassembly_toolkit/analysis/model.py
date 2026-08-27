@@ -166,3 +166,20 @@ class FunctionControlFlowGraph:
     edges: tuple[CFGEdge, ...]
     unresolved_transfers: tuple[UnresolvedTransfer, ...]
     decode_failures: tuple[int, ...]
+
+
+class CrossReferenceKind(StrEnum):
+    CALL = "call"
+    BRANCH = "branch"
+    DATA_POINTER = "data_pointer"
+
+
+@dataclass(frozen=True)
+class CrossReference:
+    kind: CrossReferenceKind
+    source_component: str
+    source_address: int
+    source_function_address: int | None
+    source_instruction_set: InstructionSet | None
+    target_address: int
+    target_instruction_set: InstructionSet | None
