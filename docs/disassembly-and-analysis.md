@@ -161,7 +161,32 @@ The graph records:
 
 Indirect targets are never guessed. Indirect calls keep their intraprocedural fallthrough, while indirect unconditional branches terminate the affected path. Calls deliberately start a new fallthrough block so later call-graph/xref analysis can reason about the call site explicitly.
 
-Phase 7B does not add a graph-library dependency or leak Capstone objects into public data models. Phase 7C can build xrefs and call graphs directly from these records rather than introducing a second decoding/CFG implementation.
+Phase 7B does not add a graph-library dependency or leak Capstone objects into public data models.
+
+## Phase 7C cross-references and call graphs
+
+Phase 7C normalizes semantic code edges and existing pointer records into one deterministic cross-reference model. It does not re-decode executable bytes.
+
+```python
+from nds_disassembly_toolkit.analysis import build_call_graph, build_xref_index
+
+index = build_xref_index((cfg,), pointer_references=())
+references_to_target = index.to_address(0x02001000)
+references_from_site = index.from_address(0x02000040)
+call_edges = build_call_graph(index)
+```
+
+The index contains three semantic reference kinds:
+
+- `call` for direct call edges;
+- `branch` for direct branch edges;
+- `data_pointer` for existing exact pointer references.
+
+CFG fallthrough edges are excluded because they describe local graph topology rather than semantic cross-references. Code xrefs preserve their owning component, source function, exact instruction address, source mode when available, target address, and target mode. Data-pointer xrefs deliberately do not invent function ownership or ARM/Thumb metadata.
+
+`to_address()` and `from_address()` return stable tuples and may optionally filter by `CrossReferenceKind`. `build_call_graph()` is a derived view of direct call xrefs, so caller component/function, callsite, external targets, and ARM/Thumb interworking remain available without maintaining a second source of truth.
+
+Phase 7C still does not guess indirect targets or assign symbol names. Phase 7D symbol recovery should consume and annotate these xrefs rather than create a separate reference database.
 
 ## Ownership boundary
 

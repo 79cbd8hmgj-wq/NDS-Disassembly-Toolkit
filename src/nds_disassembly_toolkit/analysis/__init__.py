@@ -10,10 +10,14 @@ from nds_disassembly_toolkit.analysis.decoder import decode_instruction
 from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import (
     BasicBlock,
+    CallGraphEdge,
     CFGEdge,
     CFGEdgeKind,
     Component,
     ControlFlowKind,
+    CrossReference,
+    CrossReferenceIndex,
+    CrossReferenceKind,
     DecodedInstruction,
     FunctionCandidate,
     FunctionControlFlowGraph,
@@ -36,13 +40,23 @@ from nds_disassembly_toolkit.analysis.strings import (
     filter_strings,
     find_pointer_references,
 )
+from nds_disassembly_toolkit.analysis.xrefs import (
+    build_call_graph,
+    build_code_xrefs,
+    build_data_xrefs,
+    build_xref_index,
+)
 
 __all__ = [
     "BasicBlock",
     "CFGEdge",
     "CFGEdgeKind",
+    "CallGraphEdge",
     "Component",
     "ControlFlowKind",
+    "CrossReference",
+    "CrossReferenceIndex",
+    "CrossReferenceKind",
     "DecodedInstruction",
     "FunctionCandidate",
     "FunctionControlFlowGraph",
@@ -56,7 +70,11 @@ __all__ = [
     "UnresolvedTransfer",
     "analyze_components",
     "arm_function_starts",
+    "build_call_graph",
+    "build_code_xrefs",
+    "build_data_xrefs",
     "build_function_cfg",
+    "build_xref_index",
     "cluster_numeric_matches",
     "decode_instruction",
     "discover_functions",
