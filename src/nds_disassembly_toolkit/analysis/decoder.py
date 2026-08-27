@@ -59,8 +59,12 @@ class _CapstoneInstruction(Protocol):
     def group(self, group_id: int) -> bool: ...
 
 
+def _is_return_idiom(instruction: _CapstoneInstruction) -> bool:
+    return instruction.mnemonic.lower() == "bx" and instruction.op_str.lower().strip() == "lr"
+
+
 def _control_flow(instruction: _CapstoneInstruction) -> ControlFlowKind:
-    if instruction.group(CS_GRP_RET):
+    if instruction.group(CS_GRP_RET) or _is_return_idiom(instruction):
         return ControlFlowKind.RETURN
     if instruction.group(CS_GRP_CALL):
         return ControlFlowKind.CALL
