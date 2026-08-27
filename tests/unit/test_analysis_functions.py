@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import nds_disassembly_toolkit.analysis as analysis
 from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import Component, FunctionSeed, InstructionSet
 
@@ -97,3 +98,9 @@ def test_discovery_rejects_invalid_seed_alignment() -> None:
             _component(b"\x00" * 0x10),
             seeds=(FunctionSeed(BASE + 2, InstructionSet.ARM),),
         )
+
+
+def test_function_discovery_is_exported_from_analysis_package() -> None:
+    assert analysis.discover_functions is discover_functions
+    assert analysis.FunctionSeed is FunctionSeed
+    assert analysis.InstructionSet is InstructionSet
