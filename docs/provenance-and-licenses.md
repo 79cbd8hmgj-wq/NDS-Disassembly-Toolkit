@@ -90,7 +90,7 @@ The toolkit does not contain the upstream scripts `asmdiff.sh`, `dump_fs.py`, `f
 
 Capstone is intentionally different from the earlier clean-room references: it is a permissively licensed runtime dependency used through its public Python API. `analysis/decoder.py` is toolkit-owned code that converts Capstone results into toolkit-owned immutable models, so Capstone objects do not become the public analysis data model.
 
-angr is being used to study mature approaches to function discovery, CFG recovery, data-flow analysis, and persistent analysis state. Phase 7A and 7B do not import angr or copy its analysis implementation. The Phase 7B CFG implementation uses its own two-pass reachable-instruction/basic-block design and only consumes toolkit-owned decoder records.
+angr is being used to study mature approaches to function discovery, CFG recovery, data-flow analysis, and persistent analysis state. Phases 7A through 7C do not import angr or copy its analysis implementation. Phase 7B uses an independently implemented two-pass reachable-instruction/basic-block design, and Phase 7C independently normalizes toolkit-owned CFG/pointer records into immutable xref, query-index, and call-graph models.
 
 melonDS is GPL-licensed and therefore remains on the same strict reference boundary as the earlier GPL Nintendo DS tools. Future dynamic-analysis work should prefer process/debugger integration or documented interfaces rather than incorporating melonDS implementation source into this MIT repository.
 
@@ -104,7 +104,7 @@ During Phase 6 consolidation:
 - historical design documents explicitly state that the supplied upstream archives were reference material only and that GPL/upstream implementation source was not vendored or copied;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems rather than transferring game-specific material into the toolkit.
 
-Phase 7A deliberately adds Capstone only as a package dependency. Phase 7B adds only toolkit-owned CFG models/logic; angr and melonDS remain non-vendored reference material.
+Phase 7A deliberately adds Capstone only as a package dependency. Phases 7B and 7C add only toolkit-owned CFG/xref/index/call-graph models and logic; angr and melonDS remain non-vendored reference material.
 
 Text search and manual comparison are useful audit evidence but cannot mathematically prove independent authorship. Future contributors should preserve the boundary above and document any deliberate third-party code incorporation before merging it.
 
