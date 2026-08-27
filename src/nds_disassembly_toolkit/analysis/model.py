@@ -1,7 +1,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+
+
+class ExecutionMode(str, Enum):
+    ARM = "arm"
+    THUMB = "thumb"
+
+
+class ControlFlowKind(str, Enum):
+    FALLTHROUGH = "fallthrough"
+    CALL = "call"
+    BRANCH = "branch"
+    RETURN = "return"
+    INDIRECT_BRANCH = "indirect-branch"
+
+
+@dataclass(frozen=True)
+class DecodedInstruction:
+    address: int
+    size: int
+    mode: ExecutionMode
+    mnemonic: str
+    operands: str
+    flow: ControlFlowKind
+    target: int | None = None
+    target_mode: ExecutionMode | None = None
+    conditional: bool = False
+
+    @property
+    def end_address(self) -> int:
+        return self.address + self.size
 
 
 @dataclass(frozen=True)
