@@ -11,6 +11,8 @@ from nds_disassembly_toolkit.source_compile import SourceToolchain
 
 def add_source_patch_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    *,
+    default_profile: Path | None = None,
 ) -> None:
     source_parser = subparsers.add_parser(
         "source-patch",
@@ -23,7 +25,7 @@ def add_source_patch_parser(
     )
     build_parser.add_argument("workspace", type=Path)
     build_parser.add_argument("manifest", type=Path)
-    build_parser.add_argument("--profile", type=Path)
+    build_parser.add_argument("--profile", type=Path, default=default_profile)
     build_parser.add_argument("--clang", default="clang")
     build_parser.add_argument("--ld", default="ld.lld")
     build_parser.add_argument("--nm", default="nm")
