@@ -69,8 +69,8 @@ class CapstoneArmDecoder:
     """Translate Capstone ARM/Thumb decoding into toolkit-owned analysis models."""
 
     def __init__(self) -> None:
-        self._arm = cast(_CapstoneEngine, Cs(CS_ARCH_ARM, CS_MODE_ARM))
-        self._thumb = cast(_CapstoneEngine, Cs(CS_ARCH_ARM, CS_MODE_THUMB))
+        self._arm = cast(_CapstoneEngine, Cs(int(CS_ARCH_ARM), int(CS_MODE_ARM)))
+        self._thumb = cast(_CapstoneEngine, Cs(int(CS_ARCH_ARM), int(CS_MODE_THUMB)))
         self._arm.detail = True
         self._thumb.detail = True
 
@@ -97,7 +97,7 @@ class CapstoneArmDecoder:
         target = self._direct_target(instruction)
         flow = self._flow_kind(instruction, target)
         target_mode = self._target_mode(instruction, mode, target)
-        conditional = instruction.cc not in (ARM_CC_AL, ARM_CC_INVALID)
+        conditional = instruction.cc not in (int(ARM_CC_AL), int(ARM_CC_INVALID))
         return DecodedInstruction(
             address=instruction.address,
             size=instruction.size,
@@ -113,7 +113,7 @@ class CapstoneArmDecoder:
     @staticmethod
     def _direct_target(instruction: _CapstoneInstruction) -> int | None:
         for operand in instruction.operands:
-            if operand.type == ARM_OP_IMM:
+            if operand.type == int(ARM_OP_IMM):
                 return int(operand.imm) & 0xFFFFFFFF
         return None
 
@@ -124,9 +124,9 @@ class CapstoneArmDecoder:
     ) -> ControlFlowKind:
         if CapstoneArmDecoder._is_return(instruction):
             return ControlFlowKind.RETURN
-        if CS_GRP_CALL in instruction.groups:
+        if int(CS_GRP_CALL) in instruction.groups:
             return ControlFlowKind.CALL
-        if CS_GRP_JUMP in instruction.groups:
+        if int(CS_GRP_JUMP) in instruction.groups:
             if target is None:
                 return ControlFlowKind.INDIRECT_BRANCH
             return ControlFlowKind.BRANCH
@@ -134,23 +134,23 @@ class CapstoneArmDecoder:
 
     @staticmethod
     def _is_return(instruction: _CapstoneInstruction) -> bool:
-        if CS_GRP_RET in instruction.groups:
+        if int(CS_GRP_RET) in instruction.groups:
             return True
         if instruction.mnemonic == "bx" and len(instruction.operands) == 1:
             operand = instruction.operands[0]
-            return operand.type == ARM_OP_REG and operand.reg == ARM_REG_LR
+            return operand.type == int(ARM_OP_REG) and operand.reg == int(ARM_REG_LR)
         if instruction.mnemonic == "pop":
             return any(
-                operand.type == ARM_OP_REG and operand.reg == ARM_REG_PC
+                operand.type == int(ARM_OP_REG) and operand.reg == int(ARM_REG_PC)
                 for operand in instruction.operands
             )
         if instruction.mnemonic == "mov" and len(instruction.operands) >= 2:
             destination, source = instruction.operands[:2]
             return (
-                destination.type == ARM_OP_REG
-                and destination.reg == ARM_REG_PC
-                and source.type == ARM_OP_REG
-                and source.reg == ARM_REG_LR
+                destination.type == int(ARM_OP_REG)
+                and destination.reg == int(ARM_REG_PC)
+                and source.type == int(ARM_OP_REG)
+                and source.reg == int(ARM_REG_LR)
             )
         return False
 
