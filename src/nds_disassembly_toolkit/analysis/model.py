@@ -92,3 +92,27 @@ class DecodedInstruction:
     direct_target: int | None = None
     target_instruction_set: InstructionSet | None = None
     conditional: bool = False
+
+
+@dataclass(frozen=True)
+class FunctionSeed:
+    address: int
+    instruction_set: InstructionSet
+    source: str = "explicit"
+
+
+@dataclass(frozen=True)
+class FunctionCandidate:
+    component: str
+    address: int
+    offset: int
+    instruction_set: InstructionSet
+    confidence: str
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FunctionDiscoveryResult:
+    functions: tuple[FunctionCandidate, ...]
+    unresolved_calls: tuple[int, ...]
+    decode_failures: tuple[int, ...]
