@@ -36,6 +36,30 @@ class DecodedInstruction:
 
 
 @dataclass(frozen=True)
+class FunctionSeed:
+    address: int
+    mode: ExecutionMode
+    evidence: str
+    confidence: str
+
+
+@dataclass(frozen=True)
+class FunctionCandidate:
+    component: str
+    address: int
+    offset: int
+    mode: ExecutionMode
+    confidence: str
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FunctionDiscoveryResult:
+    functions: tuple[FunctionCandidate, ...]
+    unresolved_indirect_transfers: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class Component:
     name: str
     path: Path
