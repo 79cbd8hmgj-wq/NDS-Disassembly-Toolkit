@@ -135,3 +135,21 @@ def test_call_graph_is_derived_only_from_direct_call_xrefs() -> None:
     assert edge.callsite_address == BASE + 4
     assert edge.target_address == BASE + 0x100
     assert edge.target_instruction_set is InstructionSet.THUMB
+
+
+def test_xref_api_is_exported_from_analysis_package() -> None:
+    import nds_disassembly_toolkit.analysis as analysis
+    from nds_disassembly_toolkit.analysis.model import (
+        CallGraphEdge,
+        CrossReference,
+        CrossReferenceIndex,
+    )
+
+    assert analysis.CallGraphEdge is CallGraphEdge
+    assert analysis.CrossReference is CrossReference
+    assert analysis.CrossReferenceIndex is CrossReferenceIndex
+    assert analysis.CrossReferenceKind is CrossReferenceKind
+    assert analysis.build_call_graph is build_call_graph
+    assert analysis.build_code_xrefs is build_code_xrefs
+    assert analysis.build_data_xrefs is build_data_xrefs
+    assert analysis.build_xref_index is build_xref_index
