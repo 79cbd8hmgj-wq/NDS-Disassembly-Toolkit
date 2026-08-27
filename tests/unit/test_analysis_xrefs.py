@@ -2,12 +2,18 @@ from nds_disassembly_toolkit.analysis.model import (
     BasicBlock,
     CFGEdge,
     CFGEdgeKind,
+    CrossReferenceKind,
     FunctionCandidate,
     FunctionControlFlowGraph,
     InstructionSet,
     PointerReference,
 )
-from nds_disassembly_toolkit.analysis.xrefs import build_code_xrefs, build_data_xrefs
+from nds_disassembly_toolkit.analysis.xrefs import (
+    build_call_graph,
+    build_code_xrefs,
+    build_data_xrefs,
+    build_xref_index,
+)
 
 BASE = 0x02000000
 
@@ -62,6 +68,15 @@ def _cfg() -> FunctionControlFlowGraph:
     )
 
 
+def _pointer() -> PointerReference:
+    return PointerReference(
+        component="arm9",
+        offset=0x40,
+        address=BASE + 0x40,
+        target_address=BASE + 0x800,
+    )
+
+
 def test_code_xrefs_include_calls_and_branches_but_not_fallthrough() -> None:
     references = build_code_xrefs((_cfg(),))
 
@@ -82,14 +97,7 @@ def test_code_xrefs_deduplicate_duplicate_cfg_inputs() -> None:
 
 
 def test_pointer_reference_becomes_data_xref_without_invented_code_metadata() -> None:
-    pointer = PointerReference(
-        component="arm9",
-        offset=0x40,
-        address=BASE + 0x40,
-        target_address=BASE + 0x800,
-    )
-
-    references = build_data_xrefs((pointer, pointer))
+    references = build_data_xrefs((_pointer(), _pointer()))
 
     assert len(references) == 1
     reference = references[0]
@@ -100,3 +108,30 @@ def test_pointer_reference_becomes_data_xref_without_invented_code_metadata() ->
     assert reference.source_instruction_set is None
     assert reference.target_address == BASE + 0x800
     assert reference.target_instruction_set is None
+
+
+def test_xref_index_queries_sources_and_targets_deterministically() -> None:
+    index = build_xref_index((_cfg(), _cfg()), pointer_references=(_pointer(), _pointer()))
+
+    assert len(index.references) == 3
+    assert index.from_address(BASE + 4) == (index.references[0],)
+    assert index.to_address(BASE + 0x100) == (index.references[0],)
+    assert index.to_address(BASE + 0x100, kind=CrossReferenceKind.BRANCH) == ()
+    assert index.to_address(BASE + 0x100, kind=CrossReferenceKind.CALL) == (
+        index.references[0],
+    )
+    assert index.from_address(BASE + 0xDEAD) == ()
+
+
+def test_call_graph_is_derived_only_from_direct_call_xrefs() -> None:
+    index = build_xref_index((_cfg(),), pointer_references=(_pointer(),))
+
+    edges = build_call_graph(index)
+
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge.caller_component == "arm9"
+    assert edge.caller_function_address == BASE
+    assert edge.callsite_address == BASE + 4
+    assert edge.target_address == BASE + 0x100
+    assert edge.target_instruction_set is InstructionSet.THUMB
