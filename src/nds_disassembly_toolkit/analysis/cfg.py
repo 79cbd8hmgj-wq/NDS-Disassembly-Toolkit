@@ -14,6 +14,7 @@ from nds_disassembly_toolkit.analysis.model import (
     FunctionCandidate,
     FunctionControlFlowGraph,
     InstructionSet,
+    UnresolvedTransfer,
 )
 
 _InstructionKey = tuple[int, InstructionSet]
@@ -23,6 +24,7 @@ _InstructionKey = tuple[int, InstructionSet]
 class _Successor:
     target: _InstructionKey
     kind: CFGEdgeKind
+    traverse: bool
 
 
 def _validate_function(component: Component, function: FunctionCandidate) -> None:
@@ -45,6 +47,16 @@ def _is_local(component: Component, key: _InstructionKey) -> bool:
     )
 
 
+def _unresolved(decoded: DecodedInstruction) -> UnresolvedTransfer:
+    return UnresolvedTransfer(
+        source_address=decoded.address,
+        instruction_set=decoded.instruction_set,
+        control_flow=decoded.control_flow,
+        mnemonic=decoded.mnemonic,
+        operands=decoded.operands,
+    )
+
+
 def _decode_reachable(
     component: Component,
     entry: _InstructionKey,
@@ -52,11 +64,13 @@ def _decode_reachable(
     dict[_InstructionKey, DecodedInstruction],
     dict[_InstructionKey, tuple[_Successor, ...]],
     set[_InstructionKey],
+    set[UnresolvedTransfer],
     set[int],
 ]:
     instructions: dict[_InstructionKey, DecodedInstruction] = {}
     successors: dict[_InstructionKey, tuple[_Successor, ...]] = {}
     leaders = {entry}
+    unresolved_transfers: set[UnresolvedTransfer] = set()
     decode_failures: set[int] = set()
     worklist = deque([entry])
     queued = {entry}
@@ -82,25 +96,41 @@ def _decode_reachable(
         outgoing: list[_Successor] = []
         if decoded.control_flow is ControlFlowKind.ORDINARY:
             if _is_local(component, next_key):
-                outgoing.append(_Successor(next_key, CFGEdgeKind.FALLTHROUGH))
+                outgoing.append(_Successor(next_key, CFGEdgeKind.FALLTHROUGH, True))
+        elif decoded.control_flow is ControlFlowKind.CALL:
+            if decoded.direct_target is None:
+                unresolved_transfers.add(_unresolved(decoded))
+            else:
+                target_mode = decoded.target_instruction_set or instruction_set
+                outgoing.append(
+                    _Successor((decoded.direct_target, target_mode), CFGEdgeKind.CALL, False)
+                )
+            if _is_local(component, next_key):
+                outgoing.append(_Successor(next_key, CFGEdgeKind.FALLTHROUGH, True))
+                leaders.add(next_key)
         elif decoded.control_flow is ControlFlowKind.BRANCH:
-            if decoded.direct_target is not None:
+            if decoded.direct_target is None:
+                unresolved_transfers.add(_unresolved(decoded))
+            else:
                 target_mode = decoded.target_instruction_set or instruction_set
                 target_key = (decoded.direct_target, target_mode)
-                if _is_local(component, target_key):
-                    outgoing.append(_Successor(target_key, CFGEdgeKind.BRANCH))
+                local_target = _is_local(component, target_key)
+                outgoing.append(_Successor(target_key, CFGEdgeKind.BRANCH, local_target))
+                if local_target:
                     leaders.add(target_key)
             if decoded.conditional and _is_local(component, next_key):
-                outgoing.append(_Successor(next_key, CFGEdgeKind.FALLTHROUGH))
+                outgoing.append(_Successor(next_key, CFGEdgeKind.FALLTHROUGH, True))
                 leaders.add(next_key)
 
         successors[key] = tuple(outgoing)
         for successor in outgoing:
+            if not successor.traverse or not _is_local(component, successor.target):
+                continue
             if successor.target not in instructions and successor.target not in queued:
                 worklist.append(successor.target)
                 queued.add(successor.target)
 
-    return instructions, successors, leaders, decode_failures
+    return instructions, successors, leaders, unresolved_transfers, decode_failures
 
 
 def _build_blocks(
@@ -124,9 +154,10 @@ def _build_blocks(
             outgoing = successors.get(key, ())
             if decoded.control_flow is not ControlFlowKind.ORDINARY:
                 break
-            if len(outgoing) != 1:
+            traversed = tuple(item for item in outgoing if item.traverse)
+            if len(traversed) != 1:
                 break
-            next_key = outgoing[0].target
+            next_key = traversed[0].target
             if next_key in leaders and next_key != leader:
                 break
             key = next_key
@@ -155,16 +186,20 @@ def _build_edges(
             continue
         for successor in outgoing:
             target_block = owner.get(successor.target)
-            if target_block is None:
-                continue
-            if target_block == source_block and successor.kind is CFGEdgeKind.FALLTHROUGH:
-                continue
+            if successor.kind is CFGEdgeKind.FALLTHROUGH:
+                if target_block is None or target_block == source_block:
+                    continue
+                target_address, target_mode = target_block
+            elif successor.kind is CFGEdgeKind.BRANCH and target_block is not None:
+                target_address, target_mode = target_block
+            else:
+                target_address, target_mode = successor.target
             edges.add(
                 CFGEdge(
                     source_address=source_block[0],
                     source_instruction_address=source_key[0],
-                    target_address=target_block[0],
-                    target_instruction_set=target_block[1],
+                    target_address=target_address,
+                    target_instruction_set=target_mode,
                     kind=successor.kind,
                 )
             )
@@ -188,13 +223,26 @@ def build_function_cfg(
 ) -> FunctionControlFlowGraph:
     _validate_function(component, function)
     entry = (function.address, function.instruction_set)
-    instructions, successors, leaders, decode_failures = _decode_reachable(component, entry)
+    instructions, successors, leaders, unresolved_transfers, decode_failures = _decode_reachable(
+        component, entry
+    )
     blocks, owner = _build_blocks(component, instructions, successors, leaders)
     edges = _build_edges(successors, owner)
     return FunctionControlFlowGraph(
         function=function,
         blocks=blocks,
         edges=edges,
-        unresolved_transfers=(),
+        unresolved_transfers=tuple(
+            sorted(
+                unresolved_transfers,
+                key=lambda item: (
+                    item.source_address,
+                    item.instruction_set.value,
+                    item.control_flow.value,
+                    item.mnemonic,
+                    item.operands,
+                ),
+            )
+        ),
         decode_failures=tuple(sorted(decode_failures)),
     )
