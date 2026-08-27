@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 
-class ExecutionMode(str, Enum):
+class ExecutionMode(StrEnum):
     ARM = "arm"
     THUMB = "thumb"
 
 
-class ControlFlowKind(str, Enum):
+class ControlFlowKind(StrEnum):
     FALLTHROUGH = "fallthrough"
     CALL = "call"
     BRANCH = "branch"
