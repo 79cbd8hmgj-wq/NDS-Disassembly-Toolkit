@@ -116,3 +116,53 @@ class FunctionDiscoveryResult:
     functions: tuple[FunctionCandidate, ...]
     unresolved_calls: tuple[int, ...]
     decode_failures: tuple[int, ...]
+
+
+class CFGEdgeKind(StrEnum):
+    FALLTHROUGH = "fallthrough"
+    BRANCH = "branch"
+    CALL = "call"
+
+
+@dataclass(frozen=True)
+class BasicBlock:
+    component: str
+    address: int
+    offset: int
+    instruction_set: InstructionSet
+    instructions: tuple[DecodedInstruction, ...]
+
+    @property
+    def size(self) -> int:
+        return sum(instruction.size for instruction in self.instructions)
+
+    @property
+    def end_address(self) -> int:
+        return self.address + self.size
+
+
+@dataclass(frozen=True)
+class CFGEdge:
+    source_address: int
+    source_instruction_address: int
+    target_address: int
+    target_instruction_set: InstructionSet
+    kind: CFGEdgeKind
+
+
+@dataclass(frozen=True)
+class UnresolvedTransfer:
+    source_address: int
+    instruction_set: InstructionSet
+    control_flow: ControlFlowKind
+    mnemonic: str
+    operands: str
+
+
+@dataclass(frozen=True)
+class FunctionControlFlowGraph:
+    function: FunctionCandidate
+    blocks: tuple[BasicBlock, ...]
+    edges: tuple[CFGEdge, ...]
+    unresolved_transfers: tuple[UnresolvedTransfer, ...]
+    decode_failures: tuple[int, ...]
