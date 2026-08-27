@@ -36,7 +36,12 @@ def _write_text(text: str, output: Path | None) -> None:
     temporary.replace(output)
 
 
-def add_disassembly_parser(subparsers: Any) -> None:
+def add_disassembly_parser(
+    subparsers: Any,
+    *,
+    default_profile: Path | None = None,
+    supported_by_default: bool = False,
+) -> None:
     parser = subparsers.add_parser(
         "disasm",
         help="prepare and compare Nintendo DS executable components",
@@ -56,8 +61,17 @@ def add_disassembly_parser(subparsers: Any) -> None:
         help="report overlay placement and load relationships",
     )
     overlay_parser.add_argument("rom", type=Path)
-    overlay_parser.add_argument("--profile", type=Path)
-    overlay_parser.add_argument("--require-supported", action="store_true")
+    overlay_parser.add_argument("--profile", type=Path, default=default_profile)
+    if supported_by_default:
+        overlay_parser.add_argument(
+            "--allow-unsupported",
+            dest="require_supported",
+            action="store_false",
+            default=True,
+            help="parse a ROM that does not match the selected profile read-only",
+        )
+    else:
+        overlay_parser.add_argument("--require-supported", action="store_true")
     overlay_parser.add_argument("--output", type=Path)
 
     labels_parser = commands.add_parser(
