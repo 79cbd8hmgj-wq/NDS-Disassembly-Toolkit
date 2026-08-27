@@ -10,9 +10,9 @@ from nds_disassembly_toolkit.analysis.decoder import decode_instruction
 from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import (
     BasicBlock,
+    CallGraphEdge,
     CFGEdge,
     CFGEdgeKind,
-    CallGraphEdge,
     Component,
     ControlFlowKind,
     CrossReference,
