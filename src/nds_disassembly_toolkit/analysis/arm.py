@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import struct
 
-from nds_disassembly_toolkit.analysis.model import Component
+from nds_disassembly_toolkit.analysis.model import Component, ExecutionMode, FunctionSeed
 
 
 def arm_function_starts(component: Component) -> tuple[int, ...]:
@@ -15,6 +15,19 @@ def arm_function_starts(component: Component) -> tuple[int, ...]:
         if is_stmdb_sp and saves_lr:
             starts.append(offset)
     return tuple(starts)
+
+
+def arm_prologue_seeds(component: Component) -> tuple[FunctionSeed, ...]:
+    """Convert legacy ARM prologue matches into discovery evidence."""
+    return tuple(
+        FunctionSeed(
+            address=component.base_address + offset,
+            mode=ExecutionMode.ARM,
+            evidence="arm-prologue",
+            confidence="medium",
+        )
+        for offset in arm_function_starts(component)
+    )
 
 
 def nearest_function_start(
