@@ -15,8 +15,6 @@ from capstone import (  # type: ignore[import-untyped]
 from capstone.arm_const import (  # type: ignore[import-untyped]
     ARM_CC_AL,
     ARM_CC_INVALID,
-    ARM_INS_BX,
-    ARM_INS_POP,
     ARM_OP_IMM,
     ARM_OP_REG,
     ARM_REG_LR,
