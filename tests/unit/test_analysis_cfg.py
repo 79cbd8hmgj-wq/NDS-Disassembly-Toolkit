@@ -3,13 +3,18 @@ from pathlib import Path
 
 import pytest
 
+import nds_disassembly_toolkit.analysis as analysis
 from nds_disassembly_toolkit.analysis.cfg import build_function_cfg
 from nds_disassembly_toolkit.analysis.model import (
+    BasicBlock,
+    CFGEdge,
     CFGEdgeKind,
     Component,
     ControlFlowKind,
     FunctionCandidate,
+    FunctionControlFlowGraph,
     InstructionSet,
+    UnresolvedTransfer,
 )
 
 BASE = 0x02000000
@@ -216,3 +221,12 @@ def test_indirect_call_is_unresolved_but_keeps_fallthrough() -> None:
     ]
     assert len(cfg.unresolved_transfers) == 1
     assert cfg.unresolved_transfers[0].control_flow is ControlFlowKind.CALL
+
+
+def test_cfg_api_is_exported_from_analysis_package() -> None:
+    assert analysis.build_function_cfg is build_function_cfg
+    assert analysis.BasicBlock is BasicBlock
+    assert analysis.CFGEdge is CFGEdge
+    assert analysis.CFGEdgeKind is CFGEdgeKind
+    assert analysis.FunctionControlFlowGraph is FunctionControlFlowGraph
+    assert analysis.UnresolvedTransfer is UnresolvedTransfer
