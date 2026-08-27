@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 
@@ -61,3 +62,33 @@ class SymbolCandidate:
     name: str
     confidence: str
     evidence: str
+
+
+class InstructionSet(StrEnum):
+    ARM = "arm"
+    THUMB = "thumb"
+
+    @property
+    def alignment(self) -> int:
+        return 4 if self is InstructionSet.ARM else 2
+
+
+class ControlFlowKind(StrEnum):
+    ORDINARY = "ordinary"
+    CALL = "call"
+    BRANCH = "branch"
+    RETURN = "return"
+
+
+@dataclass(frozen=True)
+class DecodedInstruction:
+    address: int
+    size: int
+    data: bytes
+    mnemonic: str
+    operands: str
+    instruction_set: InstructionSet
+    control_flow: ControlFlowKind
+    direct_target: int | None = None
+    target_instruction_set: InstructionSet | None = None
+    conditional: bool = False
