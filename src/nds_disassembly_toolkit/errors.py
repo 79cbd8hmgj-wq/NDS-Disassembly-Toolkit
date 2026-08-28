@@ -24,3 +24,7 @@ class WorkspaceError(NdsToolkitError):
 
 class DisassemblyError(NdsToolkitError):
     """Raised when executable/disassembly operations cannot be completed safely."""
+
+
+class AnalysisProjectError(NdsToolkitError):
+    """Raised when a persistent analysis project cannot be used safely."""

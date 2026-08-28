@@ -96,6 +96,18 @@ Phase 7E2 adds no new third-party dependency. Capstone remains confined to the d
 
 The Phase 7E2 implementation deliberately does not adopt angr's abstract-state or calling-convention implementation. It uses the toolkit's existing deterministic CFG/worklist, finite exact-value lattice, decoder-proven register effects, and immutable flow records. `analysis/stack.py` derives stack-frame/slot summaries only from `FunctionDataFlow` and does not decode bytes or construct a second control-flow graph.
 
+### Phase 7F persistence boundary
+
+Phase 7F persists the toolkit-owned Phase 7A through 7E analysis models using Python's standard-library `sqlite3` module. It adds no runtime dependency and does not import, link, vendor, or copy angr's persistence implementation. angr remains architecture/reference material only.
+
+The `.ndsre` schema stores normalized toolkit records for component fingerprints, functions, CFGs, typed instruction semantics, strings, generated symbols, xrefs, register/data-flow state, stack/argument/return summaries, warnings, and user location annotations. It does **not** embed ROM images, melonDS payloads, extracted executable component bytes, or commercial game assets. Component bytes are used only to compute the SHA-256 fingerprint supplied to persistence.
+
+Capstone remains confined to the decoder boundary established in Phase 7A. Phase 7F serializes only toolkit-owned typed instruction models and reconstructs those models without Capstone objects, Capstone enum types, or reparsing the human-readable operand string.
+
+melonDS remains a GPL reference/external-integration boundary. Phase 7F neither embeds melonDS data structures nor copies/link its project/debugger implementation. Any future dynamic-analysis bridge should preserve the process/interface separation already recorded above.
+
+SQLite schema design, canonical JSON codecs, transactional replacement, component freshness, deterministic queries, and annotation persistence are independently implemented toolkit logic. No third-party persistence code was incorporated.
+
 melonDS is GPL-licensed and therefore remains on the same strict reference boundary as the earlier GPL Nintendo DS tools. Future dynamic-analysis work should prefer process/debugger integration or documented interfaces rather than incorporating melonDS implementation source into this MIT repository.
 
 ## Repository audit observations
@@ -108,7 +120,7 @@ During Phase 6 consolidation:
 - historical design documents explicitly state that the supplied upstream archives were reference material only and that GPL/upstream implementation source was not vendored or copied;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems rather than transferring game-specific material into the toolkit.
 
-Phase 7A deliberately adds Capstone only as a package dependency. Phases 7B through 7E2 add toolkit-owned CFG, xref/index/call-graph, symbol-recovery, typed-semantic, register-data-flow, stack-frame, argument-evidence, return-evidence, and function-summary models and logic; angr and melonDS remain non-vendored reference material.
+Phase 7A deliberately adds Capstone only as a package dependency. Phases 7B through 7E2 add toolkit-owned CFG, xref/index/call-graph, symbol-recovery, typed-semantic, register-data-flow, stack-frame, argument-evidence, return-evidence, and function-summary models and logic; angr and melonDS remain non-vendored reference material. Phase 7F adds only toolkit-owned SQLite persistence/query logic over those models and no new third-party dependency.
 
 Text search and manual comparison are useful audit evidence but cannot mathematically prove independent authorship. Future contributors should preserve the boundary above and document any deliberate third-party code incorporation before merging it.
 
