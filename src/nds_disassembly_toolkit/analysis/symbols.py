@@ -57,12 +57,11 @@ def _merge_symbol(
     *,
     explicit_name: str | None = None,
 ) -> Symbol:
-    if existing is None:
-        selected = incoming
-    elif _KIND_RANK[incoming.kind] > _KIND_RANK[existing.kind]:
-        selected = incoming
-    else:
-        selected = existing
+    selected = (
+        incoming
+        if existing is None or _KIND_RANK[incoming.kind] > _KIND_RANK[existing.kind]
+        else existing
+    )
 
     confidence = incoming.confidence
     evidence = set(incoming.evidence)
