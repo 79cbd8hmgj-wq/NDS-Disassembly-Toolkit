@@ -30,7 +30,9 @@ def test_missing_project_uses_toolkit_error_mapping(
     missing = tmp_path / "missing.ndsre"
 
     assert main(["project", "info", str(missing)]) == 4
-    assert str(missing) in capsys.readouterr().err
+    assert capsys.readouterr().err == (
+        "analysis project manifest is missing or malformed\n"
+    )
 
 
 def test_project_output_oserror_uses_filesystem_error_mapping(
@@ -64,5 +66,5 @@ def test_existing_analyze_parser_contract_is_unchanged(tmp_path: Path) -> None:
     )
 
     assert args.command == "analyze"
-    assert args.component == [("test_component", binary, 0x02000000)]
+    assert args.component == [["test_component", str(binary), "0x02000000"]]
     assert args.keyword == ["engine"]
