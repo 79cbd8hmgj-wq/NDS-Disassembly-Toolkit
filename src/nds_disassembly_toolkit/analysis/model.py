@@ -424,3 +424,108 @@ class SymbolTable:
 
     def for_component(self, component: str) -> tuple[Symbol, ...]:
         return tuple(symbol for symbol in self.symbols if symbol.component == component)
+
+
+class AbstractValueKind(StrEnum):
+    UNKNOWN = "unknown"
+    CONSTANT = "constant"
+    ADDRESS = "address"
+
+
+@dataclass(frozen=True)
+class AbstractValue:
+    kind: AbstractValueKind
+    value: int | None = None
+    component: str | None = None
+    provenance: tuple[int, ...] = field(default=(), compare=False)
+
+    def __post_init__(self) -> None:
+        if any(address < 0 for address in self.provenance):
+            raise ValueError("abstract-value provenance addresses must be non-negative")
+        object.__setattr__(self, "provenance", tuple(sorted(set(self.provenance))))
+        if self.kind is AbstractValueKind.UNKNOWN:
+            if self.value is not None or self.component is not None:
+                raise ValueError("unknown abstract value cannot carry value or component")
+            return
+        if self.value is None or not 0 <= self.value <= 0xFFFFFFFF:
+            raise ValueError("known abstract value must carry an unsigned 32-bit value")
+        if self.kind is AbstractValueKind.CONSTANT and self.component is not None:
+            raise ValueError("constant abstract value cannot carry a component")
+        if self.component == "":
+            raise ValueError("abstract-value component cannot be empty")
+
+
+@dataclass(frozen=True)
+class RegisterState:
+    values: tuple[tuple[Register, AbstractValue], ...] = ()
+
+    def __post_init__(self) -> None:
+        normalized: dict[Register, AbstractValue] = {}
+        for register, value in self.values:
+            if register in normalized:
+                raise ValueError(f"duplicate register state for {register.value}")
+            if value.kind is not AbstractValueKind.UNKNOWN:
+                normalized[register] = value
+        object.__setattr__(
+            self,
+            "values",
+            tuple(
+                sorted(
+                    normalized.items(),
+                    key=lambda item: int(item[0].value[1:]),
+                )
+            ),
+        )
+
+    def value(self, register: Register) -> AbstractValue:
+        for candidate, value in self.values:
+            if candidate is register:
+                return value
+        return AbstractValue(AbstractValueKind.UNKNOWN)
+
+    def with_value(self, register: Register, value: AbstractValue) -> RegisterState:
+        updated = dict(self.values)
+        if value.kind is AbstractValueKind.UNKNOWN:
+            updated.pop(register, None)
+        else:
+            updated[register] = value
+        return RegisterState(tuple(updated.items()))
+
+
+@dataclass(frozen=True)
+class InstructionFlowState:
+    instruction: DecodedInstruction
+    before: RegisterState
+    after: RegisterState
+
+    @property
+    def address(self) -> int:
+        return self.instruction.address
+
+
+@dataclass(frozen=True)
+class BlockFlowState:
+    address: int
+    instruction_set: InstructionSet
+    entry: RegisterState
+    exit: RegisterState
+
+
+@dataclass(frozen=True)
+class FunctionDataFlow:
+    function: FunctionCandidate
+    blocks: tuple[BlockFlowState, ...]
+    instructions: tuple[InstructionFlowState, ...]
+    warnings: tuple[str, ...] = ()
+
+    def at_instruction(self, address: int) -> InstructionFlowState | None:
+        return next(
+            (state for state in self.instructions if state.address == address),
+            None,
+        )
+
+    def for_block(self, address: int) -> BlockFlowState | None:
+        return next(
+            (state for state in self.blocks if state.address == address),
+            None,
+        )
