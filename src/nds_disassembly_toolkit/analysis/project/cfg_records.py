@@ -23,6 +23,7 @@ from nds_disassembly_toolkit.analysis.model import (
     ShiftKind,
     UnresolvedTransfer,
 )
+from nds_disassembly_toolkit.analysis.project.model import ComponentAnalysisBundle
 from nds_disassembly_toolkit.errors import AnalysisProjectError
 
 
@@ -90,7 +91,6 @@ def _load_operand(value: object) -> InstructionOperand:
     shift_value = value["shift"]
     if not isinstance(shift_value, dict):
         raise ValueError("operand shift is not an object")
-    register_value = value["register"]
     registers_value = value["registers"]
     if not isinstance(registers_value, list):
         raise ValueError("operand register list is invalid")
@@ -99,7 +99,7 @@ def _load_operand(value: object) -> InstructionOperand:
     return InstructionOperand(
         kind=OperandKind(str(value["kind"])),
         access=OperandAccess(int(value["access"])),
-        register=_optional_register(register_value),
+        register=_optional_register(value["register"]),
         registers=tuple(Register(str(register)) for register in registers_value),
         immediate=None if immediate_value is None else int(immediate_value),
         memory=memory,
@@ -136,8 +136,41 @@ def load_semantics(value: str) -> InstructionSemantics:
         raise AnalysisProjectError("persisted instruction semantics are invalid") from exc
 
 
+def validate_cfg_bundle(bundle: ComponentAnalysisBundle) -> None:
+    functions = set(bundle.functions)
+    for cfg in bundle.cfgs:
+        if cfg.function not in functions:
+            raise AnalysisProjectError(
+                "bundle CFG function is not present in bundle functions"
+            )
+        for block in cfg.blocks:
+            if block.component != bundle.component.name:
+                raise AnalysisProjectError("bundle CFG block component is inconsistent")
+            try:
+                expected_offset = bundle.component.offset_for_address(block.address)
+            except ValueError as exc:
+                raise AnalysisProjectError("bundle CFG block address is outside component") from exc
+            if block.offset != expected_offset:
+                raise AnalysisProjectError("bundle CFG block offset is inconsistent")
+
+
 def delete_cfgs(connection: sqlite3.Connection, component_id_value: int) -> None:
-    connection.execute("DELETE FROM cfgs WHERE component_id = ?", (component_id_value,))
+    connection.execute(
+        "DELETE FROM basic_blocks WHERE component_id = ?",
+        (component_id_value,),
+    )
+    connection.execute(
+        "DELETE FROM cfg_edges WHERE component_id = ?",
+        (component_id_value,),
+    )
+    connection.execute(
+        "DELETE FROM unresolved_transfers WHERE component_id = ?",
+        (component_id_value,),
+    )
+    connection.execute(
+        "DELETE FROM decode_failures WHERE component_id = ?",
+        (component_id_value,),
+    )
 
 
 def insert_cfgs(
@@ -151,46 +184,40 @@ def insert_cfgs(
             cfg.function.address,
             cfg.function.instruction_set.value,
         )
-        connection.execute(
-            """
-            INSERT INTO cfgs(component_id, function_address, instruction_set)
-            VALUES(?, ?, ?)
-            """,
-            key,
-        )
         for block_ordinal, block in enumerate(cfg.blocks):
-            cursor = connection.execute(
+            connection.execute(
                 """
                 INSERT INTO basic_blocks(
                     component_id,
                     function_address,
                     function_instruction_set,
-                    ordinal,
                     address,
                     offset,
-                    instruction_set
+                    instruction_set,
+                    ordinal
                 ) VALUES(?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     *key,
-                    block_ordinal,
                     block.address,
                     block.offset,
                     block.instruction_set.value,
+                    block_ordinal,
                 ),
             )
-            block_id = cursor.lastrowid
-            if block_id is None:
-                raise AnalysisProjectError("cannot identify stored CFG basic block")
             for instruction_ordinal, instruction in enumerate(block.instructions):
                 connection.execute(
                     """
                     INSERT INTO instructions(
-                        block_id,
-                        ordinal,
+                        component_id,
+                        function_address,
+                        function_instruction_set,
+                        block_address,
+                        block_instruction_set,
                         address,
+                        ordinal,
                         size,
-                        data,
+                        data_hex,
                         mnemonic,
                         operands,
                         instruction_set,
@@ -199,14 +226,16 @@ def insert_cfgs(
                         target_instruction_set,
                         conditional,
                         semantics_json
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        block_id,
-                        instruction_ordinal,
+                        *key,
+                        block.address,
+                        block.instruction_set.value,
                         instruction.address,
+                        instruction_ordinal,
                         instruction.size,
-                        instruction.data,
+                        instruction.data.hex(),
                         instruction.mnemonic,
                         instruction.operands,
                         instruction.instruction_set.value,
@@ -221,24 +250,22 @@ def insert_cfgs(
                         dump_semantics(instruction.semantics),
                     ),
                 )
-        for ordinal, edge in enumerate(cfg.edges):
+        for edge in cfg.edges:
             connection.execute(
                 """
                 INSERT INTO cfg_edges(
                     component_id,
                     function_address,
                     function_instruction_set,
-                    ordinal,
                     source_address,
                     source_instruction_address,
                     target_address,
                     target_instruction_set,
                     kind
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     *key,
-                    ordinal,
                     edge.source_address,
                     edge.source_instruction_address,
                     edge.target_address,
@@ -246,24 +273,22 @@ def insert_cfgs(
                     edge.kind.value,
                 ),
             )
-        for ordinal, transfer in enumerate(cfg.unresolved_transfers):
+        for transfer in cfg.unresolved_transfers:
             connection.execute(
                 """
                 INSERT INTO unresolved_transfers(
                     component_id,
                     function_address,
                     function_instruction_set,
-                    ordinal,
                     source_address,
                     instruction_set,
                     control_flow,
                     mnemonic,
                     operands
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     *key,
-                    ordinal,
                     transfer.source_address,
                     transfer.instruction_set.value,
                     transfer.control_flow.value,
@@ -271,18 +296,17 @@ def insert_cfgs(
                     transfer.operands,
                 ),
             )
-        for ordinal, address in enumerate(cfg.decode_failures):
+        for address in cfg.decode_failures:
             connection.execute(
                 """
-                INSERT INTO cfg_decode_failures(
+                INSERT INTO decode_failures(
                     component_id,
                     function_address,
                     function_instruction_set,
-                    ordinal,
                     address
-                ) VALUES(?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?)
                 """,
-                (*key, ordinal, address),
+                (*key, address),
             )
 
 
@@ -297,7 +321,7 @@ def _instruction_from_row(row: sqlite3.Row) -> DecodedInstruction:
         return DecodedInstruction(
             address=int(row["address"]),
             size=int(row["size"]),
-            data=bytes(row["data"]),
+            data=bytes.fromhex(str(row["data_hex"])),
             mnemonic=str(row["mnemonic"]),
             operands=str(row["operands"]),
             instruction_set=InstructionSet(str(row["instruction_set"])),
@@ -324,23 +348,9 @@ def cfg_from_database(
         function.address,
         function.instruction_set.value,
     )
-    cfg_row = connection.execute(
-        """
-        SELECT 1
-        FROM cfgs
-        JOIN components ON components.id = cfgs.component_id
-        WHERE components.name = ?
-          AND cfgs.function_address = ?
-          AND cfgs.instruction_set = ?
-        """,
-        key,
-    ).fetchone()
-    if cfg_row is None:
-        return None
-
     block_rows = connection.execute(
         """
-        SELECT basic_blocks.id, basic_blocks.address, basic_blocks.offset,
+        SELECT basic_blocks.address, basic_blocks.offset,
                basic_blocks.instruction_set
         FROM basic_blocks
         JOIN components ON components.id = basic_blocks.component_id
@@ -351,25 +361,37 @@ def cfg_from_database(
         """,
         key,
     ).fetchall()
+    if not block_rows:
+        return None
+
     blocks: list[BasicBlock] = []
     for block_row in block_rows:
+        block_address = int(block_row["address"])
+        block_instruction_set = str(block_row["instruction_set"])
         instruction_rows = connection.execute(
             """
-            SELECT address, size, data, mnemonic, operands, instruction_set,
-                   control_flow, direct_target, target_instruction_set,
-                   conditional, semantics_json
+            SELECT instructions.address, instructions.size, instructions.data_hex,
+                   instructions.mnemonic, instructions.operands,
+                   instructions.instruction_set, instructions.control_flow,
+                   instructions.direct_target, instructions.target_instruction_set,
+                   instructions.conditional, instructions.semantics_json
             FROM instructions
-            WHERE block_id = ?
-            ORDER BY ordinal
+            JOIN components ON components.id = instructions.component_id
+            WHERE components.name = ?
+              AND instructions.function_address = ?
+              AND instructions.function_instruction_set = ?
+              AND instructions.block_address = ?
+              AND instructions.block_instruction_set = ?
+            ORDER BY instructions.ordinal
             """,
-            (int(block_row["id"]),),
+            (*key, block_address, block_instruction_set),
         ).fetchall()
         try:
             block = BasicBlock(
                 component=function.component,
-                address=int(block_row["address"]),
+                address=block_address,
                 offset=int(block_row["offset"]),
-                instruction_set=InstructionSet(str(block_row["instruction_set"])),
+                instruction_set=InstructionSet(block_instruction_set),
                 instructions=tuple(
                     _instruction_from_row(row) for row in instruction_rows
                 ),
@@ -387,7 +409,8 @@ def cfg_from_database(
         WHERE components.name = ?
           AND cfg_edges.function_address = ?
           AND cfg_edges.function_instruction_set = ?
-        ORDER BY cfg_edges.ordinal
+        ORDER BY source_address, source_instruction_address, target_address,
+                 target_instruction_set, kind
         """,
         key,
     ).fetchall()
@@ -399,19 +422,19 @@ def cfg_from_database(
         WHERE components.name = ?
           AND unresolved_transfers.function_address = ?
           AND unresolved_transfers.function_instruction_set = ?
-        ORDER BY unresolved_transfers.ordinal
+        ORDER BY source_address, instruction_set, control_flow, mnemonic, operands
         """,
         key,
     ).fetchall()
     failure_rows = connection.execute(
         """
         SELECT address
-        FROM cfg_decode_failures
-        JOIN components ON components.id = cfg_decode_failures.component_id
+        FROM decode_failures
+        JOIN components ON components.id = decode_failures.component_id
         WHERE components.name = ?
-          AND cfg_decode_failures.function_address = ?
-          AND cfg_decode_failures.function_instruction_set = ?
-        ORDER BY cfg_decode_failures.ordinal
+          AND decode_failures.function_address = ?
+          AND decode_failures.function_instruction_set = ?
+        ORDER BY address
         """,
         key,
     ).fetchall()
