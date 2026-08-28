@@ -150,18 +150,18 @@ def _binary_result(
     if left.value is None or right.value is None:
         return _UNKNOWN
     provenance = _provenance(left, right, instruction_address=instruction.address)
-    operation = (lambda a, b: a - b) if subtract else (lambda a, b: a + b)
+    result_value = left.value - right.value if subtract else left.value + right.value
     if (
         left.kind is AbstractValueKind.CONSTANT
         and right.kind is AbstractValueKind.CONSTANT
     ):
-        return _constant(operation(left.value, right.value), provenance=provenance)
+        return _constant(result_value, provenance=provenance)
     if (
         left.kind is AbstractValueKind.ADDRESS
         and right.kind is AbstractValueKind.CONSTANT
     ):
         return _address(
-            operation(left.value, right.value),
+            result_value,
             component=left.component,
             provenance=provenance,
         )
@@ -171,7 +171,7 @@ def _binary_result(
         and right.kind is AbstractValueKind.ADDRESS
     ):
         return _address(
-            left.value + right.value,
+            result_value,
             component=right.component,
             provenance=provenance,
         )
