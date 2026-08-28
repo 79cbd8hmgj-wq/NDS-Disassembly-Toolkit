@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from nds_disassembly_toolkit.analysis.model import (
     AbstractValue,
     AbstractValueKind,
+    ArgumentEvidence,
+    ArgumentLocationKind,
     BasicBlock,
     BlockFlowState,
     CFGEdgeKind,
@@ -16,15 +18,19 @@ from nds_disassembly_toolkit.analysis.model import (
     DecodedInstruction,
     FunctionControlFlowGraph,
     FunctionDataFlow,
+    FunctionSummary,
     InstructionFlowState,
     InstructionOperand,
     InstructionSet,
     OperandKind,
     Register,
     RegisterState,
+    ReturnEvidence,
     ShiftKind,
+    StackSlotKind,
     StackState,
 )
+from nds_disassembly_toolkit.analysis.stack import analyze_stack
 
 _U32_MASK = 0xFFFFFFFF
 _UNKNOWN = AbstractValue(AbstractValueKind.UNKNOWN)
@@ -36,6 +42,13 @@ _CALLER_CLOBBERED = (
     Register.R12,
     Register.LR,
 )
+_ENTRY_ARGUMENT_ORDER = (
+    Register.R0,
+    Register.R1,
+    Register.R2,
+    Register.R3,
+)
+_ENTRY_ARGUMENTS = frozenset(_ENTRY_ARGUMENT_ORDER)
 _BlockKey = tuple[int, InstructionSet]
 
 
@@ -43,6 +56,7 @@ _BlockKey = tuple[int, InstructionSet]
 class _FlowState:
     registers: RegisterState
     stack: StackState
+    entry_arguments_live: frozenset[Register]
 
 
 def _u32(value: int) -> int:
@@ -128,10 +142,14 @@ def _same_flow_state(
     *,
     include_provenance: bool,
 ) -> bool:
-    return left.stack == right.stack and _same_state(
-        left.registers,
-        right.registers,
-        include_provenance=include_provenance,
+    return (
+        left.stack == right.stack
+        and left.entry_arguments_live == right.entry_arguments_live
+        and _same_state(
+            left.registers,
+            right.registers,
+            include_provenance=include_provenance,
+        )
     )
 
 
@@ -197,19 +215,29 @@ def _join_stack_states(states: Sequence[StackState]) -> StackState:
     return StackState(offset=offset, frame_pointers=tuple(common.items()))
 
 
+def _join_live_arguments(states: Sequence[_FlowState]) -> frozenset[Register]:
+    if not states:
+        return frozenset()
+    live = set(states[0].entry_arguments_live)
+    for state in states[1:]:
+        live.intersection_update(state.entry_arguments_live)
+    return frozenset(live)
+
+
 def _join_flow_states(
     states: Sequence[_FlowState],
     *,
     keep_provenance: bool,
 ) -> _FlowState:
     if not states:
-        return _FlowState(RegisterState(), StackState(offset=None))
+        return _FlowState(RegisterState(), StackState(offset=None), frozenset())
     return _FlowState(
         registers=_join_states(
             tuple(state.registers for state in states),
             keep_provenance=keep_provenance,
         ),
         stack=_join_stack_states(tuple(state.stack for state in states)),
+        entry_arguments_live=_join_live_arguments(states),
     )
 
 
@@ -595,6 +623,17 @@ def _transfer_stack(
     return _join_stack_states((state, executed))
 
 
+def _transfer_argument_liveness(
+    live: frozenset[Register],
+    instruction: DecodedInstruction,
+) -> frozenset[Register]:
+    remaining = set(live)
+    remaining.difference_update(instruction.semantics.registers_written)
+    if instruction.control_flow is ControlFlowKind.CALL:
+        remaining.difference_update(_ENTRY_ARGUMENTS)
+    return frozenset(remaining)
+
+
 def _transfer_flow(
     state: _FlowState,
     instruction: DecodedInstruction,
@@ -612,6 +651,10 @@ def _transfer_flow(
             record_provenance=record_provenance,
         ),
         stack=_transfer_stack(state.stack, instruction),
+        entry_arguments_live=_transfer_argument_liveness(
+            state.entry_arguments_live,
+            instruction,
+        ),
     )
 
 
@@ -700,6 +743,17 @@ def _flow_graph(
     return blocks, predecessors, successors
 
 
+def _argument_reads(
+    live: frozenset[Register],
+    instruction: DecodedInstruction,
+) -> tuple[tuple[Register, int], ...]:
+    return tuple(
+        (register, instruction.address)
+        for register in _ENTRY_ARGUMENT_ORDER
+        if register in live and register in instruction.semantics.registers_read
+    )
+
+
 def _run_block(
     block: BasicBlock,
     entry: _FlowState,
@@ -707,11 +761,17 @@ def _run_block(
     warnings: set[str],
     *,
     record_provenance: bool,
-) -> tuple[_FlowState, tuple[InstructionFlowState, ...]]:
+) -> tuple[
+    _FlowState,
+    tuple[InstructionFlowState, ...],
+    tuple[tuple[Register, int], ...],
+]:
     current = entry
     states: list[InstructionFlowState] = []
+    argument_uses: list[tuple[Register, int]] = []
     for instruction in block.instructions:
         before = current
+        argument_uses.extend(_argument_reads(before.entry_arguments_live, instruction))
         after = _transfer_flow(
             before,
             instruction,
@@ -729,7 +789,7 @@ def _run_block(
             )
         )
         current = after
-    return current, tuple(states)
+    return current, tuple(states), tuple(argument_uses)
 
 
 def _solve(
@@ -752,7 +812,11 @@ def _solve(
     if entry_key not in blocks:
         return entries, exits, warnings
 
-    entries[entry_key] = _FlowState(RegisterState(), StackState(offset=0))
+    entries[entry_key] = _FlowState(
+        RegisterState(),
+        StackState(offset=0),
+        _ENTRY_ARGUMENTS,
+    )
     queue: deque[_BlockKey] = deque((entry_key,))
     queued = {entry_key}
     while queue:
@@ -761,7 +825,7 @@ def _solve(
         entry = entries[key]
         if entry is None:
             continue
-        new_exit, _ = _run_block(
+        new_exit, _, _ = _run_block(
             blocks[key],
             entry,
             component,
@@ -823,13 +887,78 @@ def _verify_semantic_convergence(
             raise RuntimeError("provenance pass changed data-flow semantics")
 
 
+def _build_summary(
+    flow: FunctionDataFlow,
+    argument_uses: dict[Register, set[int]],
+) -> FunctionSummary:
+    stack = analyze_stack(flow)
+    arguments: list[ArgumentEvidence] = []
+    for index, register in enumerate(_ENTRY_ARGUMENT_ORDER):
+        uses = tuple(sorted(argument_uses.get(register, set())))
+        if uses:
+            arguments.append(
+                ArgumentEvidence(
+                    index=index,
+                    kind=ArgumentLocationKind.REGISTER,
+                    register=register,
+                    stack_offset=None,
+                    uses=uses,
+                )
+            )
+
+    for slot in stack.slots:
+        if slot.kind is not StackSlotKind.INCOMING_ARGUMENT or not slot.accesses:
+            continue
+        arguments.append(
+            ArgumentEvidence(
+                index=None,
+                kind=ArgumentLocationKind.STACK,
+                register=None,
+                stack_offset=slot.offset,
+                uses=tuple(access.instruction_address for access in slot.accesses),
+            )
+        )
+
+    arguments.sort(
+        key=lambda item: (
+            0 if item.kind is ArgumentLocationKind.REGISTER else 1,
+            item.index if item.index is not None else 1 << 30,
+            item.stack_offset if item.stack_offset is not None else 0,
+        )
+    )
+    returns = tuple(
+        ReturnEvidence(
+            return_address=state.address,
+            value=state.before.value(Register.R0),
+        )
+        for state in flow.instructions
+        if state.instruction.control_flow is ControlFlowKind.RETURN
+    )
+    return FunctionSummary(
+        arguments=tuple(arguments),
+        returns=returns,
+        stack_frame=stack.frame,
+        stack_slots=stack.slots,
+    )
+
+
+def _summarize(
+    flow: FunctionDataFlow,
+    argument_uses: dict[Register, set[int]],
+) -> FunctionDataFlow:
+    return replace(flow, summary=_build_summary(flow, argument_uses))
+
+
 def analyze_data_flow(
     cfg: FunctionControlFlowGraph,
     component: Component,
 ) -> FunctionDataFlow:
     _validate_cfg(cfg, component)
     if not cfg.blocks:
-        return FunctionDataFlow(function=cfg.function, blocks=(), instructions=())
+        return _summarize(
+            FunctionDataFlow(function=cfg.function, blocks=(), instructions=()),
+            {},
+        )
 
     blocks, predecessors, successors = _flow_graph(cfg)
     semantic_entries, semantic_exits, semantic_warnings = _solve(
@@ -854,6 +983,9 @@ def analyze_data_flow(
 
     block_states: list[BlockFlowState] = []
     instruction_states: list[InstructionFlowState] = []
+    argument_uses: dict[Register, set[int]] = {
+        register: set() for register in _ENTRY_ARGUMENT_ORDER
+    }
     ordered_keys = sorted(blocks, key=lambda key: (key[0], key[1].value))
     for key in ordered_keys:
         entry = entries[key]
@@ -861,7 +993,7 @@ def analyze_data_flow(
         if entry is None or exit_state is None:
             continue
         block = blocks[key]
-        final_exit, states = _run_block(
+        final_exit, states, uses = _run_block(
             block,
             entry,
             component,
@@ -881,6 +1013,8 @@ def analyze_data_flow(
             )
         )
         instruction_states.extend(states)
+        for register, address in uses:
+            argument_uses[register].add(address)
 
     instruction_states.sort(
         key=lambda state: (
@@ -888,9 +1022,10 @@ def analyze_data_flow(
             state.instruction.instruction_set.value,
         )
     )
-    return FunctionDataFlow(
+    flow = FunctionDataFlow(
         function=cfg.function,
         blocks=tuple(block_states),
         instructions=tuple(instruction_states),
         warnings=tuple(sorted(warnings)),
     )
+    return _summarize(flow, argument_uses)
