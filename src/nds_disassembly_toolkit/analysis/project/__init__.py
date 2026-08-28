@@ -5,10 +5,12 @@ from nds_disassembly_toolkit.analysis.project.model import (
     ComponentAnalysisIdentity,
     LocationAnnotation,
 )
+from nds_disassembly_toolkit.analysis.project.project import AnalysisProject
 from nds_disassembly_toolkit.errors import AnalysisProjectError
 
 __all__ = [
     "AnalysisFreshness",
+    "AnalysisProject",
     "AnalysisProjectError",
     "AnalysisProjectMetadata",
     "ComponentAnalysisBundle",
