@@ -105,14 +105,14 @@ def analyze_stack(flow: FunctionDataFlow) -> StackAnalysis:
         if register_list is not None and before is not None and before.offset is not None:
             if mnemonic == "push":
                 first_offset = before.offset - 4 * len(register_list)
-                kind = StackAccessKind.STORE
+                access_kind = StackAccessKind.STORE
             elif mnemonic == "pop":
                 first_offset = before.offset
-                kind = StackAccessKind.LOAD
+                access_kind = StackAccessKind.LOAD
             else:
                 first_offset = 0
-                kind = None
-            if kind is not None:
+                access_kind = None
+            if access_kind is not None:
                 for index, _register in enumerate(register_list):
                     offset = first_offset + 4 * index
                     if mnemonic == "push":
@@ -120,7 +120,7 @@ def analyze_stack(flow: FunctionDataFlow) -> StackAnalysis:
                     accesses[offset].append(
                         StackAccess(
                             instruction_address=state.address,
-                            kind=kind,
+                            kind=access_kind,
                             width=4,
                         )
                     )
@@ -151,20 +151,20 @@ def analyze_stack(flow: FunctionDataFlow) -> StackAnalysis:
     slots: list[StackSlot] = []
     for offset in sorted(accesses):
         if offset in saved_offsets:
-            kind = StackSlotKind.SAVED_REGISTER
+            slot_kind = StackSlotKind.SAVED_REGISTER
         elif offset < 0:
-            kind = StackSlotKind.LOCAL
+            slot_kind = StackSlotKind.LOCAL
         elif offset >= 0:
-            kind = StackSlotKind.INCOMING_ARGUMENT
+            slot_kind = StackSlotKind.INCOMING_ARGUMENT
         else:
-            kind = StackSlotKind.UNKNOWN
+            slot_kind = StackSlotKind.UNKNOWN
         slot_accesses = tuple(
             sorted(
                 accesses[offset],
                 key=lambda access: (access.instruction_address, access.kind.value, access.width),
             )
         )
-        slots.append(StackSlot(offset=offset, kind=kind, accesses=slot_accesses))
+        slots.append(StackSlot(offset=offset, kind=slot_kind, accesses=slot_accesses))
 
     return StackAnalysis(
         frame=StackFrame(
