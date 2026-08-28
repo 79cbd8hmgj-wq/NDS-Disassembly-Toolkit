@@ -19,6 +19,7 @@ from nds_disassembly_toolkit.analysis.project.cfg_records import (
     cfg_from_database,
     delete_cfgs,
     insert_cfgs,
+    validate_cfg_bundle,
 )
 from nds_disassembly_toolkit.analysis.project.manifest import (
     load_manifest,
@@ -195,6 +196,7 @@ class AnalysisProject:
     def store_component_analysis(self, bundle: ComponentAnalysisBundle) -> None:
         connection = self._require_writable()
         identity = ComponentAnalysisIdentity.from_component(bundle.component)
+        validate_cfg_bundle(bundle)
         try:
             connection.execute(
                 """
