@@ -220,6 +220,37 @@ When `components` are supplied, validation is performed by component **name**, n
 
 Phase 7D does not infer structs, signatures, global data types, jump tables, indirect targets, or persistent user annotations. Those remain later analysis phases.
 
+## Phase 7E1 typed semantics and register data flow
+
+Phase 7E1 extends the decoder's toolkit-owned instruction records with typed ARM/Thumb semantics and runs deterministic intraprocedural abstract interpretation over the existing Phase 7B CFG. The data-flow engine never parses the human-readable operand string and never re-decodes instructions.
+
+```python
+from nds_disassembly_toolkit.analysis import analyze_data_flow, build_function_cfg
+
+function = result.functions[0]
+cfg = build_function_cfg(component, function)
+flow = analyze_data_flow(cfg, component)
+state = flow.at_instruction(0x02000020)
+```
+
+The exact-value lattice is deliberately small:
+
+- `UNKNOWN` means the current value cannot be proven exactly;
+- `CONSTANT` is an exact unsigned 32-bit numeric value with no invented pointer ownership;
+- `ADDRESS` is an exact address value, optionally tied to the component whose PC-relative construction proved that ownership.
+
+The solver currently propagates unshifted register moves, immediate values, and exact `add`/`sub` combinations. Unsupported instructions conservatively invalidate registers that the decoder reports as written. A numeric constant used as a memory base/index may be refined to an unowned `ADDRESS`, but arbitrary constants are never classified as pointers merely because they happen to fall inside a component's runtime range.
+
+ARM PC reads use `instruction_address + 8`; Thumb PC-relative memory accesses use aligned `(instruction_address + 4)`. Proven PC-derived addresses remain owned by the current component. This preserves overlay identity when two overlays use the same runtime address.
+
+Unsigned PC-relative `ldr`, `ldrh`, and `ldrb` literal-pool reads consume their typed access width and read only in-component bytes. Their loaded contents remain `CONSTANT` even when the numeric value resembles an address. Out-of-component literal reads produce a stable warning and leave the destination unknown rather than reading or guessing outside the supplied component. Signed literal forms remain conservative until they receive dedicated transfer rules and tests.
+
+At CFG joins, equal exact semantic values survive while conflicting values become unknown. Loops are solved to a deterministic fixed point using only existing local branch/fallthrough edges. Direct and indirect calls remain intraprocedural barriers: caller-saved `r0`-`r3`, `r12`, and `lr` become unknown while preserved registers retain proven values. Conditional instructions join the executed and skipped states so a conditional write cannot be treated as unconditional.
+
+Provenance records the instruction addresses that contributed to supported exact values. Semantic convergence is solved independently of provenance; a deterministic enrichment pass then adds bounded provenance without being allowed to change reachability or value semantics.
+
+Phase 7E1 remains intraprocedural and does not perform memory alias analysis, structure/type inference, whole-program symbolic execution, or stack/ABI recovery. Stack frames, arguments, and return summaries are the separate Phase 7E2 layer built on this same flow model.
+
 ## Ownership boundary
 
 The toolkit owns the mechanics above. A game project should own the interpretation layer: known strings, record schemas, confirmed addresses, symbol names, confidence rules, and runtime evidence. Those facts should not be promoted into the generic toolkit unless they are Nintendo DS format behavior rather than game behavior.

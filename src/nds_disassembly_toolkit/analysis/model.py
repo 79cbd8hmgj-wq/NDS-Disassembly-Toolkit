@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import dataclass, field
+from enum import IntFlag, StrEnum
 from pathlib import Path
 
 
@@ -80,6 +80,156 @@ class ControlFlowKind(StrEnum):
     RETURN = "return"
 
 
+class Register(StrEnum):
+    R0 = "r0"
+    R1 = "r1"
+    R2 = "r2"
+    R3 = "r3"
+    R4 = "r4"
+    R5 = "r5"
+    R6 = "r6"
+    R7 = "r7"
+    R8 = "r8"
+    R9 = "r9"
+    R10 = "r10"
+    R11 = "r11"
+    R12 = "r12"
+    R13 = "r13"
+    SP = "r13"
+    R14 = "r14"
+    LR = "r14"
+    R15 = "r15"
+    PC = "r15"
+
+    @classmethod
+    def from_name(cls, name: str) -> Register | None:
+        normalized = name.strip().lower()
+        normalized = {"sp": "r13", "lr": "r14", "pc": "r15"}.get(
+            normalized,
+            normalized,
+        )
+        try:
+            return cls(normalized)
+        except ValueError:
+            return None
+
+
+class ConditionCode(StrEnum):
+    INVALID = "invalid"
+    EQ = "eq"
+    NE = "ne"
+    HS = "hs"
+    CS = "hs"
+    LO = "lo"
+    CC = "lo"
+    MI = "mi"
+    PL = "pl"
+    VS = "vs"
+    VC = "vc"
+    HI = "hi"
+    LS = "ls"
+    GE = "ge"
+    LT = "lt"
+    GT = "gt"
+    LE = "le"
+    AL = "al"
+
+
+class OperandKind(StrEnum):
+    REGISTER = "register"
+    IMMEDIATE = "immediate"
+    MEMORY = "memory"
+    REGISTER_LIST = "register_list"
+
+
+class OperandAccess(IntFlag):
+    NONE = 0
+    READ = 1
+    WRITE = 2
+
+
+class ShiftKind(StrEnum):
+    NONE = "none"
+    LSL = "lsl"
+    LSR = "lsr"
+    ASR = "asr"
+    ROR = "ror"
+    RRX = "rrx"
+
+
+@dataclass(frozen=True)
+class OperandShift:
+    kind: ShiftKind = ShiftKind.NONE
+    value: int = 0
+
+
+@dataclass(frozen=True)
+class MemoryOperand:
+    base: Register | None
+    index: Register | None
+    scale: int
+    displacement: int
+    subtract_index: bool = False
+
+
+@dataclass(frozen=True)
+class InstructionOperand:
+    kind: OperandKind
+    access: OperandAccess
+    register: Register | None = None
+    registers: tuple[Register, ...] = ()
+    immediate: int | None = None
+    memory: MemoryOperand | None = None
+    shift: OperandShift = field(default_factory=OperandShift)
+    access_width: int | None = None
+
+    def __post_init__(self) -> None:
+        register_payload = self.register is not None
+        register_list_payload = bool(self.registers)
+        immediate_payload = self.immediate is not None
+        memory_payload = self.memory is not None
+
+        valid_payload = {
+            OperandKind.REGISTER: (
+                register_payload
+                and not register_list_payload
+                and not immediate_payload
+                and not memory_payload
+            ),
+            OperandKind.IMMEDIATE: (
+                immediate_payload
+                and not register_payload
+                and not register_list_payload
+                and not memory_payload
+            ),
+            OperandKind.MEMORY: (
+                memory_payload
+                and not register_payload
+                and not register_list_payload
+                and not immediate_payload
+            ),
+            OperandKind.REGISTER_LIST: (
+                register_list_payload
+                and not register_payload
+                and not immediate_payload
+                and not memory_payload
+            ),
+        }[self.kind]
+        if not valid_payload:
+            raise ValueError(f"operand payload does not match {self.kind.value} kind")
+        if self.access_width is not None and self.access_width <= 0:
+            raise ValueError("operand payload access width must be positive")
+
+
+@dataclass(frozen=True)
+class InstructionSemantics:
+    operands: tuple[InstructionOperand, ...] = ()
+    registers_read: tuple[Register, ...] = ()
+    registers_written: tuple[Register, ...] = ()
+    condition: ConditionCode = ConditionCode.AL
+    writeback: bool = False
+
+
 @dataclass(frozen=True)
 class DecodedInstruction:
     address: int
@@ -92,6 +242,7 @@ class DecodedInstruction:
     direct_target: int | None = None
     target_instruction_set: InstructionSet | None = None
     conditional: bool = False
+    semantics: InstructionSemantics = field(default_factory=InstructionSemantics)
 
 
 @dataclass(frozen=True)
@@ -273,3 +424,108 @@ class SymbolTable:
 
     def for_component(self, component: str) -> tuple[Symbol, ...]:
         return tuple(symbol for symbol in self.symbols if symbol.component == component)
+
+
+class AbstractValueKind(StrEnum):
+    UNKNOWN = "unknown"
+    CONSTANT = "constant"
+    ADDRESS = "address"
+
+
+@dataclass(frozen=True)
+class AbstractValue:
+    kind: AbstractValueKind
+    value: int | None = None
+    component: str | None = None
+    provenance: tuple[int, ...] = field(default=(), compare=False)
+
+    def __post_init__(self) -> None:
+        if any(address < 0 for address in self.provenance):
+            raise ValueError("abstract-value provenance addresses must be non-negative")
+        object.__setattr__(self, "provenance", tuple(sorted(set(self.provenance))))
+        if self.kind is AbstractValueKind.UNKNOWN:
+            if self.value is not None or self.component is not None:
+                raise ValueError("unknown abstract value cannot carry value or component")
+            return
+        if self.value is None or not 0 <= self.value <= 0xFFFFFFFF:
+            raise ValueError("known abstract value must carry an unsigned 32-bit value")
+        if self.kind is AbstractValueKind.CONSTANT and self.component is not None:
+            raise ValueError("constant abstract value cannot carry a component")
+        if self.component == "":
+            raise ValueError("abstract-value component cannot be empty")
+
+
+@dataclass(frozen=True)
+class RegisterState:
+    values: tuple[tuple[Register, AbstractValue], ...] = ()
+
+    def __post_init__(self) -> None:
+        normalized: dict[Register, AbstractValue] = {}
+        for register, value in self.values:
+            if register in normalized:
+                raise ValueError(f"duplicate register state for {register.value}")
+            if value.kind is not AbstractValueKind.UNKNOWN:
+                normalized[register] = value
+        object.__setattr__(
+            self,
+            "values",
+            tuple(
+                sorted(
+                    normalized.items(),
+                    key=lambda item: int(item[0].value[1:]),
+                )
+            ),
+        )
+
+    def value(self, register: Register) -> AbstractValue:
+        for candidate, value in self.values:
+            if candidate is register:
+                return value
+        return AbstractValue(AbstractValueKind.UNKNOWN)
+
+    def with_value(self, register: Register, value: AbstractValue) -> RegisterState:
+        updated = dict(self.values)
+        if value.kind is AbstractValueKind.UNKNOWN:
+            updated.pop(register, None)
+        else:
+            updated[register] = value
+        return RegisterState(tuple(updated.items()))
+
+
+@dataclass(frozen=True)
+class InstructionFlowState:
+    instruction: DecodedInstruction
+    before: RegisterState
+    after: RegisterState
+
+    @property
+    def address(self) -> int:
+        return self.instruction.address
+
+
+@dataclass(frozen=True)
+class BlockFlowState:
+    address: int
+    instruction_set: InstructionSet
+    entry: RegisterState
+    exit: RegisterState
+
+
+@dataclass(frozen=True)
+class FunctionDataFlow:
+    function: FunctionCandidate
+    blocks: tuple[BlockFlowState, ...]
+    instructions: tuple[InstructionFlowState, ...]
+    warnings: tuple[str, ...] = ()
+
+    def at_instruction(self, address: int) -> InstructionFlowState | None:
+        return next(
+            (state for state in self.instructions if state.address == address),
+            None,
+        )
+
+    def for_block(self, address: int) -> BlockFlowState | None:
+        return next(
+            (state for state in self.blocks if state.address == address),
+            None,
+        )

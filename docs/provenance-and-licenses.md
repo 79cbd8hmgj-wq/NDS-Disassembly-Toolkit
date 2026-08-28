@@ -1,6 +1,6 @@
 # Provenance and third-party reference audit
 
-Audit date: 2026-08-27
+Audit date: 2026-08-28
 
 This document records the provenance boundary for external Nintendo DS and reverse-engineering tools that informed the development of `NDS-Disassembly-Toolkit` and its predecessor work in `Bakugan-DS-`.
 
@@ -90,9 +90,9 @@ The toolkit does not contain the upstream scripts `asmdiff.sh`, `dump_fs.py`, `f
 
 Capstone is intentionally different from the earlier clean-room references: it is a permissively licensed runtime dependency used through its public Python API. `analysis/decoder.py` is toolkit-owned code that converts Capstone results into toolkit-owned immutable models, so Capstone objects do not become the public analysis data model.
 
-angr is being used to study mature approaches to function discovery, CFG recovery, data-flow analysis, and persistent analysis state. Phases 7A through 7D do not import angr or copy its analysis implementation. Phase 7B uses an independently implemented two-pass reachable-instruction/basic-block design, Phase 7C independently normalizes toolkit-owned CFG/pointer records into immutable xref, query-index, and call-graph models, and Phase 7D independently merges toolkit-owned function, CFG, string, and explicit-name records into a component-aware immutable symbol table.
+angr is being used to study mature approaches to function discovery, CFG recovery, data-flow analysis, and persistent analysis state. Phases 7A through 7E1 do not import angr or copy its analysis implementation. Phase 7B uses an independently implemented two-pass reachable-instruction/basic-block design, Phase 7C independently normalizes toolkit-owned CFG/pointer records into immutable xref, query-index, and call-graph models, Phase 7D independently merges toolkit-owned function, CFG, string, and explicit-name records into a component-aware immutable symbol table, and Phase 7E1 independently implements toolkit-owned typed instruction semantics plus an intraprocedural abstract-value fixed-point solver over those existing CFGs.
 
-Phase 7D adds no new third-party dependency. Its symbol identity, generated-name precedence, evidence merging, component validation, and overlapping-overlay handling are toolkit-owned logic built over the existing Phase 7 models.
+Phase 7E1 adds no new third-party dependency. Capstone remains confined to the decoder boundary; the typed operand/register models, `UNKNOWN`/`CONSTANT`/`ADDRESS` lattice, PC/literal transfer rules, condition/call handling, component-aware address ownership, deterministic joins, and semantic/provenance fixed-point passes are toolkit-owned logic. angr remains reference material only and is not imported or linked.
 
 melonDS is GPL-licensed and therefore remains on the same strict reference boundary as the earlier GPL Nintendo DS tools. Future dynamic-analysis work should prefer process/debugger integration or documented interfaces rather than incorporating melonDS implementation source into this MIT repository.
 
@@ -106,7 +106,7 @@ During Phase 6 consolidation:
 - historical design documents explicitly state that the supplied upstream archives were reference material only and that GPL/upstream implementation source was not vendored or copied;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems rather than transferring game-specific material into the toolkit.
 
-Phase 7A deliberately adds Capstone only as a package dependency. Phases 7B through 7D add only toolkit-owned CFG, xref/index/call-graph, and symbol-recovery models and logic; angr and melonDS remain non-vendored reference material.
+Phase 7A deliberately adds Capstone only as a package dependency. Phases 7B through 7E1 add toolkit-owned CFG, xref/index/call-graph, symbol-recovery, typed-semantic, and register-data-flow models and logic; angr and melonDS remain non-vendored reference material.
 
 Text search and manual comparison are useful audit evidence but cannot mathematically prove independent authorship. Future contributors should preserve the boundary above and document any deliberate third-party code incorporation before merging it.
 
