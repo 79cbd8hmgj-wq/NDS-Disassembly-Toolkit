@@ -51,7 +51,7 @@
 - Modify: `tests/unit/test_analysis_decoder.py`
 
 **Interfaces:**
-- Produces `Register(StrEnum)` with `R0` through `R15` and aliases `SP = R13`, `LR = R14`, `PC = R15`.
+- Produces `Register(StrEnum)` with string values `r0` through `r15` and aliases `SP = R13`, `LR = R14`, `PC = R15`.
 - Produces `ConditionCode(StrEnum)` with `INVALID`, `EQ`, `NE`, `HS`, alias `CS = HS`, `LO`, alias `CC = LO`, `MI`, `PL`, `VS`, `VC`, `HI`, `LS`, `GE`, `LT`, `GT`, `LE`, `AL`.
 - Produces `OperandKind(StrEnum)`: `REGISTER`, `IMMEDIATE`, `MEMORY`, `REGISTER_LIST`.
 - Produces `OperandAccess(IntFlag)`: `NONE = 0`, `READ = 1`, `WRITE = 2`.
@@ -63,8 +63,6 @@
 - Extends `DecodedInstruction` with `semantics: InstructionSemantics = field(default_factory=InstructionSemantics)` so Phase 7A-7D direct constructors remain source-compatible.
 
 - [ ] **Step 1: Write failing model/compatibility tests**
-
-Add these exact contract assertions to `test_analysis_decoder.py`:
 
 ```python
 from nds_disassembly_toolkit.analysis.model import (
@@ -97,36 +95,59 @@ def test_decoded_instruction_semantics_default_is_compatible() -> None:
 
 - [ ] **Step 2: Verify RED**
 
-Run:
-
 ```bash
 python -m pytest tests/unit/test_analysis_decoder.py tests/unit/test_analysis_cfg.py tests/unit/test_analysis_xrefs.py tests/unit/test_analysis_symbols.py -v
 ```
 
-Expected: the new semantic assertions fail because the types/field do not exist; existing direct-construction tests define the compatibility surface that must remain green after implementation.
+Expected: new assertions fail because semantic types/field do not exist; existing direct-construction tests define the compatibility surface.
 
 - [ ] **Step 3: Implement the immutable semantic models**
 
-Use `StrEnum`, `IntFlag`, `dataclass(frozen=True)`, and `dataclasses.field`. Implement:
+Use this shape in `model.py`:
 
 ```python
-@classmethod
-def from_name(cls, name: str) -> Register | None:
-    normalized = name.strip().lower()
-    aliases = {"sp": "r13", "lr": "r14", "pc": "r15"}
-    normalized = aliases.get(normalized, normalized)
-    if normalized.startswith("r") and normalized[1:].isdigit():
-        index = int(normalized[1:])
-        if 0 <= index <= 15:
-            return cls(f"r{index}")
-    return None
+from dataclasses import dataclass, field
+from enum import IntFlag, StrEnum
+
+
+class Register(StrEnum):
+    R0 = "r0"
+    R1 = "r1"
+    R2 = "r2"
+    R3 = "r3"
+    R4 = "r4"
+    R5 = "r5"
+    R6 = "r6"
+    R7 = "r7"
+    R8 = "r8"
+    R9 = "r9"
+    R10 = "r10"
+    R11 = "r11"
+    R12 = "r12"
+    R13 = "r13"
+    SP = "r13"
+    R14 = "r14"
+    LR = "r14"
+    R15 = "r15"
+    PC = "r15"
+
+    @classmethod
+    def from_name(cls, name: str) -> Register | None:
+        normalized = name.strip().lower()
+        normalized = {"sp": "r13", "lr": "r14", "pc": "r15"}.get(
+            normalized, normalized
+        )
+        try:
+            return cls(normalized)
+        except ValueError:
+            return None
 ```
 
-Unknown names such as CPSR/SPSR/vector registers return `None`; Phase 7E does not pretend they are general-purpose storage. Validate `InstructionOperand` shape in `__post_init__`: exactly the payload appropriate to its kind may be populated, register lists are nonempty/sorted/deduplicated, and `access_width` is either `None` or a positive integer.
+Add the remaining enums/dataclasses from the Interfaces block. In `InstructionOperand.__post_init__`, reject payloads inconsistent with `kind`; canonicalize register-list creation at callers rather than mutating the frozen object; require `access_width is None or access_width > 0`. Unknown non-GPR names are intentionally omitted.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run the same focused suite. Expected: PASS.
+Run the Step 2 suite. Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -142,15 +163,13 @@ git commit -m "feat: define typed instruction semantics"
 - Modify: `tests/unit/test_analysis_decoder.py`
 
 **Interfaces:**
-- Consumes Task 1 semantic records.
-- `decode_instruction(data: bytes, *, address: int, instruction_set: InstructionSet) -> DecodedInstruction | None` remains unchanged and now fills `semantics`.
-- Uses only Capstone public attributes available under the existing `capstone>=5,<7` range: `operands`, `reg_name`, `regs_access()`, ARM operand `type/reg/imm/mem/access/shift/subtracted`, ARM `cc`, and generic `writeback`.
-- For `push`/`pop`, normalize Capstone's ordered register operands into one `REGISTER_LIST` operand while preserving `registers_read`/`registers_written` from `regs_access()`.
-- Set `access_width` from instruction semantics, never operand text: word `ldr/str` = 4, `ldrh/strh` = 2, `ldrb/strb` = 1; signed byte/halfword loads may be represented but value propagation remains unsupported until explicitly implemented.
+- `decode_instruction(data: bytes, *, address: int, instruction_set: InstructionSet) -> DecodedInstruction | None` remains unchanged and fills `semantics`.
+- Uses only Capstone public attributes already permitted by `capstone>=5,<7`: `operands`, `reg_name`, `regs_access()`, ARM operand `type/reg/imm/mem/access/shift/subtracted`, ARM `cc`, and generic `writeback`.
+- For `push`/`pop`, normalize Capstone's ordered register members into one `REGISTER_LIST` operand.
+- Decoder-normalized memory direction is typed: loads mark the memory operand `READ`; stores mark it `WRITE`. This is derived from mnemonic/instruction semantics inside the decoder, never from `op_str`.
+- `access_width`: word `ldr/str` = 4, `ldrh/strh` = 2, `ldrb/strb` = 1; signed byte/halfword loads may be represented with width but value propagation is unsupported until Task 4 explicitly handles a form.
 
-- [ ] **Step 1: Write failing ARM and Thumb semantic tests**
-
-Add:
+- [ ] **Step 1: Write failing ARM/Thumb semantic tests**
 
 ```python
 def test_decode_arm_move_exposes_typed_register_effects() -> None:
@@ -170,7 +189,7 @@ def test_decode_arm_move_exposes_typed_register_effects() -> None:
     assert Register.R1 in decoded.semantics.registers_written
 
 
-def test_decode_thumb_literal_load_exposes_memory_width() -> None:
+def test_decode_thumb_literal_load_exposes_memory_direction_and_width() -> None:
     decoded = decode_instruction(
         struct.pack("<H", 0x4800),  # ldr r0, [pc, #0]
         address=0x02000000,
@@ -181,26 +200,41 @@ def test_decode_thumb_literal_load_exposes_memory_width() -> None:
     assert operand.memory is not None
     assert operand.memory.base is Register.PC
     assert operand.memory.displacement == 0
+    assert operand.access == OperandAccess.READ
     assert operand.access_width == 4
 ```
 
-Also assert: ARM `movne` maps to `ConditionCode.NE`; an ARM writeback load/store records `writeback=True`; ARM and Thumb push produce one `REGISTER_LIST` operand with canonical register aliases and stable ordering.
+Also test ARM `movne -> ConditionCode.NE`; writeback load/store -> `writeback=True`; ARM/Thumb push -> one canonical `REGISTER_LIST`; store memory operand -> `OperandAccess.WRITE`.
 
 - [ ] **Step 2: Verify RED**
 
-Run: `python -m pytest tests/unit/test_analysis_decoder.py -v`
+```bash
+python -m pytest tests/unit/test_analysis_decoder.py -v
+```
 
-Expected: FAIL because decoder results still contain default empty semantics.
+Expected: FAIL because decoded semantics are still empty.
 
 - [ ] **Step 3: Implement the Capstone adapter**
 
-Extend private protocols only as required. Add `_register(instruction, reg_id)`, `_condition_code(raw_cc)`, `_shift(operand)`, `_memory(operand)`, `_access_width(mnemonic)`, `_operand(...)`, and `_semantics(...)`. Convert register IDs through `instruction.reg_name(...)` + `Register.from_name(...)`. Sort/deduplicate `regs_access()` by canonical `Register.value`. Preserve operand order. Preserve shifts so a shifted register is never treated as an unshifted transfer. Collapse `push`/`pop` register members into one list operand after conversion.
+Keep all Capstone-specific helpers private:
 
-Capstone constants/objects stay inside `decoder.py`. Existing control-flow/direct-target behavior remains unchanged.
+```python
+def _gpr(instruction: _CapstoneInstruction, reg_id: int) -> Register | None:
+    if reg_id == 0:
+        return None
+    return Register.from_name(str(instruction.reg_name(reg_id)))
 
-- [ ] **Step 4: Verify GREEN and regression safety**
 
-Run:
+def _stable_registers(
+    instruction: _CapstoneInstruction, ids: Sequence[int]
+) -> tuple[Register, ...]:
+    registers = {_gpr(instruction, reg_id) for reg_id in ids}
+    return tuple(sorted((r for r in registers if r is not None), key=lambda r: int(r.value[1:])))
+```
+
+Add `_condition_code`, `_shift`, `_memory`, `_access_width`, `_normalize_memory_access`, `_operand`, `_semantics`. Preserve Capstone operand order except `push/pop`, where converted register members become one sorted/deduplicated `REGISTER_LIST`. Populate `registers_read/registers_written` from `regs_access()`. Preserve shifts and writeback. Do not change existing control-flow/direct-target behavior.
+
+- [ ] **Step 4: Verify GREEN/regressions**
 
 ```bash
 python -m pytest tests/unit/test_analysis_decoder.py tests/unit/test_analysis_functions.py tests/unit/test_analysis_cfg.py tests/unit/test_analysis_xrefs.py tests/unit/test_analysis_symbols.py -v
@@ -223,16 +257,15 @@ git commit -m "feat: expose ARM Thumb instruction semantics"
 - Create: `tests/unit/test_analysis_data_flow.py`
 
 **Interfaces:**
-- Produces `AbstractValueKind(StrEnum)`: `UNKNOWN`, `CONSTANT`, `ADDRESS`.
-- Produces immutable `AbstractValue(kind: AbstractValueKind, value: int | None = None, component: str | None = None, provenance: tuple[int, ...] = field(default=(), compare=False))`.
-- Produces immutable sparse `RegisterState(values: tuple[tuple[Register, AbstractValue], ...] = ())` with `value(register: Register) -> AbstractValue`; omitted registers read as `UNKNOWN`.
-- Produces immutable `InstructionFlowState(instruction: DecodedInstruction, before: RegisterState, after: RegisterState)` with `address` property delegating to `instruction.address`.
-- Produces immutable `BlockFlowState(address: int, instruction_set: InstructionSet, entry: RegisterState, exit: RegisterState)`.
-- Produces immutable `FunctionDataFlow(function: FunctionCandidate, blocks: tuple[BlockFlowState, ...], instructions: tuple[InstructionFlowState, ...], warnings: tuple[str, ...] = (), summary: FunctionSummary | None = None)`; define `FunctionSummary` later via forward annotation/default without importing a nonexistent implementation. `at_instruction(address)` and `for_block(address)` return one deterministic match or `None`.
-- Produces public `analyze_data_flow(cfg: FunctionControlFlowGraph, component: Component) -> FunctionDataFlow`; Task 3 implements the one-block/straight-line case, Task 4 extends the same function to the general CFG fixed point.
-- Internal transfer API: `_transfer(instruction: DecodedInstruction, state: RegisterState, component: Component, warnings: set[str]) -> RegisterState`.
+- `AbstractValueKind`: `UNKNOWN`, `CONSTANT`, `ADDRESS`.
+- `AbstractValue(kind, value: int | None = None, component: str | None = None, provenance: tuple[int, ...] = field(default=(), compare=False))`.
+- Sparse immutable `RegisterState(values=())` with `value(register) -> AbstractValue`; omitted registers are unknown.
+- `InstructionFlowState(instruction: DecodedInstruction, before: RegisterState, after: RegisterState)` plus `address` property.
+- `BlockFlowState(address, instruction_set, entry, exit)`.
+- `FunctionDataFlow(function, blocks, instructions, warnings=(), summary: FunctionSummary | None = None)`; forward annotation is legal because `model.py` already uses `from __future__ import annotations`. `at_instruction`/`for_block` return a deterministic match or `None`.
+- Public `analyze_data_flow(cfg, component) -> FunctionDataFlow`; Task 3 handles one block, Task 4 generalizes the same implementation.
 
-**Test helper defined in this task:**
+**Test helpers in `test_analysis_data_flow.py`:**
 
 ```python
 BASE = 0x02000000
@@ -242,92 +275,120 @@ def _arm_words(*words: int) -> bytes:
     return b"".join(struct.pack("<I", word) for word in words)
 
 
-def _flow_from_arm(*words: int) -> FunctionDataFlow:
-    component = Component("arm9", Path("arm9.bin"), BASE, _arm_words(*words))
-    function = FunctionCandidate(
-        component="arm9",
-        address=BASE,
-        offset=0,
-        instruction_set=InstructionSet.ARM,
+def _function(
+    *,
+    component: str = "arm9",
+    address: int = BASE,
+    instruction_set: InstructionSet = InstructionSet.ARM,
+) -> FunctionCandidate:
+    return FunctionCandidate(
+        component=component,
+        address=address,
+        offset=address - BASE,
+        instruction_set=instruction_set,
         confidence="high",
         evidence=("test",),
     )
-    return analyze_data_flow(build_function_cfg(component, function), component)
+
+
+def _flow_from_arm(*words: int) -> FunctionDataFlow:
+    component = Component("arm9", Path("arm9.bin"), BASE, _arm_words(*words))
+    return analyze_data_flow(build_function_cfg(component, _function()), component)
 ```
 
-- [ ] **Step 1: Write failing straight-line value tests**
-
-Use the existing ARM encoder with the root encoder register imported as `ArmRegister`:
+- [ ] **Step 1: Write failing straight-line tests**
 
 ```python
 def test_mov_and_add_propagate_exact_constants() -> None:
     flow = _flow_from_arm(
-        encode_data_processing_immediate(
-            DataOpcode.MOV, rd=ArmRegister.R0, immediate=4
-        ),
+        encode_data_processing_immediate(DataOpcode.MOV, rd=ArmRegister.R0, immediate=4),
         encode_data_processing_immediate(
             DataOpcode.ADD, rd=ArmRegister.R1, rn=ArmRegister.R0, immediate=3
         ),
         encode_bx(ArmRegister.LR),
     )
-    after_add = flow.at_instruction(BASE + 4)
-    assert after_add is not None
-    value = after_add.after.value(Register.R1)
+    state = flow.at_instruction(BASE + 4)
+    assert state is not None
+    value = state.after.value(Register.R1)
     assert value.kind is AbstractValueKind.CONSTANT
     assert value.value == 7
     assert value.provenance == (BASE, BASE + 4)
 ```
 
-Add exact tests for register-to-register `mov`, `sub`, insufficient input becoming unknown, unsupported `mul` invalidating its destination, and a `CONSTANT` used as a memory base becoming `ADDRESS(component=None)` in the post-instruction state without acquiring a component by numeric range.
+Also test register `mov`, `sub`, unknown source -> unknown destination, unsupported `mul` clears a previously known destination, and a constant used as a typed memory base is reclassified as `ADDRESS(component=None)` after use without gaining component ownership.
 
 - [ ] **Step 2: Verify RED**
 
-Run: `python -m pytest tests/unit/test_analysis_data_flow.py -v`
+```bash
+python -m pytest tests/unit/test_analysis_data_flow.py -v
+```
 
-Expected: FAIL because flow models/module do not exist.
+Expected: FAIL because data-flow models/module do not exist.
 
-- [ ] **Step 3: Implement models, validation, one-block analysis, and straight-line transfer**
+- [ ] **Step 3: Implement models/state primitives**
 
-`AbstractValue.__post_init__` enforces: `UNKNOWN` has no value/component; `CONSTANT` has a 32-bit value and no component; `ADDRESS` has a 32-bit value and optional component. Normalize register states by canonical register value and omit unknown entries.
+```python
+_UNKNOWN = AbstractValue(AbstractValueKind.UNKNOWN)
 
-Validate `cfg.function.component == component.name`; validate each block's `component`, address range, and `offset == component.offset_for_address(block.address)`. Task 3 may raise `ValueError("multi-block data flow requires CFG fixed-point support")` for multiple-block CFGs until Task 4 replaces that temporary limitation.
 
-Implement exact `mov`, `add`, `sub` only for unshifted operand forms represented by typed semantics. `ADDRESS +/- CONSTANT` remains `ADDRESS`; `CONSTANT +/- CONSTANT` remains `CONSTANT`; all other unsupported combinations become unknown. Arithmetic wraps to unsigned 32-bit values. Unsupported decoder-proven writes become unknown.
+def _semantic_key(value: AbstractValue) -> tuple[AbstractValueKind, int | None, str | None]:
+    return value.kind, value.value, value.component
 
-When a typed memory operand uses a register currently holding `CONSTANT`, update that register to `ADDRESS` with the same numeric value/provenance and `component=None`; the address role is proven by use, but ownership is not inferred.
 
-- [ ] **Step 4: Verify GREEN**
+def _u32(value: int) -> int:
+    return value & 0xFFFFFFFF
+```
 
-Run: `python -m pytest tests/unit/test_analysis_data_flow.py tests/unit/test_analysis_decoder.py -v`
+`AbstractValue.__post_init__`: UNKNOWN has no value/component; CONSTANT has a u32 value and no component; ADDRESS has a u32 value and optional component. `RegisterState` sorts by canonical register number and omits unknown entries. State update returns a new frozen state.
 
-Expected: all straight-line tests PASS.
+- [ ] **Step 4: Implement validation + one-block `analyze_data_flow` + transfer**
 
-- [ ] **Step 5: Commit**
+```python
+def _validate_cfg(cfg: FunctionControlFlowGraph, component: Component) -> None:
+    if cfg.function.component != component.name:
+        raise ValueError("data-flow function component does not match component")
+    for block in cfg.blocks:
+        if block.component != component.name:
+            raise ValueError("data-flow block component does not match component")
+        expected = component.offset_for_address(block.address)
+        if block.offset != expected:
+            raise ValueError("data-flow block offset does not match component")
+```
+
+Task 3 may raise `ValueError("multi-block data flow requires CFG fixed-point support")` for more than one block. Implement typed unshifted `mov/add/sub`: CONSTANT +/- CONSTANT -> CONSTANT; ADDRESS +/- CONSTANT -> ADDRESS preserving component; unsupported shapes -> UNKNOWN for known destinations. Wrap arithmetic to u32. Apply decoder-proven writes conservatively. If a typed memory operand uses a register currently containing CONSTANT, reclassify that register as ADDRESS with `component=None`; this is an abstract-role refinement, not a machine write.
+
+- [ ] **Step 5: Verify GREEN**
+
+```bash
+python -m pytest tests/unit/test_analysis_data_flow.py tests/unit/test_analysis_decoder.py -v
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/nds_disassembly_toolkit/analysis/model.py src/nds_disassembly_toolkit/analysis/data_flow.py tests/unit/test_analysis_data_flow.py
 git commit -m "feat: propagate register constants and addresses"
 ```
 
-### Task 4: General CFG Fixed Point, PC Semantics, Literal Pools, Conditions, Calls, and Provenance
+### Task 4: General CFG Fixed Point, PC/Literals, Conditions, Calls, and Provenance
 
 **Files:**
 - Modify: `src/nds_disassembly_toolkit/analysis/data_flow.py`
 - Modify: `tests/unit/test_analysis_data_flow.py`
 
 **Interfaces:**
-- Extends the Task 3 `analyze_data_flow(...)` implementation to arbitrary existing Phase 7B CFGs.
-- Fixed-point keys blocks by `(block.address, block.instruction_set)`; public tuples sort by `(address, instruction_set.value)`.
-- Only local `BRANCH`/`FALLTHROUGH` edges are predecessor edges. `CALL` edges are not graph predecessors; call clobbering occurs at the caller instruction.
-- Semantic worklist equality compares abstract values by `(kind, value, component)` only.
-- After semantic convergence, a second deterministic provenance-enrichment pass runs over the stabilized semantic graph. Provenance sets only grow from the finite set of reachable instruction addresses and therefore converge without changing semantic values or block scheduling decisions.
+- Extends Task 3 `analyze_data_flow` to arbitrary existing Phase 7B CFGs.
+- Fixed-point key: `(block.address, block.instruction_set)`; public tuples sort by `(address, instruction_set.value)`.
+- Intraprocedural predecessors: local `BRANCH`/`FALLTHROUGH` only; CALL effects stay in instruction transfer.
+- Semantic state equality ignores provenance.
+- After semantic convergence, a second deterministic finite provenance-enrichment pass runs on the stabilized graph.
 
-**Additional test helper defined in this task:**
+**Additional test helpers:**
 
 ```python
 def _manual_cfg(
-    component: Component,
-    *,
     function: FunctionCandidate,
     blocks: tuple[BasicBlock, ...],
     edges: tuple[CFGEdge, ...],
@@ -339,36 +400,40 @@ def _manual_cfg(
         unresolved_transfers=(),
         decode_failures=(),
     )
+
+
+def _single_block_cfg(
+    *, component: str = "arm9", block_offset: int = 0
+) -> FunctionControlFlowGraph:
+    function = _function(component=component)
+    block = BasicBlock(
+        component=component,
+        address=BASE,
+        offset=block_offset,
+        instruction_set=InstructionSet.ARM,
+        instructions=(),
+    )
+    return _manual_cfg(function, (block,), ())
 ```
 
-Manual CFG tests construct `DecodedInstruction` objects with explicit `InstructionSemantics`; they never rely on `.operands` text.
+- [ ] **Step 1: Write failing join/loop/validation tests**
 
-- [ ] **Step 1: Write failing CFG join/validation tests**
-
-Create a three-block diamond manually. One predecessor exits with `r1=2`, the other with `r1=3`; the join block must enter with unknown `r1`. Create the same diamond with both sides `r1=2`; the join must preserve constant 2. Add a backward edge to a stable loop and assert deterministic convergence.
-
-Add exact rejection tests:
+Construct manual `DecodedInstruction` records with explicit `InstructionSemantics`; never parse operand text. Build a diamond where one predecessor assigns r1=2 and another r1=3; assert join entry r1 UNKNOWN. Repeat with both r1=2; assert CONSTANT 2. Add backward edge to a stable loop and assert repeat runs produce equal results.
 
 ```python
 def test_data_flow_rejects_mismatched_cfg_component() -> None:
     component = Component("arm9", Path("arm9.bin"), BASE, bytes(0x20))
-    cfg = _cfg_named("overlay_1")
     with pytest.raises(ValueError, match="component"):
-        analyze_data_flow(cfg, component)
+        analyze_data_flow(_single_block_cfg(component="overlay_1"), component)
 
 
 def test_data_flow_rejects_inconsistent_block_offset() -> None:
     component = Component("arm9", Path("arm9.bin"), BASE, bytes(0x20))
-    cfg = _cfg_with_block_offset(4)
     with pytest.raises(ValueError, match="offset"):
-        analyze_data_flow(cfg, component)
+        analyze_data_flow(_single_block_cfg(block_offset=4), component)
 ```
 
-Define `_cfg_named` and `_cfg_with_block_offset` directly beside these tests by constructing the same immutable CFG records used elsewhere in the file.
-
 - [ ] **Step 2: Write failing PC/literal/conditional/call tests**
-
-Add:
 
 ```python
 def test_arm_literal_pool_load_is_constant_not_guessed_address() -> None:
@@ -386,35 +451,43 @@ def test_arm_literal_pool_load_is_constant_not_guessed_address() -> None:
     assert value.component is None
 ```
 
-Also add: `add r0, pc, #imm` produces `ADDRESS(component="arm9")` using ARM `PC=address+8`; Thumb PC-relative literal `ldr` uses aligned `(address+4)`; word `ldr` reads 4 bytes little-endian, byte/halfword PC-relative loads use their typed width when unsigned, signed literal forms remain unsupported/unknown; out-of-range literal access writes unknown and records exactly one stable warning; conditional write joins old/new; direct `BL` clobbers `r0-r3/r12/lr` but preserves a known `r4`; identical runtime addresses in separately analyzed overlay components never acquire the other overlay's ownership.
+Also test ARM `add r0,pc,#imm -> ADDRESS(component="arm9")` using `PC=address+8`; Thumb PC-relative load uses aligned `(address+4)`; unsigned word/halfword/byte literal widths; signed literal load remains unsupported/unknown unless explicitly implemented; out-of-range literal gives one stable warning and UNKNOWN destination; conditional write joins old/new; direct BL clobbers r0-r3/r12/lr but preserves known r4; separately analyzed overlapping overlays never cross-assign component ownership.
 
 - [ ] **Step 3: Verify RED**
 
-Run: `python -m pytest tests/unit/test_analysis_data_flow.py -v`
+```bash
+python -m pytest tests/unit/test_analysis_data_flow.py -v
+```
 
-Expected: multi-block/PC/literal/call tests FAIL while Task 3 straight-line tests remain green.
+Expected: new multi-block/PC/literal/call tests FAIL; Task 3 straight-line tests remain green.
 
 - [ ] **Step 4: Implement deterministic semantic fixed point**
 
-Remove Task 3's temporary multi-block rejection. Build predecessor lists only from edges whose kind is `BRANCH`/`FALLTHROUGH` and whose target exactly matches a local CFG block. Function entry starts with empty unknown `RegisterState`; non-entry blocks remain unreachable until a predecessor has an exit state.
+```python
+def _join_values(values: Sequence[AbstractValue]) -> AbstractValue:
+    if not values:
+        return _UNKNOWN
+    first = values[0]
+    if all(_semantic_key(value) == _semantic_key(first) for value in values[1:]):
+        return AbstractValue(first.kind, first.value, first.component)
+    return _UNKNOWN
+```
 
-Join each register: identical semantic triples `(kind, value, component)` across all reachable incoming states survive; any disagreement/unknown combination becomes unknown. Use a deterministic deque ordered by `(address, instruction_set.value)` and enqueue successors only when semantic exit state changes.
+Remove the Task 3 multi-block restriction. Build predecessor lists from local branch/fallthrough edges. Entry starts with empty unknown register state; non-entry blocks are unreachable until a predecessor exits. Worklist order is deterministic. Enqueue successors only when semantic exit state changes.
 
-- [ ] **Step 5: Implement PC, literal, conditional, and call behavior**
+- [ ] **Step 5: Implement PC/literal/conditional/call transfer**
 
-For explicit PC source reads use `address + 8` in ARM state. For Thumb PC-relative memory/address calculations use `(address + 4) & ~3`. A PC-derived effective address is `ADDRESS(component=component.name)` because its ownership comes from the current decoded component.
+For an explicit PC register source, materialize ARM PC as `instruction.address + 8`. For Thumb PC-relative memory construction use `(instruction.address + 4) & ~3`. A PC-derived effective address is ADDRESS owned by the current component.
 
-For unsigned in-bounds literal loads, read exactly `access_width` bytes little-endian and produce `CONSTANT`. Do not classify the loaded integer as an address by numeric appearance. Unsupported signed literal forms write unknown. Out-of-range effective addresses add a deterministic warning string keyed by instruction/effective address and write unknown.
+For unsigned literal loads with known PC effective address and typed width 1/2/4, read exactly that many in-component bytes little-endian and produce CONSTANT. Signed forms remain conservative UNKNOWN unless a dedicated signed transfer is added with a matching test. Out-of-range access adds a deterministic warning such as `literal read at 0x02000004 is outside arm9: 0x02000100` and clears destination.
 
-At `CALL`, set `{R0,R1,R2,R3,R12,LR}` unknown after decoded-write handling while preserving `R4-R11,SP` unless the instruction itself explicitly writes them. For `condition` other than `AL`/`INVALID`, compute the executed state and join each written register with the incoming value to represent the not-executed path.
+At CALL, clear `{R0,R1,R2,R3,R12,LR}` after decoded writes. For condition other than AL/INVALID, compute executed state then join each written/refined register with incoming state to account for the instruction not executing.
 
-- [ ] **Step 6: Implement provenance enrichment and verify convergence**
+- [ ] **Step 6: Implement bounded provenance enrichment**
 
-Run the semantic fixed point without letting provenance participate in state equality. Then rerun transfer over the stabilized block-entry semantic states, propagating finite sorted instruction-address provenance. At joins with identical semantic values, union provenance from agreeing predecessors; never union evidence across a semantic disagreement that became unknown. Iterate provenance sets until they stop growing, but do not reschedule semantic value computation.
+After semantic states stabilize, rerun blocks using those fixed semantic entry values while provenance sets grow. At joins, union sorted provenance only when semantic keys agree. Instruction transfer appends the current instruction address to provenance for supported produced/copied values. Repeat until no provenance tuple grows; the universe is bounded by reachable instruction addresses, so this cannot change semantic fixed-point convergence.
 
-- [ ] **Step 7: Verify GREEN and regressions**
-
-Run:
+- [ ] **Step 7: Verify GREEN/regressions**
 
 ```bash
 python -m pytest tests/unit/test_analysis_data_flow.py -v
@@ -438,10 +511,9 @@ git commit -m "feat: solve intraprocedural register data flow"
 - Modify: `docs/disassembly-and-analysis.md`
 - Modify: `docs/provenance-and-licenses.md`
 
-**Interfaces:**
-- Export `Register`, `ConditionCode`, `OperandKind`, `OperandAccess`, `ShiftKind`, `OperandShift`, `MemoryOperand`, `InstructionOperand`, `InstructionSemantics`, `AbstractValueKind`, `AbstractValue`, `RegisterState`, `InstructionFlowState`, `BlockFlowState`, `FunctionDataFlow`, and `analyze_data_flow` from `nds_disassembly_toolkit.analysis`.
+**Interfaces:** Export `Register`, `ConditionCode`, `OperandKind`, `OperandAccess`, `ShiftKind`, `OperandShift`, `MemoryOperand`, `InstructionOperand`, `InstructionSemantics`, `AbstractValueKind`, `AbstractValue`, `RegisterState`, `InstructionFlowState`, `BlockFlowState`, `FunctionDataFlow`, `analyze_data_flow`.
 
-- [ ] **Step 1: Write failing package-export tests**
+- [ ] **Step 1: Write failing export test**
 
 ```python
 def test_data_flow_api_is_exported() -> None:
@@ -453,13 +525,15 @@ def test_data_flow_api_is_exported() -> None:
 
 - [ ] **Step 2: Verify RED**
 
-Run: `python -m pytest tests/unit/test_analysis_data_flow.py::test_data_flow_api_is_exported -v`
+```bash
+python -m pytest tests/unit/test_analysis_data_flow.py::test_data_flow_api_is_exported -v
+```
 
 Expected: FAIL until exports are wired.
 
-- [ ] **Step 3: Export API and update documentation/provenance**
+- [ ] **Step 3: Export API + document/provenance**
 
-Add a Phase 7E1 section to `docs/disassembly-and-analysis.md` showing:
+Add imports/`__all__` entries. Add Phase 7E1 docs with:
 
 ```python
 cfg = build_function_cfg(component, function)
@@ -467,11 +541,9 @@ flow = analyze_data_flow(cfg, component)
 state = flow.at_instruction(0x02000020)
 ```
 
-Document exact-value abstract interpretation rather than symbolic execution; `CONSTANT` vs `ADDRESS`; component-aware overlays; call clobbers; conditional merges; literal-pool bounds; unsupported-write invalidation; no operand-text parsing.
+Document exact-value abstract interpretation, CONSTANT vs ADDRESS, overlay ownership, literal bounds, call clobbers, conditional joins, unsupported-write invalidation, and no operand-text parsing. Provenance doc: Capstone remains existing BSD-style decoder dependency; semantic adapter/fixed point are toolkit-owned; angr reference-only; melonDS external; no new dependency.
 
-In provenance, record that Capstone semantic metadata is converted through toolkit-owned adapter code; the fixed-point implementation is toolkit-owned; angr remains architecture/reference-only; melonDS remains external; no new dependency was added.
-
-- [ ] **Step 4: Run complete local quality gates**
+- [ ] **Step 4: Run complete gates**
 
 ```bash
 python -m pytest -v
@@ -481,15 +553,15 @@ python -m mypy src/nds_disassembly_toolkit
 
 Expected: all PASS.
 
-- [ ] **Step 5: Open and verify the Phase 7E1 PR**
+- [ ] **Step 5: PR/merge gate**
 
-Open a draft PR from `phase-7e-data-flow` to `main`. Because current CI runs on pull requests, require the exact branch-head run to pass Test, Ruff, and Mypy. Mark ready only after exact-head success, squash-merge, verify the resulting `main` SHA, and verify push CI on `main` before beginning 7E2.
+Open draft PR `phase-7e-data-flow -> main`. Require exact-head pull-request CI Test/Ruff/Mypy PASS. Mark ready, squash-merge, verify resulting main SHA, then verify push CI on main before Phase 7E2.
 
 ---
 
 ## Phase 7E2 PR
 
-Start Phase 7E2 on a fresh branch named `phase-7e2-stack-abi-recovery` from the verified post-7E1 `main` commit. Do not continue 7E2 commits on the already-merged 7E1 branch.
+Create fresh branch `phase-7e2-stack-abi-recovery` from verified post-7E1 `main`. Do not continue 7E2 on the merged 7E1 branch.
 
 ### Task 6: Stack State, Frame Depth, and Stack Slots
 
@@ -500,20 +572,49 @@ Start Phase 7E2 on a fresh branch named `phase-7e2-stack-abi-recovery` from the 
 - Create: `tests/unit/test_analysis_stack.py`
 
 **Interfaces:**
-- Produces `StackAccessKind(StrEnum)`: `LOAD`, `STORE`.
-- Produces `StackSlotKind(StrEnum)`: `LOCAL`, `SAVED_REGISTER`, `INCOMING_ARGUMENT`, `UNKNOWN`.
-- Produces immutable `StackAccess(instruction_address: int, kind: StackAccessKind, width: int | None)`.
-- Produces immutable `StackSlot(offset: int, kind: StackSlotKind, accesses: tuple[StackAccess, ...])`, where `offset` is relative to function-entry SP.
-- Produces immutable `StackFrame(frame_size: int | None, frame_pointer: Register | None, stack_depth_known: bool)`.
-- Produces immutable `StackState(offset: int | None, frame_pointers: tuple[tuple[Register, int], ...] = ())`.
-- Extends `InstructionFlowState` with `stack_before: StackState | None = None`, `stack_after: StackState | None = None`; extends `BlockFlowState` with `stack_entry: StackState | None = None`, `stack_exit: StackState | None = None`. Defaults preserve 7E1 source compatibility.
-- Produces immutable `StackAnalysis(frame: StackFrame, slots: tuple[StackSlot, ...])`.
-- Produces module-level `analyze_stack(flow: FunctionDataFlow) -> StackAnalysis` in `analysis/stack.py`. It is an implementation-layer helper used by Task 7 and is not required to be re-exported from `nds_disassembly_toolkit.analysis`.
-- Extends the **same** private fixed-point state in `data_flow.py` with `stack: StackState`; no second CFG solver is added.
+- `StackAccessKind`: LOAD, STORE.
+- `StackSlotKind`: LOCAL, SAVED_REGISTER, INCOMING_ARGUMENT, UNKNOWN.
+- `StackAccess(instruction_address, kind, width)`.
+- `StackSlot(offset, kind, accesses)`; offset relative to function-entry SP.
+- `StackFrame(frame_size: int | None, frame_pointer: Register | None, stack_depth_known: bool)`.
+- `StackState(offset: int | None, frame_pointers: tuple[tuple[Register, int], ...] = ())`.
+- Extend `InstructionFlowState` with `stack_before/stack_after: StackState | None = None`; `BlockFlowState` with `stack_entry/stack_exit: StackState | None = None`.
+- `StackAnalysis(frame: StackFrame, slots: tuple[StackSlot, ...])`.
+- `analyze_stack(flow: FunctionDataFlow) -> StackAnalysis` in `analysis/stack.py`; used by Task 7, not required as a root-package export.
+- Same private CFG fixed-point state gains `stack: StackState`; no second solver.
 
-- [ ] **Step 1: Write failing ARM/Thumb stack-depth tests**
+**Test helpers in `test_analysis_stack.py`:**
 
-Add:
+```python
+BASE = 0x02000000
+
+
+def _function(instruction_set: InstructionSet = InstructionSet.ARM) -> FunctionCandidate:
+    return FunctionCandidate(
+        component="arm9",
+        address=BASE,
+        offset=0,
+        instruction_set=instruction_set,
+        confidence="high",
+        evidence=("test",),
+    )
+
+
+def _flow_from_arm(*words: int) -> FunctionDataFlow:
+    data = b"".join(struct.pack("<I", word) for word in words)
+    component = Component("arm9", Path("arm9.bin"), BASE, data)
+    return analyze_data_flow(build_function_cfg(component, _function()), component)
+
+
+def _flow_from_thumb(*halfwords: int) -> FunctionDataFlow:
+    data = b"".join(struct.pack("<H", word) for word in halfwords)
+    component = Component("arm9", Path("arm9.bin"), BASE, data)
+    return analyze_data_flow(
+        build_function_cfg(component, _function(InstructionSet.THUMB)), component
+    )
+```
+
+- [ ] **Step 1: Write failing stack-depth tests**
 
 ```python
 def test_arm_push_and_sub_sp_recover_frame_size() -> None:
@@ -530,39 +631,70 @@ def test_arm_push_and_sub_sp_recover_frame_size() -> None:
     stack = analyze_stack(flow)
     assert stack.frame.frame_size == 0x18
     assert stack.frame.stack_depth_known
+
+
+def test_thumb_stack_adjustments_match_arm_depth() -> None:
+    flow = _flow_from_thumb(0xB510, 0xB084, 0xB004, 0xBD10)
+    assert analyze_stack(flow).frame.frame_size == 0x18
 ```
 
-Add a Thumb fixture with words `0xB510, 0xB084, 0xB004, 0xBD10` (`push {r4,lr}; sub sp,#0x10; add sp,#0x10; pop {r4,pc}`) and assert the same frame size. Add a manual diamond whose predecessor `StackState.offset` values disagree and assert the join's stack offset becomes `None`.
+Build a manual diamond with typed `sub sp,sp,#4` on one branch and `sub sp,sp,#8` on the other; assert join block `stack_entry.offset is None`.
 
-- [ ] **Step 2: Write failing stack-slot/frame-pointer tests**
+- [ ] **Step 2: Write failing slot/frame-pointer tests**
 
-Create an SP-relative word store/load around a known negative SP offset and assert one `StackSlot` with that exact entry-SP-relative offset and two accesses of width 4. Create `mov r11, sp` followed by `[r11,#-4]` and assert frame-pointer-relative recovery. For `push {r4,lr}`, assert saved-register slots are `SAVED_REGISTER` and occupy exact entry-relative offsets `-8` and `-4` in ascending-address register order.
+Create SP-relative word store/load after a known stack adjustment; assert one exact entry-SP-relative slot with LOAD/STORE accesses width 4. Create `mov r11,sp` then `[r11,#-4]`; assert frame-relative slot. For push `{r4,lr}`, assert SAVED_REGISTER slots at `-8` and `-4` in ascending-address register order.
 
 - [ ] **Step 3: Verify RED**
 
-Run: `python -m pytest tests/unit/test_analysis_stack.py -v`
+```bash
+python -m pytest tests/unit/test_analysis_stack.py -v
+```
 
 Expected: FAIL because stack models/state/helper do not exist.
 
-- [ ] **Step 4: Extend the existing fixed-point state with stack facts**
+- [ ] **Step 4: Extend the existing fixed-point state**
 
-Initialize function entry `StackState(offset=0)`. Supported `push` subtracts `4 * len(registers)`; `pop` adds it. Supported `sub sp, sp, #imm` subtracts; `add sp, sp, #imm` adds. If a decoded instruction writes SP by an unsupported form, set `offset=None` and clear frame-pointer offsets that depended on an unknowable SP transformation.
+Use entry `StackState(offset=0)`. Transfer rules:
 
-At CFG joins, identical known stack offsets survive; differing or unknown offsets become `None`. A supported unshifted `mov frame_reg, sp` records `frame_reg -> current entry-SP offset`; any later write to that frame register removes the fact. Frame-pointer maps join by keeping only identical `(register, offset)` facts present on every reachable path.
+```python
+if mnemonic == "push" and register_list is not None and stack.offset is not None:
+    next_offset = stack.offset - 4 * len(register_list)
+elif mnemonic == "pop" and register_list is not None and stack.offset is not None:
+    next_offset = stack.offset + 4 * len(register_list)
+elif is_sub_sp_immediate and stack.offset is not None:
+    next_offset = stack.offset - immediate
+elif is_add_sp_immediate and stack.offset is not None:
+    next_offset = stack.offset + immediate
+elif Register.SP in instruction.semantics.registers_written:
+    next_offset = None
+```
 
-Populate the new stack fields on the same `InstructionFlowState`/`BlockFlowState` records produced by 7E1.
+At joins, identical offsets survive; disagreement/unknown -> None. `mov frame_reg,sp` records frame register -> current entry-SP offset. Any write to that frame register removes it. Join frame-pointer maps by intersection of identical facts. Populate stack fields on existing flow-state records.
 
 - [ ] **Step 5: Implement `analyze_stack` from existing flow records**
 
-`analyze_stack` iterates `flow.instructions` in deterministic address order; it does **not** call `decode_instruction` or inspect `.operands`. For each typed memory operand, resolve entry-SP-relative offset from `stack_before.offset` when base is SP, or from `stack_before.frame_pointers` when base is a proven frame pointer. Use `InstructionOperand.access_width` and access flags to create load/store evidence.
+```python
+def _entry_relative_offset(
+    operand: InstructionOperand, stack: StackState
+) -> int | None:
+    memory = operand.memory
+    if memory is None or memory.index is not None:
+        return None
+    if memory.base is Register.SP and stack.offset is not None:
+        return stack.offset + memory.displacement
+    frame_map = dict(stack.frame_pointers)
+    if memory.base in frame_map:
+        return frame_map[memory.base] + memory.displacement
+    return None
+```
 
-For supported `push`, emit saved-register slots using ARM full-descending ordering: new SP is `old_sp - 4*n`; registers in canonical ascending register order occupy ascending addresses from new SP. Negative non-save offsets are `LOCAL`; nonnegative offsets are `INCOMING_ARGUMENT`; unresolved locations are not guessed into a slot.
-
-`StackFrame.frame_size` is the deepest **proven** negative entry-SP offset reached anywhere in reachable flow. `stack_depth_known` is false if any reachable merged state loses stack offset precision; retain a proven maximum frame depth if one exists rather than pretending the whole frame is exact. `frame_pointer` is populated only when one canonical frame register remains proven consistently enough to describe recovered frame-relative slots.
+Iterate `flow.instructions` only; never call decoder or parse text. Use typed memory access/width. For push save slots: new SP = old SP - 4*n; canonical ascending registers occupy ascending addresses from new SP. Negative non-save slots = LOCAL; nonnegative = INCOMING_ARGUMENT. `frame_size` = deepest proven negative SP offset reached; retain proven maximum even if later merges lose precision, and set `stack_depth_known=False`. Populate one frame pointer only when consistently proven for recovered accesses.
 
 - [ ] **Step 6: Verify GREEN**
 
-Run: `python -m pytest tests/unit/test_analysis_stack.py tests/unit/test_analysis_data_flow.py -v`
+```bash
+python -m pytest tests/unit/test_analysis_stack.py tests/unit/test_analysis_data_flow.py -v
+```
 
 Expected: PASS.
 
@@ -573,7 +705,7 @@ git add src/nds_disassembly_toolkit/analysis/model.py src/nds_disassembly_toolki
 git commit -m "feat: recover stack frames and slots"
 ```
 
-### Task 7: Argument and Return Evidence + Function Summary
+### Task 7: Argument/Return Evidence and Function Summary
 
 **Files:**
 - Modify: `src/nds_disassembly_toolkit/analysis/model.py`
@@ -582,32 +714,30 @@ git commit -m "feat: recover stack frames and slots"
 - Modify: `tests/unit/test_analysis_stack.py`
 
 **Interfaces:**
-- Produces `ArgumentLocationKind(StrEnum)`: `REGISTER`, `STACK`.
-- Produces immutable `ArgumentEvidence(index: int | None, kind: ArgumentLocationKind, register: Register | None, stack_offset: int | None, uses: tuple[int, ...])`.
-- Produces immutable `ReturnEvidence(return_address: int, value: AbstractValue)`.
-- Produces immutable `FunctionSummary(arguments: tuple[ArgumentEvidence, ...], returns: tuple[ReturnEvidence, ...], stack_frame: StackFrame, stack_slots: tuple[StackSlot, ...])`.
-- Replaces the Task 3 forward/default summary annotation with the concrete `FunctionSummary | None` type.
-- The private fixed-point state gains `entry_arguments_live: frozenset[Register]`; this is solved alongside register/stack semantics in the same block worklist.
-- `analyze_data_flow(...)` returns `FunctionDataFlow(..., summary=FunctionSummary(...))` in 7E2 by calling `analyze_stack()` on the already-computed flow states and combining stack facts with argument/return evidence.
+- `ArgumentLocationKind`: REGISTER, STACK.
+- `ArgumentEvidence(index, kind, register, stack_offset, uses)`.
+- `ReturnEvidence(return_address, value)`.
+- `FunctionSummary(arguments, returns, stack_frame, stack_slots)`.
+- Replace forward/default summary annotation with concrete `FunctionSummary | None`.
+- Private fixed-point state gains `entry_arguments_live: frozenset[Register]` solved in the same worklist.
+- `analyze_data_flow` fills `FunctionDataFlow.summary` by combining existing flow + `analyze_stack` + argument/return evidence.
 
 - [ ] **Step 1: Write failing register-argument tests**
 
-Add:
-
 ```python
 def test_use_before_overwrite_recovers_register_argument() -> None:
-    flow = _flow_from_arm(0xE2804001, 0xE12FFF1E)  # add r4, r0, #1; bx lr
+    flow = _flow_from_arm(0xE2804001, 0xE12FFF1E)  # add r4,r0,#1; bx lr
     assert flow.summary is not None
     arg0 = next(item for item in flow.summary.arguments if item.register is Register.R0)
     assert arg0.index == 0
     assert arg0.uses == (BASE,)
 ```
 
-Add: write `r0` before first read -> no r0 argument; read/write in the same instruction records the read before killing liveness; a call kills incoming `r0-r3` liveness for later uses; at a CFG join, liveness uses intersection so a register overwritten on either incoming path is no longer classified as the original argument.
+Also: write r0 before first read -> no argument; read+write same instruction records read then kills liveness; call kills r0-r3 for later uses; join uses liveness intersection.
 
-- [ ] **Step 2: Write failing stack-argument and return tests**
+- [ ] **Step 2: Write failing stack-argument/return tests**
 
-Add a known `[entry_sp + 0]` load and assert `ArgumentLocationKind.STACK`, `stack_offset=0`, and stable use address. Add:
+Use a proven `[entry_sp + 0]` load and assert STACK argument with `stack_offset=0`. Add:
 
 ```python
 def test_constant_return_is_reported_at_return_site() -> None:
@@ -619,31 +749,53 @@ def test_constant_return_is_reported_at_return_site() -> None:
     assert evidence.value.value == 7
 ```
 
-Add two return sites with different constants and assert two sorted `ReturnEvidence` records; add a return with unknown r0 and assert `UNKNOWN` rather than an invented type/value.
+Also two return sites with different constants -> two sorted records; unknown r0 return -> UNKNOWN.
 
 - [ ] **Step 3: Verify RED**
 
-Run: `python -m pytest tests/unit/test_analysis_stack.py -v`
+```bash
+python -m pytest tests/unit/test_analysis_stack.py -v
+```
 
-Expected: argument/summary tests FAIL while Task 6 frame/slot tests remain green.
+Expected: summary tests FAIL while Task 6 tests stay green.
 
-- [ ] **Step 4: Solve entry-argument liveness in the existing fixed point**
+- [ ] **Step 4: Solve entry-argument liveness in the existing worklist**
 
-Initialize `{R0,R1,R2,R3}` at the entry. Before executing each instruction, any `registers_read` member still live is a use of the original entry value; record the instruction address. After the read is recorded, any decoded write removes that register. A call removes caller-clobbered argument registers. At block joins use set intersection across reachable predecessors.
+```python
+ENTRY_ARGUMENTS = frozenset({Register.R0, Register.R1, Register.R2, Register.R3})
 
-Keep argument-use accumulation deterministic and finite; like provenance, evidence does not alter register/stack semantic equality.
 
-- [ ] **Step 5: Build deterministic function summaries**
+def _join_live_arguments(states: Sequence[_FlowState]) -> frozenset[Register]:
+    if not states:
+        return frozenset()
+    live = set(states[0].entry_arguments_live)
+    for state in states[1:]:
+        live.intersection_update(state.entry_arguments_live)
+    return frozenset(live)
+```
 
-Merge register uses by `r0-r3`, mapping them to indices 0-3. Convert `INCOMING_ARGUMENT` stack slots with actual accesses into stack argument evidence; do not invent C types/names or a positional index when the ABI location alone does not prove one (`index=None` is allowed for stack arguments).
+Before transfer, record reads of still-live entry registers; then remove decoded writes. Calls remove caller-clobbered argument registers. Evidence is finite/deterministic and does not affect register/stack semantic equality.
 
-For every reachable instruction with `control_flow is ControlFlowKind.RETURN`, capture `r0` from that instruction's **before** register state. Keep each return site separate and sort by address.
+- [ ] **Step 5: Build deterministic summaries**
 
-Construct a stack analysis from the already-produced flow, then create `FunctionSummary(arguments, returns, stack_frame, stack_slots)` and return a new frozen `FunctionDataFlow` with `summary` populated.
+Merge r0-r3 uses and map indices 0-3. Convert INCOMING_ARGUMENT stack slots with accesses to stack argument evidence, using `index=None` when location does not prove a source-level parameter index. At every reachable `ControlFlowKind.RETURN`, capture r0 from instruction **before** state; keep return sites separate/sorted.
+
+```python
+stack = analyze_stack(flow_without_summary)
+summary = FunctionSummary(
+    arguments=arguments,
+    returns=returns,
+    stack_frame=stack.frame,
+    stack_slots=stack.slots,
+)
+return replace(flow_without_summary, summary=summary)
+```
 
 - [ ] **Step 6: Verify GREEN**
 
-Run: `python -m pytest tests/unit/test_analysis_stack.py tests/unit/test_analysis_data_flow.py -v`
+```bash
+python -m pytest tests/unit/test_analysis_stack.py tests/unit/test_analysis_data_flow.py -v
+```
 
 Expected: PASS.
 
@@ -654,7 +806,7 @@ git add src/nds_disassembly_toolkit/analysis/model.py src/nds_disassembly_toolki
 git commit -m "feat: recover function argument and return evidence"
 ```
 
-### Task 8: 7E2 Public API, Documentation, Full Verification, and Merge
+### Task 8: 7E2 Public API, Documentation, Verification, and Merge
 
 **Files:**
 - Modify: `src/nds_disassembly_toolkit/analysis/__init__.py`
@@ -662,11 +814,9 @@ git commit -m "feat: recover function argument and return evidence"
 - Modify: `docs/disassembly-and-analysis.md`
 - Modify: `docs/provenance-and-licenses.md`
 
-**Interfaces:**
-- Export `StackAccessKind`, `StackSlotKind`, `StackAccess`, `StackSlot`, `StackFrame`, `StackState`, `StackAnalysis`, `ArgumentLocationKind`, `ArgumentEvidence`, `ReturnEvidence`, and `FunctionSummary` together with existing `FunctionDataFlow`/`analyze_data_flow`.
-- `analyze_stack` remains available from `nds_disassembly_toolkit.analysis.stack` but is not required in the root `analysis` export list; the normal stable entry point is `analyze_data_flow` and its `summary`.
+**Interfaces:** Export `StackAccessKind`, `StackSlotKind`, `StackAccess`, `StackSlot`, `StackFrame`, `StackState`, `StackAnalysis`, `ArgumentLocationKind`, `ArgumentEvidence`, `ReturnEvidence`, `FunctionSummary`. `analyze_stack` remains module-level in `analysis.stack`; normal stable entry is `analyze_data_flow(...).summary`.
 
-- [ ] **Step 1: Add failing 7E2 export tests**
+- [ ] **Step 1: Write failing export test**
 
 ```python
 def test_stack_summary_api_is_exported() -> None:
@@ -679,15 +829,13 @@ def test_stack_summary_api_is_exported() -> None:
 
 - [ ] **Step 2: Verify RED**
 
-Run the focused export test. Expected: FAIL until exports are wired.
+Run the focused export test. Expected: FAIL until root exports are wired.
 
-- [ ] **Step 3: Export and document Phase 7E2**
+- [ ] **Step 3: Export + document/provenance**
 
-Document entry-SP-relative offsets, typed access widths, saved-register/local/incoming-argument slot categories, frame-size precision, `r0-r3` use-before-overwrite evidence, stack-argument evidence, and per-return r0 values. Explicitly state that this is not source-level signature/type recovery, full memory alias analysis, interprocedural summary propagation, symbolic execution, or decompilation.
+Add imports/`__all__`. Document entry-SP offsets, typed widths/direction, saved/local/incoming slots, frame precision, r0-r3 use-before-overwrite, stack-argument evidence, per-return r0. Explicit exclusions: source-level signature/type inference, general alias analysis, interprocedural summaries, symbolic execution, decompilation. Provenance: Phase 7E logic toolkit-owned; Capstone existing dependency; angr/melonDS reference-only; no new dependency.
 
-Update provenance: typed semantic conversion, fixed-point propagation, stack analysis, and ABI evidence are toolkit-owned; Capstone remains the existing BSD-style decoder dependency; angr/melonDS remain non-vendored references; no dependency added.
-
-- [ ] **Step 4: Run complete local quality gates**
+- [ ] **Step 4: Run complete gates**
 
 ```bash
 python -m pytest -v
@@ -697,21 +845,14 @@ python -m mypy src/nds_disassembly_toolkit
 
 Expected: all PASS.
 
-- [ ] **Step 5: Audit scope before PR**
+- [ ] **Step 5: Scope audit**
 
-Run repository search/diff checks confirming:
+Verify via repository search/diff: no Bakugan/B6RE/Gate material; no dependency change; no Capstone import outside decoder introduced by 7E; no `.operands` parsing in data_flow/stack; no `decode_instruction` call in data_flow/stack; no second CFG; every approved spec test category has focused coverage.
 
-- no `Bakugan`, `B6RE`, or Gate-specific content in Phase 7E source/tests;
-- `pyproject.toml` has no new runtime dependency;
-- no `capstone` import outside `analysis/decoder.py` was introduced by 7E;
-- neither `data_flow.py` nor `stack.py` parses `DecodedInstruction.operands`;
-- neither `data_flow.py` nor `stack.py` calls `decode_instruction` or builds a second CFG;
-- every approved-spec testing requirement has at least one focused test.
+- [ ] **Step 6: PR/merge**
 
-- [ ] **Step 6: Open/verify/merge Phase 7E2**
-
-Open a PR from `phase-7e2-stack-abi-recovery` to `main`. Require exact-head GitHub Actions Test, Ruff, and Mypy success; mark ready; squash-merge; verify resulting `main`; verify push CI on `main`.
+Open `phase-7e2-stack-abi-recovery -> main`; require exact-head pull-request CI Test/Ruff/Mypy PASS; mark ready; squash-merge; verify main SHA and push CI.
 
 - [ ] **Step 7: Final Phase 7E completion check**
 
-Confirm both 7E1 and 7E2 are on `main`, post-merge CI is green, Phase 7A-7D regression tests remain green, and Phase 7F can persist `FunctionDataFlow`/`FunctionSummary` directly without re-analysis. Do not begin Phase 7F inside either Phase 7E PR.
+Confirm 7E1 + 7E2 are on main, post-merge CI green, 7A-7D regressions green, and Phase 7F can persist `FunctionDataFlow`/`FunctionSummary` without re-analysis. Do not begin Phase 7F inside Phase 7E.
