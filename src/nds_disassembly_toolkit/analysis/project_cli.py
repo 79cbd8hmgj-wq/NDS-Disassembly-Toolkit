@@ -6,7 +6,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from nds_disassembly_toolkit.analysis.model import InstructionSet, OperandAccess
+from nds_disassembly_toolkit.analysis.model import (
+    FunctionCandidate,
+    InstructionSet,
+    OperandAccess,
+    StringRecord,
+)
+from nds_disassembly_toolkit.analysis.project import (
+    AnalysisProject,
+    AnalysisProjectMetadata,
+    ComponentAnalysisIdentity,
+)
 from nds_disassembly_toolkit.errors import AnalysisProjectError
 
 
@@ -58,6 +68,46 @@ def _write_json(payload: object, output: Path | None) -> None:
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(rendered, encoding="utf-8")
     temporary.replace(output)
+
+
+def _metadata_json(metadata: AnalysisProjectMetadata) -> dict[str, object]:
+    return {
+        "analysis_model_version": metadata.analysis_model_version,
+        "project_format_version": metadata.project_format_version,
+        "read_only": metadata.read_only,
+        "schema_version": metadata.schema_version,
+    }
+
+
+def _component_identity_json(
+    identity: ComponentAnalysisIdentity,
+) -> dict[str, object]:
+    return {
+        "base_address": _hex(identity.base_address),
+        "name": identity.name,
+        "sha256": identity.sha256,
+        "size": _hex(identity.size),
+    }
+
+
+def _function_candidate_json(function: FunctionCandidate) -> dict[str, object]:
+    return {
+        "address": _hex(function.address),
+        "component": function.component,
+        "confidence": function.confidence,
+        "evidence": list(function.evidence),
+        "instruction_set": function.instruction_set.value,
+        "offset": _hex(function.offset),
+    }
+
+
+def _string_json(record: StringRecord) -> dict[str, object]:
+    return {
+        "address": _hex(record.address),
+        "component": record.component,
+        "offset": _hex(record.offset),
+        "text": record.text,
+    }
 
 
 def _add_output_argument(parser: argparse.ArgumentParser) -> None:
@@ -158,10 +208,72 @@ def add_project_parser(subparsers: Any) -> None:
     _add_output_argument(annotate_parser)
 
 
+def _run_create(arguments: argparse.Namespace) -> int:
+    with AnalysisProject.create(arguments.project) as project:
+        payload = {
+            "components": [],
+            "metadata": _metadata_json(project.metadata),
+            "project": str(project.root),
+        }
+    _write_json(payload, arguments.output)
+    return 0
+
+
+def _run_info(arguments: argparse.Namespace) -> int:
+    with AnalysisProject.open(arguments.project, read_only=True) as project:
+        payload = {
+            "components": [
+                _component_identity_json(identity)
+                for identity in project.component_identities()
+            ],
+            "metadata": _metadata_json(project.metadata),
+            "project": str(project.root),
+        }
+    _write_json(payload, arguments.output)
+    return 0
+
+
+def _run_functions(arguments: argparse.Namespace) -> int:
+    with AnalysisProject.open(arguments.project, read_only=True) as project:
+        functions = project.functions(component=arguments.component)
+    payload: dict[str, object] = {
+        "functions": [_function_candidate_json(function) for function in functions]
+    }
+    if arguments.component is not None:
+        payload["component"] = arguments.component
+    _write_json(payload, arguments.output)
+    return 0
+
+
+def _run_strings(arguments: argparse.Namespace) -> int:
+    with AnalysisProject.open(arguments.project, read_only=True) as project:
+        records = project.strings(component=arguments.component)
+    if arguments.contains is not None:
+        needle = arguments.contains.casefold()
+        records = tuple(record for record in records if needle in record.text.casefold())
+    payload: dict[str, object] = {
+        "strings": [_string_json(record) for record in records]
+    }
+    if arguments.component is not None:
+        payload["component"] = arguments.component
+    if arguments.contains is not None:
+        payload["contains"] = arguments.contains
+    _write_json(payload, arguments.output)
+    return 0
+
+
 def run_project_command(arguments: argparse.Namespace) -> int:
     if arguments.project_command is None:
         print("usage: nds-toolkit project <subcommand> ...", file=sys.stderr)
         return 2
+    if arguments.project_command == "create":
+        return _run_create(arguments)
+    if arguments.project_command == "info":
+        return _run_info(arguments)
+    if arguments.project_command == "functions":
+        return _run_functions(arguments)
+    if arguments.project_command == "strings":
+        return _run_strings(arguments)
     raise AnalysisProjectError(
         f"project command is not implemented: {arguments.project_command}"
     )
