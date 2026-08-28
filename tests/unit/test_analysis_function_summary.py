@@ -13,10 +13,12 @@ from nds_disassembly_toolkit.analysis.model import (
 )
 from nds_disassembly_toolkit.arm32 import (
     Condition,
-    Register as ArmRegister,
     encode_branch,
     encode_bx,
     encode_load_store,
+)
+from nds_disassembly_toolkit.arm32 import (
+    Register as ArmRegister,
 )
 
 BASE = 0x02000000
