@@ -27,10 +27,22 @@ def component_id(connection: sqlite3.Connection, name: str) -> int:
 
 
 def delete_records(connection: sqlite3.Connection, component_id_value: int) -> None:
-    connection.execute("DELETE FROM xrefs WHERE source_component_id = ?", (component_id_value,))
-    connection.execute("DELETE FROM generated_symbols WHERE component_id = ?", (component_id_value,))
-    connection.execute("DELETE FROM strings WHERE component_id = ?", (component_id_value,))
-    connection.execute("DELETE FROM functions WHERE component_id = ?", (component_id_value,))
+    connection.execute(
+        "DELETE FROM xrefs WHERE source_component_id = ?",
+        (component_id_value,),
+    )
+    connection.execute(
+        "DELETE FROM generated_symbols WHERE component_id = ?",
+        (component_id_value,),
+    )
+    connection.execute(
+        "DELETE FROM strings WHERE component_id = ?",
+        (component_id_value,),
+    )
+    connection.execute(
+        "DELETE FROM functions WHERE component_id = ?",
+        (component_id_value,),
+    )
 
 
 def insert_records(
