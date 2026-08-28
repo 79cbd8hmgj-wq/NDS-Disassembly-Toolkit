@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import TracebackType
@@ -21,14 +21,18 @@ from nds_disassembly_toolkit.analysis.model import (
 from nds_disassembly_toolkit.analysis.project.cfg_records import (
     cfg_from_database,
     delete_cfgs,
-    insert_cfgs as _insert_cfgs,
     validate_cfg_bundle,
+)
+from nds_disassembly_toolkit.analysis.project.cfg_records import (
+    insert_cfgs as _insert_cfgs,
 )
 from nds_disassembly_toolkit.analysis.project.flow_records import (
     data_flow_from_database,
     delete_data_flows,
-    insert_data_flows as _insert_data_flows,
     validate_data_flow_bundle,
+)
+from nds_disassembly_toolkit.analysis.project.flow_records import (
+    insert_data_flows as _insert_data_flows,
 )
 from nds_disassembly_toolkit.analysis.project.manifest import (
     load_manifest,
@@ -46,10 +50,12 @@ from nds_disassembly_toolkit.analysis.project.records import (
     component_id,
     delete_records,
     function_from_row,
-    insert_records as _insert_records,
     string_from_row,
     symbol_from_row,
     xref_from_row,
+)
+from nds_disassembly_toolkit.analysis.project.records import (
+    insert_records as _insert_records,
 )
 from nds_disassembly_toolkit.analysis.project.schema import (
     ANALYSIS_MODEL_VERSION,
@@ -197,7 +203,7 @@ def _update_component_analysis_metadata(
         """,
         (
             _current_toolkit_version(),
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
             component_id_value,
         ),
     )
