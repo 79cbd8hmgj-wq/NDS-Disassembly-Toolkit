@@ -76,7 +76,10 @@ def test_open_rejects_future_project_version(tmp_path: Path) -> None:
         AnalysisProject.open(root)
 
 
-@pytest.mark.parametrize("database", ["/tmp/analysis.sqlite", "../analysis.sqlite", "db/analysis.sqlite"])
+@pytest.mark.parametrize(
+    "database",
+    ["/tmp/analysis.sqlite", "../analysis.sqlite", "db/analysis.sqlite"],
+)
 def test_open_rejects_unsafe_database_path(tmp_path: Path, database: str) -> None:
     root = tmp_path / "game.ndsre"
     root.mkdir()
