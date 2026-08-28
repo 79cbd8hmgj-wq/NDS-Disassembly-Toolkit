@@ -15,13 +15,13 @@ from nds_disassembly_toolkit.analysis.model import (
 )
 from nds_disassembly_toolkit.arm32 import (
     DataOpcode,
-    Register as ArmRegister,
     encode_bx,
     encode_data_processing_immediate,
     encode_data_processing_register,
     encode_load_store,
     encode_mul,
 )
+from nds_disassembly_toolkit.arm32 import Register as ArmRegister
 
 BASE = 0x02000000
 
