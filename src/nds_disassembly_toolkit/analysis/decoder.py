@@ -335,9 +335,10 @@ def _register_list(
     registers = tuple(
         sorted(
             {
-                operand.register
+                register
                 for operand in converted
-                if operand.kind is OperandKind.REGISTER and operand.register is not None
+                if operand.kind is OperandKind.REGISTER
+                and (register := operand.register) is not None
             },
             key=_register_number,
         )
