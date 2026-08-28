@@ -27,7 +27,10 @@ from nds_disassembly_toolkit.analysis.model import (
     NumericMatch,
     PointerReference,
     StringRecord,
+    Symbol,
     SymbolCandidate,
+    SymbolKind,
+    SymbolTable,
     UnresolvedTransfer,
 )
 from nds_disassembly_toolkit.analysis.numeric import (
@@ -40,6 +43,7 @@ from nds_disassembly_toolkit.analysis.strings import (
     filter_strings,
     find_pointer_references,
 )
+from nds_disassembly_toolkit.analysis.symbols import build_symbol_table
 from nds_disassembly_toolkit.analysis.xrefs import (
     build_call_graph,
     build_code_xrefs,
@@ -66,7 +70,10 @@ __all__ = [
     "NumericMatch",
     "PointerReference",
     "StringRecord",
+    "Symbol",
     "SymbolCandidate",
+    "SymbolKind",
+    "SymbolTable",
     "UnresolvedTransfer",
     "analyze_components",
     "arm_function_starts",
@@ -74,6 +81,7 @@ __all__ = [
     "build_code_xrefs",
     "build_data_xrefs",
     "build_function_cfg",
+    "build_symbol_table",
     "build_xref_index",
     "cluster_numeric_matches",
     "decode_instruction",
