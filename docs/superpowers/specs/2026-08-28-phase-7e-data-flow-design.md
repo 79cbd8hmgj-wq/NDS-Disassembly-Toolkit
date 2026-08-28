@@ -77,16 +77,18 @@ Aliases such as `sp`, `lr`, and `pc` must normalize to the same canonical regist
 The initial lattice is deliberately small:
 
 - `UNKNOWN`: no single value can be proven;
-- `CONSTANT`: an exact integer value is proven;
-- `ADDRESS`: an exact runtime address is proven, with component provenance when component ownership is established.
+- `CONSTANT`: an exact integer value is proven, but no address role is yet proven;
+- `ADDRESS`: an exact runtime address role is proven, with component provenance only when component ownership is established.
 
 Known values carry deterministic provenance identifying the instruction addresses/evidence that established them. Provenance is metadata for explanation and later persistence; it must not change value equality or create non-converging fixed-point states.
 
+An exact integer is not promoted to `ADDRESS` merely because its numeric value resembles a runtime pointer. Address role must be established by instruction semantics or by a proven use as an address. This avoids turning arbitrary constants into pointers.
+
 ### Address provenance
 
-An address value may record a concrete component only when that ownership follows from existing component context or an exact component-relative operation. A numeric value that happens to fall inside one or more component runtime ranges does not gain component ownership by range search.
+An `ADDRESS` may have no component owner when the address role is proven but component ownership is not. A concrete component is recorded only when that ownership follows from the current component context or another exact component-relative fact.
 
-This is required for Nintendo DS overlays, where multiple components may legitimately occupy the same runtime addresses at different times.
+A numeric value that happens to fall inside one or more component runtime ranges does not gain component ownership by global range search. This is required for Nintendo DS overlays, where multiple components may legitimately occupy the same runtime addresses at different times.
 
 ## Phase 7E1: data-flow result model
 
@@ -115,9 +117,9 @@ Minimum supported cases:
 
 - register-to-register move copies the abstract value and extends provenance;
 - immediate move produces `CONSTANT`;
-- supported add/subtract with exact operands produces an exact constant or preserves an address when adding/subtracting an exact displacement from a proven address;
-- supported PC-relative construction produces a proven address using architecture-correct PC semantics;
-- an exact literal-pool load may read the literal from the supplied `Component` and produce the exact loaded integer/address when the effective address is proven and in bounds;
+- supported add/subtract with exact operands produces an exact constant or preserves an `ADDRESS` when adding/subtracting an exact displacement from a proven address;
+- supported PC-relative construction produces a proven `ADDRESS` using architecture-correct PC semantics;
+- an exact literal-pool load reads the literal from the supplied `Component` and initially produces an exact `CONSTANT`; if a later supported operation or memory operand proves that value is being used as an address, it may be promoted to `ADDRESS` without guessing component ownership;
 - decoder-proven writes by unsupported instructions invalidate the written registers to `UNKNOWN`;
 - a supported instruction with insufficiently known inputs writes `UNKNOWN` to affected destinations rather than retaining stale state.
 
@@ -134,7 +136,7 @@ Join rules are conservative:
 - identical exact values on all reachable incoming paths retain that value;
 - differing exact values become `UNKNOWN`;
 - exact plus unknown becomes `UNKNOWN`;
-- address component provenance must also agree to survive a join;
+- address role and component provenance must agree to survive a join;
 - missing/unreachable predecessor state must not fabricate a value.
 
 Loops are handled by iteration to a fixed point. The finite lattice and provenance normalization must guarantee convergence.
@@ -203,7 +205,7 @@ This summary is intended to become a direct input to Phase 7F persistence. Phase
 
 Analysis rejects structurally inconsistent inputs such as a CFG belonging to a different component.
 
-Malformed or out-of-range literal-pool accesses do not crash whole-function analysis; the affected value becomes unknown and may record a deterministic precision-loss reason.
+Malformed or out-of-range literal-pool accesses do not crash whole-function analysis; the affected value becomes `UNKNOWN` and may record a deterministic precision-loss reason.
 
 Unsupported instructions are not fatal unless their decoder metadata is internally inconsistent. Known writes are invalidated conservatively.
 
@@ -228,7 +230,7 @@ Required cases include:
 3. immediate and register moves propagate values;
 4. add/subtract propagate exact constants and proven addresses;
 5. PC-relative address construction uses correct ARM/Thumb PC semantics;
-6. literal-pool loads read exact in-component values and reject/outdate invalid accesses safely;
+6. literal-pool loads read exact in-component values, remain `CONSTANT` until address use is proven, and handle invalid accesses safely;
 7. CFG joins preserve identical values and degrade conflicting values to unknown;
 8. loops converge deterministically;
 9. conditional writes merge with incoming state;
