@@ -20,6 +20,16 @@ def test_analysis_register_aliases_are_canonical() -> None:
     assert register.PC is register.R15
 
 
+def test_analysis_register_names_normalize_gpr_aliases() -> None:
+    register = analysis_model.Register
+
+    assert register.from_name("r0") is register.R0
+    assert register.from_name("SP") is register.SP
+    assert register.from_name("lr") is register.LR
+    assert register.from_name("pc") is register.PC
+    assert register.from_name("cpsr") is None
+
+
 def test_decoded_instruction_has_compatible_default_semantics() -> None:
     assert hasattr(analysis_model, "InstructionSemantics")
 
@@ -34,6 +44,57 @@ def test_decoded_instruction_has_compatible_default_semantics() -> None:
     )
 
     assert decoded.semantics == analysis_model.InstructionSemantics()
+
+
+def test_instruction_semantics_models_typed_memory_and_register_lists() -> None:
+    assert hasattr(analysis_model, "OperandKind")
+    assert hasattr(analysis_model, "OperandAccess")
+    assert hasattr(analysis_model, "MemoryOperand")
+    assert hasattr(analysis_model, "InstructionOperand")
+
+    register = analysis_model.Register
+    memory = analysis_model.MemoryOperand(
+        base=register.SP,
+        index=None,
+        scale=1,
+        displacement=12,
+    )
+    load = analysis_model.InstructionOperand(
+        kind=analysis_model.OperandKind.MEMORY,
+        access=analysis_model.OperandAccess.READ,
+        memory=memory,
+        access_width=4,
+    )
+    register_list = analysis_model.InstructionOperand(
+        kind=analysis_model.OperandKind.REGISTER_LIST,
+        access=analysis_model.OperandAccess.READ,
+        registers=(register.R4, register.LR),
+    )
+    semantics = analysis_model.InstructionSemantics(
+        operands=(load, register_list),
+        registers_read=(register.SP, register.R4, register.LR),
+        registers_written=(),
+        writeback=True,
+    )
+
+    assert load.memory == memory
+    assert load.access_width == 4
+    assert register_list.registers == (register.R4, register.LR)
+    assert semantics.operands == (load, register_list)
+    assert semantics.writeback
+
+
+def test_instruction_operand_rejects_payload_for_wrong_kind() -> None:
+    assert hasattr(analysis_model, "OperandKind")
+    assert hasattr(analysis_model, "OperandAccess")
+    assert hasattr(analysis_model, "InstructionOperand")
+
+    with pytest.raises(ValueError, match="payload"):
+        analysis_model.InstructionOperand(
+            kind=analysis_model.OperandKind.REGISTER,
+            access=analysis_model.OperandAccess.READ,
+            immediate=3,
+        )
 
 
 def test_decode_arm_direct_call() -> None:
