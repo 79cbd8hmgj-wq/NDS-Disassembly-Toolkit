@@ -6,7 +6,17 @@ from nds_disassembly_toolkit.errors import AnalysisProjectError
 
 SCHEMA_VERSION = 1
 ANALYSIS_MODEL_VERSION = 1
-REQUIRED_TABLES = frozenset({"metadata", "components", "location_annotations"})
+REQUIRED_TABLES = frozenset(
+    {
+        "metadata",
+        "components",
+        "location_annotations",
+        "functions",
+        "strings",
+        "generated_symbols",
+        "xrefs",
+    }
+)
 
 _SCHEMA_SQL = """
 CREATE TABLE metadata (
@@ -34,6 +44,55 @@ CREATE TABLE location_annotations (
     PRIMARY KEY(component_id, address),
     FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE
 );
+
+CREATE TABLE functions (
+    component_id INTEGER NOT NULL,
+    address INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    instruction_set TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY(component_id, address, instruction_set),
+    FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE
+);
+
+CREATE TABLE strings (
+    component_id INTEGER NOT NULL,
+    address INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY(component_id, address),
+    FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE
+);
+
+CREATE TABLE generated_symbols (
+    component_id INTEGER NOT NULL,
+    address INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    instruction_set TEXT,
+    confidence TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY(component_id, address, name),
+    FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE
+);
+
+CREATE TABLE xrefs (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    source_component_id INTEGER NOT NULL,
+    source_address INTEGER NOT NULL,
+    source_function_address INTEGER,
+    source_instruction_set TEXT,
+    target_address INTEGER NOT NULL,
+    target_instruction_set TEXT,
+    FOREIGN KEY(source_component_id) REFERENCES components(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_symbol_name ON generated_symbols(name);
+CREATE INDEX idx_xref_source ON xrefs(source_component_id, source_address);
+CREATE INDEX idx_xref_target ON xrefs(target_address);
 """
 
 
