@@ -188,6 +188,38 @@ CFG fallthrough edges are excluded because they describe local graph topology ra
 
 Phase 7C still does not guess indirect targets or assign symbol names. Phase 7D symbol recovery should consume and annotate these xrefs rather than create a separate reference database.
 
+## Phase 7D symbol recovery
+
+Phase 7D adds one deterministic symbol layer over the records already produced by the toolkit. It does not re-decode instructions and does not infer semantic game names.
+
+```python
+from nds_disassembly_toolkit.analysis import build_symbol_table
+
+symbols = build_symbol_table(
+    functions=result.functions,
+    cfgs=(cfg,),
+    strings=(),
+    candidates=(),
+    components=(component,),
+)
+```
+
+Symbol identity is **component-aware**: `(component, runtime_address)`. This is required for Nintendo DS overlays because two overlays may legitimately occupy the same runtime address at different times. `SymbolTable.at_address()` and `by_name()` therefore return tuples rather than assuming either addresses or generated names are globally unique.
+
+The builder emits structural names only:
+
+- discovered function entry: `func_XXXXXXXX`;
+- local CFG branch target: `loc_XXXXXXXX`;
+- discovered string: `str_XXXXXXXX`.
+
+Local branch labels are created only when a `BRANCH` edge targets the start of a basic block in the same CFG/component. External branch targets are deliberately not assigned to an overlay by runtime range alone.
+
+Caller-provided `SymbolCandidate` names have naming precedence over generated names. Structural type is preserved: an explicitly named discovered function remains `SymbolKind.FUNCTION`, while a candidate with no stronger structural evidence becomes `SymbolKind.NAMED`. Evidence strings are de-duplicated and sorted, and confidence keeps the strongest stable level in the order `high > medium > low > unknown`.
+
+When `components` are supplied, validation is performed by component **name**, not by searching overlapping runtime ranges. Duplicate component names, unknown component references, out-of-range addresses, inconsistent component-relative offsets, and empty explicit names are rejected. Overlapping components remain valid and independent.
+
+Phase 7D does not infer structs, signatures, global data types, jump tables, indirect targets, or persistent user annotations. Those remain later analysis phases.
+
 ## Ownership boundary
 
 The toolkit owns the mechanics above. A game project should own the interpretation layer: known strings, record schemas, confirmed addresses, symbol names, confidence rules, and runtime evidence. Those facts should not be promoted into the generic toolkit unless they are Nintendo DS format behavior rather than game behavior.
