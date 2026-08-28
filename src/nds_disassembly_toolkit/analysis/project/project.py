@@ -11,6 +11,7 @@ from nds_disassembly_toolkit.analysis.model import (
     CrossReference,
     FunctionCandidate,
     FunctionControlFlowGraph,
+    FunctionDataFlow,
     InstructionSet,
     StringRecord,
     Symbol,
@@ -20,6 +21,12 @@ from nds_disassembly_toolkit.analysis.project.cfg_records import (
     delete_cfgs,
     insert_cfgs,
     validate_cfg_bundle,
+)
+from nds_disassembly_toolkit.analysis.project.flow_records import (
+    data_flow_from_database,
+    delete_data_flows,
+    insert_data_flows,
+    validate_data_flow_bundle,
 )
 from nds_disassembly_toolkit.analysis.project.manifest import (
     load_manifest,
@@ -197,6 +204,7 @@ class AnalysisProject:
         connection = self._require_writable()
         identity = ComponentAnalysisIdentity.from_component(bundle.component)
         validate_cfg_bundle(bundle)
+        validate_data_flow_bundle(bundle)
         try:
             connection.execute(
                 """
@@ -215,10 +223,12 @@ class AnalysisProject:
                 ),
             )
             component_id_value = component_id(connection, identity.name)
+            delete_data_flows(connection, component_id_value)
             delete_cfgs(connection, component_id_value)
             delete_records(connection, component_id_value)
             insert_records(connection, component_id_value, bundle)
             insert_cfgs(connection, component_id_value, bundle.cfgs)
+            insert_data_flows(connection, component_id_value, bundle.data_flows)
             connection.commit()
         except AnalysisProjectError:
             connection.rollback()
@@ -348,6 +358,23 @@ class AnalysisProject:
             raise
         except sqlite3.Error as exc:
             raise AnalysisProjectError("cannot query analysis CFG") from exc
+
+    def data_flow(
+        self,
+        component: str,
+        address: int,
+        instruction_set: InstructionSet,
+    ) -> FunctionDataFlow | None:
+        connection = self._require_connection()
+        cfg = self.cfg(component, address, instruction_set)
+        if cfg is None:
+            return None
+        try:
+            return data_flow_from_database(connection, cfg.function, cfg)
+        except AnalysisProjectError:
+            raise
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis data flow") from exc
 
     def strings(self, *, component: str | None = None) -> tuple[StringRecord, ...]:
         connection = self._require_connection()
