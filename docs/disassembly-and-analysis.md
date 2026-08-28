@@ -287,3 +287,48 @@ Phase 7E2 does **not** infer source-level function signatures, parameter names, 
 ## Ownership boundary
 
 The toolkit owns the mechanics above. A game project should own the interpretation layer: known strings, record schemas, confirmed addresses, symbol names, confidence rules, and runtime evidence. Those facts should not be promoted into the generic toolkit unless they are Nintendo DS format behavior rather than game behavior.
+
+## Phase 7F persistent analysis projects
+
+Phase 7F adds a persistent, game-neutral reverse-engineering project format for the toolkit-owned analysis models produced by Phases 7A through 7E. A project is a directory ending in `.ndsre` with two files:
+
+```text
+game.ndsre/
+  project.json
+  analysis.sqlite
+```
+
+`project.json` identifies the project-format version and the relative SQLite database path. `analysis.sqlite` stores component fingerprints, generated analysis records, and user annotations. Commercial ROM bytes, extracted component payloads, and other binary component contents are **not** embedded in the project database; component freshness is based on name, runtime base, size, and SHA-256.
+
+Create a project and persist one coherent component analysis bundle with:
+
+```python
+from pathlib import Path
+
+from nds_disassembly_toolkit.analysis import (
+    AnalysisProject,
+    InstructionSet,
+)
+
+with AnalysisProject.create(Path("game.ndsre")) as project:
+    project.store_component_analysis(bundle)
+
+with AnalysisProject.open(Path("game.ndsre"), read_only=True) as project:
+    status = project.component_status(component)
+    function = project.function("arm9", 0x02012340, InstructionSet.ARM)
+    flow = project.data_flow("arm9", 0x02012340, InstructionSet.ARM)
+```
+
+`ComponentAnalysisBundle` is the generated-analysis write boundary. It can carry functions, CFGs, typed instruction semantics, strings, symbols, xrefs, data flow, stack state, warnings, and `FunctionSummary` records for one component. Replacement is atomic: validation happens before mutation, generated rows are replaced in one transaction, and a failure leaves the previous committed analysis intact.
+
+The query API includes component identities/freshness, function lookup/listing, stored strings, symbols by location or name, xrefs to/from addresses, CFG retrieval, data-flow/summary retrieval, and location annotations. Returned tuples use deterministic ordering, and private SQLite row IDs never become semantic identity.
+
+Nintendo DS overlays remain independent even when two components share the same runtime address. Function and symbol identity stays component-aware, and ARM versus Thumb identity remains explicit where required.
+
+`LocationAnnotation` stores user-controlled name overrides, comments, tags, and bookmarks at `(component, address)`. Annotations are deliberately separate from generated symbols and survive successful or failed re-analysis, including when the current generated analysis no longer has a record at the annotated address.
+
+Opening a project read-only uses SQLite read-only mode and does not create or mutate the database. Unsupported or malformed project/schema versions, unsafe database paths, invalid model relationships, and writes through a read-only project raise `AnalysisProjectError`; there is no implicit migration or repair in schema version 1.
+
+Successful generated-analysis writes record toolkit-version and UTC analysis-time provenance without making either field part of freshness equality. The project format uses SQLite rollback-journal mode so a closed `.ndsre` directory remains self-contained and copyable as its manifest plus database.
+
+Phase 7F is a persistence and query substrate. Rich interactive commands such as project browsing, fuzzy symbol search, `who-references`, `what-calls`, `what-writes`, and debugger-facing workflows belong to Phase 7G rather than this storage layer.
