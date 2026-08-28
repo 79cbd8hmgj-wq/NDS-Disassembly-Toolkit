@@ -371,6 +371,7 @@ def _semantics(instruction: _CapstoneInstruction) -> InstructionSemantics:
         )
         is not None
     )
+    operands: tuple[InstructionOperand, ...]
     if instruction.mnemonic.lower() in {"push", "pop"}:
         register_list = _register_list(instruction, converted)
         operands = () if register_list is None else (register_list,)
