@@ -15,12 +15,11 @@ REQUIRED_TABLES = frozenset(
         "strings",
         "generated_symbols",
         "xrefs",
-        "cfgs",
         "basic_blocks",
         "instructions",
         "cfg_edges",
         "unresolved_transfers",
-        "cfg_decode_failures",
+        "decode_failures",
     }
 )
 
@@ -96,38 +95,36 @@ CREATE TABLE xrefs (
     FOREIGN KEY(source_component_id) REFERENCES components(id) ON DELETE CASCADE
 );
 
-CREATE TABLE cfgs (
+CREATE TABLE basic_blocks (
     component_id INTEGER NOT NULL,
     function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    address INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
     instruction_set TEXT NOT NULL,
-    PRIMARY KEY(component_id, function_address, instruction_set),
-    FOREIGN KEY(component_id, function_address, instruction_set)
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        address,
+        instruction_set
+    ),
+    FOREIGN KEY(component_id, function_address, function_instruction_set)
         REFERENCES functions(component_id, address, instruction_set)
         ON DELETE CASCADE
 );
 
-CREATE TABLE basic_blocks (
-    id INTEGER PRIMARY KEY,
+CREATE TABLE instructions (
     component_id INTEGER NOT NULL,
     function_address INTEGER NOT NULL,
     function_instruction_set TEXT NOT NULL,
-    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    block_address INTEGER NOT NULL,
+    block_instruction_set TEXT NOT NULL,
     address INTEGER NOT NULL,
-    offset INTEGER NOT NULL,
-    instruction_set TEXT NOT NULL,
-    UNIQUE(component_id, function_address, function_instruction_set, ordinal),
-    FOREIGN KEY(component_id, function_address, function_instruction_set)
-        REFERENCES cfgs(component_id, function_address, instruction_set)
-        ON DELETE CASCADE
-);
-
-CREATE TABLE instructions (
-    id INTEGER PRIMARY KEY,
-    block_id INTEGER NOT NULL,
     ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
-    address INTEGER NOT NULL,
     size INTEGER NOT NULL CHECK(size > 0),
-    data BLOB NOT NULL,
+    data_hex TEXT NOT NULL,
     mnemonic TEXT NOT NULL,
     operands TEXT NOT NULL,
     instruction_set TEXT NOT NULL,
@@ -136,63 +133,89 @@ CREATE TABLE instructions (
     target_instruction_set TEXT,
     conditional INTEGER NOT NULL CHECK(conditional IN (0, 1)),
     semantics_json TEXT NOT NULL,
-    UNIQUE(block_id, ordinal),
-    FOREIGN KEY(block_id) REFERENCES basic_blocks(id) ON DELETE CASCADE
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        address
+    ),
+    FOREIGN KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        block_address,
+        block_instruction_set
+    ) REFERENCES basic_blocks(
+        component_id,
+        function_address,
+        function_instruction_set,
+        address,
+        instruction_set
+    ) ON DELETE CASCADE
 );
 
 CREATE TABLE cfg_edges (
-    id INTEGER PRIMARY KEY,
     component_id INTEGER NOT NULL,
     function_address INTEGER NOT NULL,
     function_instruction_set TEXT NOT NULL,
-    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
     source_address INTEGER NOT NULL,
     source_instruction_address INTEGER NOT NULL,
     target_address INTEGER NOT NULL,
     target_instruction_set TEXT NOT NULL,
     kind TEXT NOT NULL,
-    UNIQUE(component_id, function_address, function_instruction_set, ordinal),
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        source_instruction_address,
+        target_address,
+        target_instruction_set,
+        kind
+    ),
     FOREIGN KEY(component_id, function_address, function_instruction_set)
-        REFERENCES cfgs(component_id, function_address, instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
         ON DELETE CASCADE
 );
 
 CREATE TABLE unresolved_transfers (
-    id INTEGER PRIMARY KEY,
     component_id INTEGER NOT NULL,
     function_address INTEGER NOT NULL,
     function_instruction_set TEXT NOT NULL,
-    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
     source_address INTEGER NOT NULL,
     instruction_set TEXT NOT NULL,
     control_flow TEXT NOT NULL,
     mnemonic TEXT NOT NULL,
     operands TEXT NOT NULL,
-    UNIQUE(component_id, function_address, function_instruction_set, ordinal),
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        source_address
+    ),
     FOREIGN KEY(component_id, function_address, function_instruction_set)
-        REFERENCES cfgs(component_id, function_address, instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
         ON DELETE CASCADE
 );
 
-CREATE TABLE cfg_decode_failures (
+CREATE TABLE decode_failures (
     component_id INTEGER NOT NULL,
     function_address INTEGER NOT NULL,
     function_instruction_set TEXT NOT NULL,
-    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
     address INTEGER NOT NULL,
-    PRIMARY KEY(component_id, function_address, function_instruction_set, ordinal),
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        address
+    ),
     FOREIGN KEY(component_id, function_address, function_instruction_set)
-        REFERENCES cfgs(component_id, function_address, instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
         ON DELETE CASCADE
 );
 
 CREATE INDEX idx_symbol_name ON generated_symbols(name);
 CREATE INDEX idx_xref_source ON xrefs(source_component_id, source_address);
 CREATE INDEX idx_xref_target ON xrefs(target_address);
-CREATE INDEX idx_block_function
-    ON basic_blocks(component_id, function_address, function_instruction_set);
-CREATE INDEX idx_cfg_edge_function
-    ON cfg_edges(component_id, function_address, function_instruction_set);
 """
 
 
