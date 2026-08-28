@@ -251,6 +251,39 @@ Provenance records the instruction addresses that contributed to supported exact
 
 Phase 7E1 remains intraprocedural and does not perform memory alias analysis, structure/type inference, whole-program symbolic execution, or stack/ABI recovery. Stack frames, arguments, and return summaries are the separate Phase 7E2 layer built on this same flow model.
 
+## Phase 7E2 stack frames, arguments, and return evidence
+
+Phase 7E2 extends the **same** Phase 7E fixed-point state with entry-SP-relative stack facts and entry-argument liveness. It does not introduce another CFG, re-decode instructions, or parse `DecodedInstruction.operands`. `analyze_data_flow()` now returns a `FunctionDataFlow` whose `summary` contains conservative stack, argument, and return evidence when the function is analyzed.
+
+```python
+flow = analyze_data_flow(cfg, component)
+summary = flow.summary
+
+if summary is not None:
+    frame_size = summary.stack_frame.frame_size
+    arguments = summary.arguments
+    returns = summary.returns
+```
+
+Stack position is expressed relative to function-entry SP. The solver tracks exact stack displacement through supported ARM/Thumb `push`, `pop`, and immediate `add/sub sp` forms. Identical stack facts survive CFG joins; conflicting depths become unknown rather than selecting a path. Explicit `mov frame_register, sp` setup is tracked while the frame register remains unmodified. The ARM `fp` register spelling emitted by Capstone is canonicalized to toolkit register `r11` at the decoder/model boundary.
+
+`StackAnalysis` derives slots from the finalized typed flow records. SP-relative or proven frame-pointer-relative memory accesses are converted to entry-SP-relative offsets and preserve decoder-proven access width and load/store direction. Slot classification is structural:
+
+- pushed registers occupy `SAVED_REGISTER` slots in canonical ascending-address order;
+- negative entry-SP offsets not identified as saves are `LOCAL` slots;
+- non-negative entry-SP offsets are `INCOMING_ARGUMENT` slots;
+- insufficiently proven stack locations are not fabricated.
+
+`StackFrame.frame_size` records the deepest proven negative SP displacement reached. If later control-flow joins lose exact stack depth, the proven maximum frame extent remains useful while `stack_depth_known` reports that complete depth tracking was not preserved.
+
+Register-argument evidence is intentionally conservative. Entry values in `r0`-`r3` are considered live until decoder-proven writes replace them; a read before overwrite records evidence for that incoming argument. Read/write instructions record the read first and then kill liveness. Calls kill the caller-saved entry-argument liveness, and CFG joins intersect liveness so an argument is not claimed where one path already overwrote it. Proven incoming stack-slot accesses are exposed as stack argument evidence without inventing a C parameter index.
+
+At every reachable return instruction, the summary records the `r0` abstract value from the instruction's **before** state. Distinct return sites remain separate and deterministically sorted, and an unproven return value remains `UNKNOWN` rather than receiving a guessed type or value.
+
+The stable public models include `StackAccess`, `StackSlot`, `StackFrame`, `StackState`, `StackAnalysis`, `ArgumentEvidence`, `ReturnEvidence`, and `FunctionSummary`, with their associated enums. `analyze_stack()` remains an internal/module-level derivation helper in `analysis.stack`; normal callers consume `analyze_data_flow(...).summary` so stack and ABI evidence cannot drift from the primary data-flow result.
+
+Phase 7E2 does **not** infer source-level function signatures, parameter names, C types, general memory aliases, callee summaries, interprocedural return propagation, symbolic execution, or decompiled source. Those remain later or explicitly out-of-scope capabilities.
+
 ## Ownership boundary
 
 The toolkit owns the mechanics above. A game project should own the interpretation layer: known strings, record schemas, confirmed addresses, symbol names, confidence rules, and runtime evidence. Those facts should not be promoted into the generic toolkit unless they are Nintendo DS format behavior rather than game behavior.
