@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from nds_disassembly_toolkit.analysis.model import (
     AbstractValue,
@@ -22,6 +23,7 @@ from nds_disassembly_toolkit.analysis.model import (
     Register,
     RegisterState,
     ShiftKind,
+    StackState,
 )
 
 _U32_MASK = 0xFFFFFFFF
@@ -35,6 +37,12 @@ _CALLER_CLOBBERED = (
     Register.LR,
 )
 _BlockKey = tuple[int, InstructionSet]
+
+
+@dataclass(frozen=True)
+class _FlowState:
+    registers: RegisterState
+    stack: StackState
 
 
 def _u32(value: int) -> int:
@@ -114,6 +122,19 @@ def _same_state(
     )
 
 
+def _same_flow_state(
+    left: _FlowState,
+    right: _FlowState,
+    *,
+    include_provenance: bool,
+) -> bool:
+    return left.stack == right.stack and _same_state(
+        left.registers,
+        right.registers,
+        include_provenance=include_provenance,
+    )
+
+
 def _join_values(
     values: Sequence[AbstractValue],
     *,
@@ -158,6 +179,38 @@ def _join_states(
         if value.kind is not AbstractValueKind.UNKNOWN:
             values.append((register, value))
     return RegisterState(tuple(values))
+
+
+def _join_stack_states(states: Sequence[StackState]) -> StackState:
+    if not states:
+        return StackState(offset=None)
+    first_offset = states[0].offset
+    offset = first_offset if all(state.offset == first_offset for state in states) else None
+    common = dict(states[0].frame_pointers)
+    for state in states[1:]:
+        current = dict(state.frame_pointers)
+        common = {
+            register: value
+            for register, value in common.items()
+            if current.get(register) == value
+        }
+    return StackState(offset=offset, frame_pointers=tuple(common.items()))
+
+
+def _join_flow_states(
+    states: Sequence[_FlowState],
+    *,
+    keep_provenance: bool,
+) -> _FlowState:
+    if not states:
+        return _FlowState(RegisterState(), StackState(offset=None))
+    return _FlowState(
+        registers=_join_states(
+            tuple(state.registers for state in states),
+            keep_provenance=keep_provenance,
+        ),
+        stack=_join_stack_states(tuple(state.stack for state in states)),
+    )
 
 
 def _unshifted(operand: InstructionOperand) -> bool:
@@ -361,7 +414,7 @@ def _literal_load_result(
     )
 
 
-def _transfer_executed(
+def _transfer_registers_executed(
     state: RegisterState,
     instruction: DecodedInstruction,
     component: Component,
@@ -421,7 +474,7 @@ def _transfer_executed(
     return result
 
 
-def _transfer(
+def _transfer_registers(
     state: RegisterState,
     instruction: DecodedInstruction,
     component: Component,
@@ -429,7 +482,7 @@ def _transfer(
     *,
     record_provenance: bool,
 ) -> RegisterState:
-    executed = _transfer_executed(
+    executed = _transfer_registers_executed(
         state,
         instruction,
         component,
@@ -441,6 +494,124 @@ def _transfer(
     return _join_states(
         (state, executed),
         keep_provenance=record_provenance,
+    )
+
+
+def _register_list(instruction: DecodedInstruction) -> tuple[Register, ...] | None:
+    operands = instruction.semantics.operands
+    if len(operands) != 1 or operands[0].kind is not OperandKind.REGISTER_LIST:
+        return None
+    return operands[0].registers
+
+
+def _stack_adjustment(instruction: DecodedInstruction) -> int | None:
+    mnemonic = instruction.mnemonic.lower().split(".", maxsplit=1)[0]
+    if mnemonic not in {"add", "sub"}:
+        return None
+    operands = instruction.semantics.operands
+    immediate: int | None = None
+    if (
+        len(operands) == 3
+        and operands[0].kind is OperandKind.REGISTER
+        and operands[0].register is Register.SP
+        and operands[1].kind is OperandKind.REGISTER
+        and operands[1].register is Register.SP
+        and operands[2].kind is OperandKind.IMMEDIATE
+    ):
+        immediate = operands[2].immediate
+    elif (
+        len(operands) == 2
+        and operands[0].kind is OperandKind.REGISTER
+        and operands[0].register is Register.SP
+        and operands[1].kind is OperandKind.IMMEDIATE
+    ):
+        immediate = operands[1].immediate
+    if immediate is None:
+        return None
+    return immediate if mnemonic == "add" else -immediate
+
+
+def _frame_pointer_setup(instruction: DecodedInstruction) -> Register | None:
+    mnemonic = instruction.mnemonic.lower().split(".", maxsplit=1)[0]
+    operands = instruction.semantics.operands
+    if (
+        mnemonic != "mov"
+        or len(operands) != 2
+        or operands[0].kind is not OperandKind.REGISTER
+        or operands[0].register is None
+        or operands[0].register in {Register.SP, Register.PC}
+        or operands[1].kind is not OperandKind.REGISTER
+        or operands[1].register is not Register.SP
+    ):
+        return None
+    return operands[0].register
+
+
+def _transfer_stack_executed(
+    state: StackState,
+    instruction: DecodedInstruction,
+) -> StackState:
+    frame_pointers = dict(state.frame_pointers)
+    for register in instruction.semantics.registers_written:
+        frame_pointers.pop(register, None)
+
+    mnemonic = instruction.mnemonic.lower().split(".", maxsplit=1)[0]
+    register_list = _register_list(instruction)
+    offset = state.offset
+    handled_sp_write = False
+
+    if mnemonic == "push" and register_list is not None:
+        if offset is not None:
+            offset -= 4 * len(register_list)
+        handled_sp_write = True
+    elif mnemonic == "pop" and register_list is not None:
+        if offset is not None:
+            offset += 4 * len(register_list)
+        handled_sp_write = True
+    else:
+        adjustment = _stack_adjustment(instruction)
+        if adjustment is not None:
+            if offset is not None:
+                offset += adjustment
+            handled_sp_write = True
+
+    frame_pointer = _frame_pointer_setup(instruction)
+    if frame_pointer is not None and state.offset is not None:
+        frame_pointers[frame_pointer] = state.offset
+
+    if Register.SP in instruction.semantics.registers_written and not handled_sp_write:
+        offset = None
+
+    return StackState(offset=offset, frame_pointers=tuple(frame_pointers.items()))
+
+
+def _transfer_stack(
+    state: StackState,
+    instruction: DecodedInstruction,
+) -> StackState:
+    executed = _transfer_stack_executed(state, instruction)
+    if instruction.semantics.condition in {ConditionCode.AL, ConditionCode.INVALID}:
+        return executed
+    return _join_stack_states((state, executed))
+
+
+def _transfer_flow(
+    state: _FlowState,
+    instruction: DecodedInstruction,
+    component: Component,
+    warnings: set[str],
+    *,
+    record_provenance: bool,
+) -> _FlowState:
+    return _FlowState(
+        registers=_transfer_registers(
+            state.registers,
+            instruction,
+            component,
+            warnings,
+            record_provenance=record_provenance,
+        ),
+        stack=_transfer_stack(state.stack, instruction),
     )
 
 
@@ -531,17 +702,17 @@ def _flow_graph(
 
 def _run_block(
     block: BasicBlock,
-    entry: RegisterState,
+    entry: _FlowState,
     component: Component,
     warnings: set[str],
     *,
     record_provenance: bool,
-) -> tuple[RegisterState, tuple[InstructionFlowState, ...]]:
+) -> tuple[_FlowState, tuple[InstructionFlowState, ...]]:
     current = entry
     states: list[InstructionFlowState] = []
     for instruction in block.instructions:
         before = current
-        after = _transfer(
+        after = _transfer_flow(
             before,
             instruction,
             component,
@@ -551,8 +722,10 @@ def _run_block(
         states.append(
             InstructionFlowState(
                 instruction=instruction,
-                before=before,
-                after=after,
+                before=before.registers,
+                after=after.registers,
+                stack_before=before.stack,
+                stack_after=after.stack,
             )
         )
         current = after
@@ -568,18 +741,18 @@ def _solve(
     *,
     record_provenance: bool,
 ) -> tuple[
-    dict[_BlockKey, RegisterState | None],
-    dict[_BlockKey, RegisterState | None],
+    dict[_BlockKey, _FlowState | None],
+    dict[_BlockKey, _FlowState | None],
     set[str],
 ]:
-    entries: dict[_BlockKey, RegisterState | None] = {key: None for key in blocks}
-    exits: dict[_BlockKey, RegisterState | None] = {key: None for key in blocks}
+    entries: dict[_BlockKey, _FlowState | None] = {key: None for key in blocks}
+    exits: dict[_BlockKey, _FlowState | None] = {key: None for key in blocks}
     warnings: set[str] = set()
     entry_key = (cfg.function.address, cfg.function.instruction_set)
     if entry_key not in blocks:
         return entries, exits, warnings
 
-    entries[entry_key] = RegisterState()
+    entries[entry_key] = _FlowState(RegisterState(), StackState(offset=0))
     queue: deque[_BlockKey] = deque((entry_key,))
     queued = {entry_key}
     while queue:
@@ -596,7 +769,7 @@ def _solve(
             record_provenance=record_provenance,
         )
         old_exit = exits[key]
-        if old_exit is not None and _same_state(
+        if old_exit is not None and _same_flow_state(
             old_exit,
             new_exit,
             include_provenance=record_provenance,
@@ -614,12 +787,12 @@ def _solve(
             )
             if not incoming:
                 continue
-            new_entry = _join_states(
+            new_entry = _join_flow_states(
                 incoming,
                 keep_provenance=record_provenance,
             )
             old_entry = entries[successor]
-            if old_entry is not None and _same_state(
+            if old_entry is not None and _same_flow_state(
                 old_entry,
                 new_entry,
                 include_provenance=record_provenance,
@@ -633,8 +806,8 @@ def _solve(
 
 
 def _verify_semantic_convergence(
-    semantic: dict[_BlockKey, RegisterState | None],
-    enriched: dict[_BlockKey, RegisterState | None],
+    semantic: dict[_BlockKey, _FlowState | None],
+    enriched: dict[_BlockKey, _FlowState | None],
 ) -> None:
     for key, semantic_state in semantic.items():
         enriched_state = enriched[key]
@@ -642,7 +815,7 @@ def _verify_semantic_convergence(
             if semantic_state is not enriched_state:
                 raise RuntimeError("provenance pass changed data-flow reachability")
             continue
-        if not _same_state(
+        if not _same_flow_state(
             semantic_state,
             enriched_state,
             include_provenance=False,
@@ -695,14 +868,16 @@ def analyze_data_flow(
             warnings,
             record_provenance=True,
         )
-        if not _same_state(final_exit, exit_state, include_provenance=True):
+        if not _same_flow_state(final_exit, exit_state, include_provenance=True):
             raise RuntimeError("final data-flow materialization did not converge")
         block_states.append(
             BlockFlowState(
                 address=block.address,
                 instruction_set=block.instruction_set,
-                entry=entry,
-                exit=exit_state,
+                entry=entry.registers,
+                exit=exit_state.registers,
+                stack_entry=entry.stack,
+                stack_exit=exit_state.stack,
             )
         )
         instruction_states.extend(states)
