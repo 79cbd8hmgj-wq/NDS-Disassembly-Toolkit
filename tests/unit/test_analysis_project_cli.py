@@ -585,7 +585,7 @@ def test_project_function_deep_inspection_serializes_public_models(
     ][1]["memory"]
     assert memory["displacement"] == "-0x00000004"
     assert memory["base"] == "r2"
-    assert memory["index"] == "pc"
+    assert memory["index"] == "r15"
     assert payload["data_flow"]["summary"]["stack_frame"]["frame_size"] == (
         "0x00000010"
     )
