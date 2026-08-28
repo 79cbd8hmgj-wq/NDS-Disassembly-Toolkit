@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -140,9 +141,9 @@ def test_successful_replacement_removes_obsolete_rows_and_keeps_annotation(
         assert project.component_status(bundle_b.component).value == "current"
 
     row = _component_row(root)
-    assert row[2] == bundle_b.component.data.hex() or isinstance(row[2], str)
-    assert row[3] is not None
-    assert row[4] is not None
+    assert row[2] == sha256(bundle_b.component.data).hexdigest()
+    assert isinstance(row[3], str) and row[3]
+    assert isinstance(row[4], str) and row[4]
 
 
 def test_invalid_bundle_is_rejected_before_existing_analysis_is_deleted(
