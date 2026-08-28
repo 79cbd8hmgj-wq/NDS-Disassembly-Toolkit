@@ -51,6 +51,103 @@ def _generated_name(kind: SymbolKind, address: int) -> str:
     raise ValueError(f"cannot generate a structural name for {kind.value}")
 
 
+def _component_map(components: Sequence[Component]) -> dict[str, Component]:
+    result: dict[str, Component] = {}
+    for component in components:
+        if component.name in result:
+            raise ValueError(f"duplicate component name {component.name!r}")
+        result[component.name] = component
+    return result
+
+
+def _validate_location(
+    components: dict[str, Component],
+    *,
+    record_kind: str,
+    component_name: str,
+    address: int,
+    offset: int,
+) -> None:
+    component = components.get(component_name)
+    if component is None:
+        raise ValueError(
+            f"{record_kind} references unknown component {component_name!r}"
+        )
+    expected_offset = component.offset_for_address(address)
+    if offset != expected_offset:
+        raise ValueError(
+            f"{record_kind} offset 0x{offset:X} does not match "
+            f"{component_name} address 0x{address:X} (expected 0x{expected_offset:X})"
+        )
+
+
+def _validate_inputs(
+    *,
+    functions: Sequence[FunctionCandidate],
+    strings: Sequence[StringRecord],
+    cfgs: Sequence[FunctionControlFlowGraph],
+    candidates: Sequence[SymbolCandidate],
+    components: Sequence[Component],
+) -> None:
+    components_by_name = _component_map(components)
+
+    for candidate in candidates:
+        if not candidate.name.strip():
+            raise ValueError("explicit symbol candidate name cannot be empty")
+
+    if not components_by_name:
+        return
+
+    for function in functions:
+        _validate_location(
+            components_by_name,
+            record_kind="function candidate",
+            component_name=function.component,
+            address=function.address,
+            offset=function.offset,
+        )
+
+    for record in strings:
+        _validate_location(
+            components_by_name,
+            record_kind="string record",
+            component_name=record.component,
+            address=record.address,
+            offset=record.offset,
+        )
+
+    for candidate in candidates:
+        _validate_location(
+            components_by_name,
+            record_kind="symbol candidate",
+            component_name=candidate.component,
+            address=candidate.address,
+            offset=candidate.offset,
+        )
+
+    for cfg in cfgs:
+        _validate_location(
+            components_by_name,
+            record_kind="CFG function",
+            component_name=cfg.function.component,
+            address=cfg.function.address,
+            offset=cfg.function.offset,
+        )
+        for block in cfg.blocks:
+            if block.component != cfg.function.component:
+                raise ValueError(
+                    f"CFG block component {block.component!r} does not match "
+                    f"function component {cfg.function.component!r}"
+                )
+            _validate_location(
+                components_by_name,
+                record_kind="CFG block",
+                component_name=block.component,
+                address=block.address,
+                offset=block.offset,
+            )
+
+
 def _merge_symbol(
     existing: Symbol | None,
     incoming: Symbol,
@@ -98,7 +195,13 @@ def build_symbol_table(
     candidates: Sequence[SymbolCandidate] = (),
     components: Sequence[Component] = (),
 ) -> SymbolTable:
-    del components  # Component validation is added in the next Phase 7D slice.
+    _validate_inputs(
+        functions=functions,
+        strings=strings,
+        cfgs=cfgs,
+        candidates=candidates,
+        components=components,
+    )
 
     symbols: dict[_SymbolKey, Symbol] = {}
 
