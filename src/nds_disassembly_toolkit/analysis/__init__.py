@@ -64,6 +64,14 @@ from nds_disassembly_toolkit.analysis.numeric import (
     cluster_numeric_matches,
     scan_scaled_byte_rows,
 )
+from nds_disassembly_toolkit.analysis.project import (
+    AnalysisFreshness,
+    AnalysisProject,
+    AnalysisProjectMetadata,
+    ComponentAnalysisBundle,
+    ComponentAnalysisIdentity,
+    LocationAnnotation,
+)
 from nds_disassembly_toolkit.analysis.report import analyze_components, write_report
 from nds_disassembly_toolkit.analysis.strings import (
     extract_ascii_strings,
@@ -81,6 +89,9 @@ from nds_disassembly_toolkit.analysis.xrefs import (
 __all__ = [
     "AbstractValue",
     "AbstractValueKind",
+    "AnalysisFreshness",
+    "AnalysisProject",
+    "AnalysisProjectMetadata",
     "ArgumentEvidence",
     "ArgumentLocationKind",
     "BasicBlock",
@@ -89,6 +100,8 @@ __all__ = [
     "CFGEdgeKind",
     "CallGraphEdge",
     "Component",
+    "ComponentAnalysisBundle",
+    "ComponentAnalysisIdentity",
     "ConditionCode",
     "ControlFlowKind",
     "CrossReference",
@@ -105,6 +118,7 @@ __all__ = [
     "InstructionOperand",
     "InstructionSemantics",
     "InstructionSet",
+    "LocationAnnotation",
     "MemoryOperand",
     "NumericMatch",
     "OperandAccess",
