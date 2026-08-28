@@ -2,8 +2,38 @@ import struct
 
 import pytest
 
+import nds_disassembly_toolkit.analysis.model as analysis_model
 from nds_disassembly_toolkit.analysis.decoder import decode_instruction
-from nds_disassembly_toolkit.analysis.model import ControlFlowKind, InstructionSet
+from nds_disassembly_toolkit.analysis.model import (
+    ControlFlowKind,
+    DecodedInstruction,
+    InstructionSet,
+)
+
+
+def test_analysis_register_aliases_are_canonical() -> None:
+    assert hasattr(analysis_model, "Register")
+    register = analysis_model.Register
+
+    assert register.SP is register.R13
+    assert register.LR is register.R14
+    assert register.PC is register.R15
+
+
+def test_decoded_instruction_has_compatible_default_semantics() -> None:
+    assert hasattr(analysis_model, "InstructionSemantics")
+
+    decoded = DecodedInstruction(
+        address=0x02000000,
+        size=4,
+        data=b"\x00\x00\xA0\xE1",
+        mnemonic="mov",
+        operands="r0, r0",
+        instruction_set=InstructionSet.ARM,
+        control_flow=ControlFlowKind.ORDINARY,
+    )
+
+    assert decoded.semantics == analysis_model.InstructionSemantics()
 
 
 def test_decode_arm_direct_call() -> None:
