@@ -39,13 +39,21 @@ def _function() -> FunctionCandidate:
 
 def _instruction(address: int, flow: ControlFlowKind) -> DecodedInstruction:
     return DecodedInstruction(
-        address, 4, b"\x00" * 4, "bx" if flow is ControlFlowKind.RETURN else "mov", "",
-        InstructionSet.ARM, flow,
+        address,
+        4,
+        b"\x00" * 4,
+        "bx" if flow is ControlFlowKind.RETURN else "mov",
+        "",
+        InstructionSet.ARM,
+        flow,
     )
 
 
 def _cfg() -> FunctionControlFlowGraph:
-    first = (_instruction(BASE, ControlFlowKind.ORDINARY), _instruction(BASE + 4, ControlFlowKind.RETURN))
+    first = (
+        _instruction(BASE, ControlFlowKind.ORDINARY),
+        _instruction(BASE + 4, ControlFlowKind.RETURN),
+    )
     second = (
         _instruction(BASE + 0x10, ControlFlowKind.ORDINARY),
         _instruction(BASE + 0x14, ControlFlowKind.RETURN),
@@ -78,12 +86,21 @@ def _flow(cfg: FunctionControlFlowGraph) -> FunctionDataFlow:
     r1 = RegisterState(((Register.R1, constant),))
     r2 = RegisterState(((Register.R2, owned),))
     r3 = RegisterState(((Register.R3, constant),))
-    instructions = tuple(instruction for block in cfg.blocks for instruction in block.instructions)
+    instructions = tuple(
+        instruction for block in cfg.blocks for instruction in block.instructions
+    )
     return FunctionDataFlow(
         cfg.function,
         (
             BlockFlowState(BASE, InstructionSet.ARM, r0, r1, entry_stack, inner_stack),
-            BlockFlowState(BASE + 0x10, InstructionSet.ARM, r2, r3, inner_stack, exit_stack),
+            BlockFlowState(
+                BASE + 0x10,
+                InstructionSet.ARM,
+                r2,
+                r3,
+                inner_stack,
+                exit_stack,
+            ),
         ),
         (
             InstructionFlowState(instructions[0], r0, r1, entry_stack, inner_stack),
@@ -94,8 +111,20 @@ def _flow(cfg: FunctionControlFlowGraph) -> FunctionDataFlow:
         ("stack join became conservative", "indirect value remained unknown"),
         FunctionSummary(
             (
-                ArgumentEvidence(0, ArgumentLocationKind.REGISTER, Register.R0, None, (BASE,)),
-                ArgumentEvidence(None, ArgumentLocationKind.STACK, None, 0, (BASE + 0x10,)),
+                ArgumentEvidence(
+                    0,
+                    ArgumentLocationKind.REGISTER,
+                    Register.R0,
+                    None,
+                    (BASE,),
+                ),
+                ArgumentEvidence(
+                    None,
+                    ArgumentLocationKind.STACK,
+                    None,
+                    0,
+                    (BASE + 0x10,),
+                ),
             ),
             (ReturnEvidence(BASE + 4, constant), ReturnEvidence(BASE + 0x14, owned)),
             StackFrame(0x20, Register.R11, True),
@@ -108,7 +137,11 @@ def _flow(cfg: FunctionControlFlowGraph) -> FunctionDataFlow:
                         StackAccess(BASE + 0x10, StackAccessKind.LOAD, 4),
                     ),
                 ),
-                StackSlot(-4, StackSlotKind.SAVED_REGISTER, (StackAccess(BASE, StackAccessKind.STORE, 4),)),
+                StackSlot(
+                    -4,
+                    StackSlotKind.SAVED_REGISTER,
+                    (StackAccess(BASE, StackAccessKind.STORE, 4),),
+                ),
                 StackSlot(
                     0,
                     StackSlotKind.INCOMING_ARGUMENT,
@@ -126,7 +159,12 @@ def test_data_flow_and_summary_round_trip_exactly(tmp_path: Path) -> None:
     root = tmp_path / "game.ndsre"
     with AnalysisProject.create(root) as project:
         project.store_component_analysis(
-            ComponentAnalysisBundle(component, functions=(cfg.function,), cfgs=(cfg,), data_flows=(flow,))
+            ComponentAnalysisBundle(
+                component,
+                functions=(cfg.function,),
+                cfgs=(cfg,),
+                data_flows=(flow,),
+            )
         )
     with AnalysisProject.open(root, read_only=True) as project:
         stored = project.data_flow("arm9", BASE, InstructionSet.ARM)
@@ -134,7 +172,13 @@ def test_data_flow_and_summary_round_trip_exactly(tmp_path: Path) -> None:
     assert stored == flow
     assert stored is not None
     assert stored.blocks[0].entry.value(Register.R0).provenance == (BASE,)
-    assert stored.blocks[1].entry.value(Register.R2).provenance == (BASE + 0x10, BASE + 0x14)
+    assert stored.blocks[1].entry.value(Register.R2).provenance == (
+        BASE + 0x10,
+        BASE + 0x14,
+    )
     assert stored.summary is not None
     assert stored.summary.returns[0].value.provenance == (BASE, BASE + 4)
-    assert stored.summary.returns[1].value.provenance == (BASE + 0x10, BASE + 0x14)
+    assert stored.summary.returns[1].value.provenance == (
+        BASE + 0x10,
+        BASE + 0x14,
+    )
