@@ -104,10 +104,12 @@ class Register(StrEnum):
     @classmethod
     def from_name(cls, name: str) -> Register | None:
         normalized = name.strip().lower()
-        normalized = {"sp": "r13", "lr": "r14", "pc": "r15"}.get(
-            normalized,
-            normalized,
-        )
+        normalized = {
+            "fp": "r11",
+            "sp": "r13",
+            "lr": "r14",
+            "pc": "r15",
+        }.get(normalized, normalized)
         try:
             return cls(normalized)
         except ValueError:
