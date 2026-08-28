@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from nds_disassembly_toolkit.analysis.model import (
     BasicBlock,
@@ -26,6 +29,7 @@ from nds_disassembly_toolkit.analysis.model import (
 )
 from nds_disassembly_toolkit.analysis.project import (
     AnalysisProject,
+    AnalysisProjectError,
     ComponentAnalysisBundle,
 )
 
@@ -249,3 +253,90 @@ def test_semantic_storage_contains_no_capstone_objects(tmp_path: Path) -> None:
 
     assert "capstone" not in payload
     assert "csarm" not in payload
+
+
+def test_cfg_storage_uses_planned_function_keyed_hex_schema(tmp_path: Path) -> None:
+    component = Component("arm9", Path("arm9.bin"), BASE, bytes(0x100))
+    cfg = _cfg()
+    root = tmp_path / "game.ndsre"
+
+    with AnalysisProject.create(root) as project:
+        project.store_component_analysis(
+            ComponentAnalysisBundle(component, functions=(cfg.function,), cfgs=(cfg,))
+        )
+
+    with sqlite3.connect(root / "analysis.sqlite") as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        instruction_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(instructions)")
+        }
+        data_hex = tuple(
+            row[0]
+            for row in connection.execute(
+                "SELECT data_hex FROM instructions ORDER BY address"
+            )
+        )
+
+    assert "cfgs" not in tables
+    assert "decode_failures" in tables
+    assert "data_hex" in instruction_columns
+    assert "data" not in instruction_columns
+    assert data_hex == tuple(
+        instruction.data.hex()
+        for block in cfg.blocks
+        for instruction in block.instructions
+    )
+
+
+def test_cfg_preflight_rejects_wrong_block_component(tmp_path: Path) -> None:
+    component = Component("arm9", Path("arm9.bin"), BASE, bytes(0x100))
+    cfg = _cfg()
+    bad_block = replace(cfg.blocks[0], component="overlay_1")
+    bad_cfg = replace(cfg, blocks=(bad_block, *cfg.blocks[1:]))
+
+    with AnalysisProject.create(tmp_path / "game.ndsre") as project, pytest.raises(
+        AnalysisProjectError,
+        match="block component",
+    ):
+        project.store_component_analysis(
+            ComponentAnalysisBundle(
+                component,
+                functions=(cfg.function,),
+                cfgs=(bad_cfg,),
+            )
+        )
+
+
+def test_cfg_preflight_rejects_inconsistent_block_offset(tmp_path: Path) -> None:
+    component = Component("arm9", Path("arm9.bin"), BASE, bytes(0x100))
+    cfg = _cfg()
+    bad_block = replace(cfg.blocks[0], offset=4)
+    bad_cfg = replace(cfg, blocks=(bad_block, *cfg.blocks[1:]))
+
+    with AnalysisProject.create(tmp_path / "game.ndsre") as project, pytest.raises(
+        AnalysisProjectError,
+        match="block offset",
+    ):
+        project.store_component_analysis(
+            ComponentAnalysisBundle(
+                component,
+                functions=(cfg.function,),
+                cfgs=(bad_cfg,),
+            )
+        )
+
+
+def test_cfg_preflight_requires_function_in_bundle(tmp_path: Path) -> None:
+    component = Component("arm9", Path("arm9.bin"), BASE, bytes(0x100))
+    cfg = _cfg()
+
+    with AnalysisProject.create(tmp_path / "game.ndsre") as project, pytest.raises(
+        AnalysisProjectError,
+        match="bundle functions",
+    ):
+        project.store_component_analysis(ComponentAnalysisBundle(component, cfgs=(cfg,)))
