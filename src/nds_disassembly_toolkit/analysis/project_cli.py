@@ -659,6 +659,77 @@ def _run_xrefs_to(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _run_annotations(arguments: argparse.Namespace) -> int:
+    with AnalysisProject.open(arguments.project, read_only=True) as project:
+        annotations = project.annotations(component=arguments.component)
+    payload: dict[str, object] = {
+        "annotations": [_annotation_json(annotation) for annotation in annotations]
+    }
+    if arguments.component is not None:
+        payload["component"] = arguments.component
+    _write_json(payload, arguments.output)
+    return 0
+
+
+def _run_annotate(arguments: argparse.Namespace) -> int:
+    has_mutation = (
+        arguments.name is not None
+        or arguments.clear_name
+        or arguments.comment is not None
+        or arguments.clear_comment
+        or arguments.tag is not None
+        or arguments.clear_tags
+        or arguments.bookmark is not None
+    )
+    if not has_mutation:
+        raise ValueError("at least one annotation field must be changed")
+
+    with AnalysisProject.open(arguments.project, read_only=False) as project:
+        current = project.annotation(arguments.component, arguments.address)
+        if current is None:
+            current = LocationAnnotation(arguments.component, arguments.address)
+
+        if arguments.clear_name:
+            name_override = None
+        elif arguments.name is not None:
+            name_override = arguments.name
+        else:
+            name_override = current.name_override
+
+        if arguments.clear_comment:
+            comment = None
+        elif arguments.comment is not None:
+            comment = arguments.comment
+        else:
+            comment = current.comment
+
+        if arguments.clear_tags:
+            tags: tuple[str, ...] = ()
+        elif arguments.tag is not None:
+            tags = tuple(arguments.tag)
+        else:
+            tags = current.tags
+
+        bookmarked = (
+            current.bookmarked
+            if arguments.bookmark is None
+            else arguments.bookmark
+        )
+
+        updated = LocationAnnotation(
+            component=arguments.component,
+            address=arguments.address,
+            name_override=name_override,
+            comment=comment,
+            tags=tags,
+            bookmarked=bookmarked,
+        )
+        project.set_annotation(updated)
+
+    _write_json({"annotation": _annotation_json(updated)}, arguments.output)
+    return 0
+
+
 def run_project_command(arguments: argparse.Namespace) -> int:
     if arguments.project_command is None:
         print("usage: nds-toolkit project <subcommand> ...", file=sys.stderr)
@@ -679,6 +750,10 @@ def run_project_command(arguments: argparse.Namespace) -> int:
         return _run_xrefs_from(arguments)
     if arguments.project_command == "xrefs-to":
         return _run_xrefs_to(arguments)
+    if arguments.project_command == "annotations":
+        return _run_annotations(arguments)
+    if arguments.project_command == "annotate":
+        return _run_annotate(arguments)
     raise AnalysisProjectError(
         f"project command is not implemented: {arguments.project_command}"
     )
