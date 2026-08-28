@@ -221,3 +221,55 @@ class CallGraphEdge:
     callsite_address: int
     target_address: int
     target_instruction_set: InstructionSet | None
+
+
+class SymbolKind(StrEnum):
+    FUNCTION = "function"
+    LABEL = "label"
+    STRING = "string"
+    DATA = "data"
+    NAMED = "named"
+
+
+@dataclass(frozen=True)
+class Symbol:
+    component: str
+    address: int
+    offset: int
+    name: str
+    kind: SymbolKind
+    instruction_set: InstructionSet | None
+    confidence: str
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SymbolTable:
+    symbols: tuple[Symbol, ...]
+
+    def at_address(
+        self,
+        address: int,
+        *,
+        component: str | None = None,
+    ) -> tuple[Symbol, ...]:
+        return tuple(
+            symbol
+            for symbol in self.symbols
+            if symbol.address == address and (component is None or symbol.component == component)
+        )
+
+    def by_name(
+        self,
+        name: str,
+        *,
+        component: str | None = None,
+    ) -> tuple[Symbol, ...]:
+        return tuple(
+            symbol
+            for symbol in self.symbols
+            if symbol.name == name and (component is None or symbol.component == component)
+        )
+
+    def for_component(self, component: str) -> tuple[Symbol, ...]:
+        return tuple(symbol for symbol in self.symbols if symbol.component == component)
