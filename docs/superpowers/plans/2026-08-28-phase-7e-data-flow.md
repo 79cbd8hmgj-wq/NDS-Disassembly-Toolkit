@@ -262,7 +262,8 @@ git commit -m "feat: expose ARM Thumb instruction semantics"
 - Sparse immutable `RegisterState(values=())` with `value(register) -> AbstractValue`; omitted registers are unknown.
 - `InstructionFlowState(instruction: DecodedInstruction, before: RegisterState, after: RegisterState)` plus `address` property.
 - `BlockFlowState(address, instruction_set, entry, exit)`.
-- `FunctionDataFlow(function, blocks, instructions, warnings=(), summary: FunctionSummary | None = None)`; forward annotation is legal because `model.py` already uses `from __future__ import annotations`. `at_instruction`/`for_block` return a deterministic match or `None`.
+- `FunctionDataFlow(function, blocks, instructions, warnings=())`; **7E1 has no summary field**. Phase 7E2 adds the optional `FunctionSummary` field only after that type exists.
+- `FunctionDataFlow.at_instruction(address)` / `for_block(address)` return a deterministic match or `None`.
 - Public `analyze_data_flow(cfg, component) -> FunctionDataFlow`; Task 3 handles one block, Task 4 generalizes the same implementation.
 
 **Test helpers in `test_analysis_data_flow.py`:**
@@ -473,7 +474,7 @@ def _join_values(values: Sequence[AbstractValue]) -> AbstractValue:
     return _UNKNOWN
 ```
 
-Remove the Task 3 multi-block restriction. Build predecessor lists from local branch/fallthrough edges. Entry starts with empty unknown register state; non-entry blocks are unreachable until a predecessor exits. Worklist order is deterministic. Enqueue successors only when semantic exit state changes.
+Remove Task 3 multi-block restriction. Build predecessor lists from local branch/fallthrough edges. Entry starts with empty unknown register state; non-entry blocks are unreachable until a predecessor exits. Worklist order is deterministic. Enqueue successors only when semantic exit state changes.
 
 - [ ] **Step 5: Implement PC/literal/conditional/call transfer**
 
@@ -718,7 +719,7 @@ git commit -m "feat: recover stack frames and slots"
 - `ArgumentEvidence(index, kind, register, stack_offset, uses)`.
 - `ReturnEvidence(return_address, value)`.
 - `FunctionSummary(arguments, returns, stack_frame, stack_slots)`.
-- Replace forward/default summary annotation with concrete `FunctionSummary | None`.
+- Extend 7E1 `FunctionDataFlow` with `summary: FunctionSummary | None = None` **only now, after `FunctionSummary` exists**.
 - Private fixed-point state gains `entry_arguments_live: frozenset[Register]` solved in the same worklist.
 - `analyze_data_flow` fills `FunctionDataFlow.summary` by combining existing flow + `analyze_stack` + argument/return evidence.
 
