@@ -10,9 +10,15 @@ from nds_disassembly_toolkit.analysis.model import (
     Component,
     CrossReference,
     FunctionCandidate,
+    FunctionControlFlowGraph,
     InstructionSet,
     StringRecord,
     Symbol,
+)
+from nds_disassembly_toolkit.analysis.project.cfg_records import (
+    cfg_from_database,
+    delete_cfgs,
+    insert_cfgs,
 )
 from nds_disassembly_toolkit.analysis.project.manifest import (
     load_manifest,
@@ -207,8 +213,10 @@ class AnalysisProject:
                 ),
             )
             component_id_value = component_id(connection, identity.name)
+            delete_cfgs(connection, component_id_value)
             delete_records(connection, component_id_value)
             insert_records(connection, component_id_value, bundle)
+            insert_cfgs(connection, component_id_value, bundle.cfgs)
             connection.commit()
         except AnalysisProjectError:
             connection.rollback()
@@ -321,6 +329,23 @@ class AnalysisProject:
         except sqlite3.Error as exc:
             raise AnalysisProjectError("cannot query analysis function") from exc
         return None if row is None else function_from_row(row)
+
+    def cfg(
+        self,
+        component: str,
+        address: int,
+        instruction_set: InstructionSet,
+    ) -> FunctionControlFlowGraph | None:
+        connection = self._require_connection()
+        function = self.function(component, address, instruction_set)
+        if function is None:
+            return None
+        try:
+            return cfg_from_database(connection, function)
+        except AnalysisProjectError:
+            raise
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis CFG") from exc
 
     def strings(self, *, component: str | None = None) -> tuple[StringRecord, ...]:
         connection = self._require_connection()
