@@ -33,7 +33,7 @@ def test_project_scalar_parsers_reject_invalid_inputs() -> None:
         _auto_int("not-an-address")
     with pytest.raises(argparse.ArgumentTypeError, match="non-negative"):
         _auto_int("-1")
-    with pytest.raises(argparse.ArgumentTypeError, match="arm.*thumb"):
+    with pytest.raises(argparse.ArgumentTypeError, match=r"arm.*thumb"):
         _instruction_set("mips")
     with pytest.raises(ValueError, match="cannot be negative"):
         _hex(-1)
