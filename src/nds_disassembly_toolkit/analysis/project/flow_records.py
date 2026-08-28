@@ -74,6 +74,14 @@ def _value_fields(value: AbstractValue) -> tuple[str, int | None, str | None, st
     )
 
 
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise AnalysisProjectError("persisted integer value is invalid")
+    return value
+
+
 def _value_from_fields(
     kind: object,
     value: object,
@@ -83,7 +91,7 @@ def _value_from_fields(
     try:
         return AbstractValue(
             kind=AbstractValueKind(str(kind)),
-            value=None if value is None else int(value),
+            value=_optional_int(value),
             component=None if owner_component is None else str(owner_component),
             provenance=load_int_tuple(str(provenance_json)),
         )
@@ -341,8 +349,22 @@ def insert_data_flows(
                     _dump_stack_state(block.stack_exit),
                 ),
             )
-            _insert_register_state(connection, key, "block", block.address, "entry", block.entry)
-            _insert_register_state(connection, key, "block", block.address, "exit", block.exit)
+            _insert_register_state(
+                connection,
+                key,
+                "block",
+                block.address,
+                "entry",
+                block.entry,
+            )
+            _insert_register_state(
+                connection,
+                key,
+                "block",
+                block.address,
+                "exit",
+                block.exit,
+            )
         for state in flow.instructions:
             connection.execute(
                 """
@@ -635,10 +657,20 @@ def data_flow_from_database(
                 address=block.address,
                 instruction_set=block.instruction_set,
                 entry=_register_state(
-                    connection, component_id_value, function, "block", block.address, "entry"
+                    connection,
+                    component_id_value,
+                    function,
+                    "block",
+                    block.address,
+                    "entry",
                 ),
                 exit=_register_state(
-                    connection, component_id_value, function, "block", block.address, "exit"
+                    connection,
+                    component_id_value,
+                    function,
+                    "block",
+                    block.address,
+                    "exit",
                 ),
                 stack_entry=_load_stack_state(row["stack_entry_json"]),
                 stack_exit=_load_stack_state(row["stack_exit_json"]),
