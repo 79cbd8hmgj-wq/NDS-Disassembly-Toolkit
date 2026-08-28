@@ -6,7 +6,14 @@ from contextlib import suppress
 from pathlib import Path
 from types import TracebackType
 
-from nds_disassembly_toolkit.analysis.model import Component
+from nds_disassembly_toolkit.analysis.model import (
+    Component,
+    CrossReference,
+    FunctionCandidate,
+    InstructionSet,
+    StringRecord,
+    Symbol,
+)
 from nds_disassembly_toolkit.analysis.project.manifest import (
     load_manifest,
     resolve_database_path,
@@ -18,6 +25,15 @@ from nds_disassembly_toolkit.analysis.project.model import (
     ComponentAnalysisBundle,
     ComponentAnalysisIdentity,
     LocationAnnotation,
+)
+from nds_disassembly_toolkit.analysis.project.records import (
+    component_id,
+    delete_records,
+    function_from_row,
+    insert_records,
+    string_from_row,
+    symbol_from_row,
+    xref_from_row,
 )
 from nds_disassembly_toolkit.analysis.project.schema import (
     ANALYSIS_MODEL_VERSION,
@@ -190,7 +206,13 @@ class AnalysisProject:
                     identity.sha256,
                 ),
             )
+            component_id_value = component_id(connection, identity.name)
+            delete_records(connection, component_id_value)
+            insert_records(connection, component_id_value, bundle)
             connection.commit()
+        except AnalysisProjectError:
+            connection.rollback()
+            raise
         except sqlite3.Error as exc:
             connection.rollback()
             raise AnalysisProjectError("cannot store analysis component") from exc
@@ -242,6 +264,217 @@ class AnalysisProject:
         if stored == current:
             return AnalysisFreshness.CURRENT
         return AnalysisFreshness.STALE
+
+    def functions(
+        self,
+        *,
+        component: str | None = None,
+    ) -> tuple[FunctionCandidate, ...]:
+        connection = self._require_connection()
+        query = """
+            SELECT
+                components.name AS component,
+                functions.address,
+                functions.offset,
+                functions.instruction_set,
+                functions.confidence,
+                functions.evidence_json
+            FROM functions
+            JOIN components ON components.id = functions.component_id
+        """
+        parameters: tuple[str, ...] = ()
+        if component is not None:
+            query += " WHERE components.name = ?"
+            parameters = (component,)
+        query += " ORDER BY components.name, functions.address, functions.instruction_set"
+        try:
+            rows = connection.execute(query, parameters).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis functions") from exc
+        return tuple(function_from_row(row) for row in rows)
+
+    def function(
+        self,
+        component: str,
+        address: int,
+        instruction_set: InstructionSet,
+    ) -> FunctionCandidate | None:
+        connection = self._require_connection()
+        try:
+            row = connection.execute(
+                """
+                SELECT
+                    components.name AS component,
+                    functions.address,
+                    functions.offset,
+                    functions.instruction_set,
+                    functions.confidence,
+                    functions.evidence_json
+                FROM functions
+                JOIN components ON components.id = functions.component_id
+                WHERE components.name = ?
+                  AND functions.address = ?
+                  AND functions.instruction_set = ?
+                """,
+                (component, address, instruction_set.value),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis function") from exc
+        return None if row is None else function_from_row(row)
+
+    def strings(self, *, component: str | None = None) -> tuple[StringRecord, ...]:
+        connection = self._require_connection()
+        query = """
+            SELECT
+                components.name AS component,
+                strings.address,
+                strings.offset,
+                strings.text
+            FROM strings
+            JOIN components ON components.id = strings.component_id
+        """
+        parameters: tuple[str, ...] = ()
+        if component is not None:
+            query += " WHERE components.name = ?"
+            parameters = (component,)
+        query += " ORDER BY components.name, strings.address"
+        try:
+            rows = connection.execute(query, parameters).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis strings") from exc
+        return tuple(string_from_row(row) for row in rows)
+
+    def string_at(self, component: str, address: int) -> StringRecord | None:
+        connection = self._require_connection()
+        try:
+            row = connection.execute(
+                """
+                SELECT
+                    components.name AS component,
+                    strings.address,
+                    strings.offset,
+                    strings.text
+                FROM strings
+                JOIN components ON components.id = strings.component_id
+                WHERE components.name = ? AND strings.address = ?
+                """,
+                (component, address),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis string") from exc
+        return None if row is None else string_from_row(row)
+
+    def symbols_at(self, component: str, address: int) -> tuple[Symbol, ...]:
+        connection = self._require_connection()
+        try:
+            rows = connection.execute(
+                """
+                SELECT
+                    components.name AS component,
+                    generated_symbols.address,
+                    generated_symbols.offset,
+                    generated_symbols.name,
+                    generated_symbols.kind,
+                    generated_symbols.instruction_set,
+                    generated_symbols.confidence,
+                    generated_symbols.evidence_json
+                FROM generated_symbols
+                JOIN components ON components.id = generated_symbols.component_id
+                WHERE components.name = ? AND generated_symbols.address = ?
+                ORDER BY generated_symbols.name, generated_symbols.kind
+                """,
+                (component, address),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis symbols") from exc
+        return tuple(symbol_from_row(row) for row in rows)
+
+    def symbols_named(
+        self,
+        name: str,
+        *,
+        component: str | None = None,
+    ) -> tuple[Symbol, ...]:
+        connection = self._require_connection()
+        query = """
+            SELECT
+                components.name AS component,
+                generated_symbols.address,
+                generated_symbols.offset,
+                generated_symbols.name,
+                generated_symbols.kind,
+                generated_symbols.instruction_set,
+                generated_symbols.confidence,
+                generated_symbols.evidence_json
+            FROM generated_symbols
+            JOIN components ON components.id = generated_symbols.component_id
+            WHERE generated_symbols.name = ?
+        """
+        parameters: tuple[object, ...] = (name,)
+        if component is not None:
+            query += " AND components.name = ?"
+            parameters = (name, component)
+        query += " ORDER BY components.name, generated_symbols.address, generated_symbols.kind"
+        try:
+            rows = connection.execute(query, parameters).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis symbols") from exc
+        return tuple(symbol_from_row(row) for row in rows)
+
+    def xrefs_from(self, component: str, address: int) -> tuple[CrossReference, ...]:
+        connection = self._require_connection()
+        try:
+            rows = connection.execute(
+                """
+                SELECT
+                    components.name AS component,
+                    xrefs.kind,
+                    xrefs.source_address,
+                    xrefs.source_function_address,
+                    xrefs.source_instruction_set,
+                    xrefs.target_address,
+                    xrefs.target_instruction_set
+                FROM xrefs
+                JOIN components ON components.id = xrefs.source_component_id
+                WHERE components.name = ? AND xrefs.source_address = ?
+                ORDER BY xrefs.target_address, xrefs.kind, xrefs.target_instruction_set
+                """,
+                (component, address),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis xrefs") from exc
+        return tuple(xref_from_row(row) for row in rows)
+
+    def xrefs_to(
+        self,
+        address: int,
+        *,
+        source_component: str | None = None,
+    ) -> tuple[CrossReference, ...]:
+        connection = self._require_connection()
+        query = """
+            SELECT
+                components.name AS component,
+                xrefs.kind,
+                xrefs.source_address,
+                xrefs.source_function_address,
+                xrefs.source_instruction_set,
+                xrefs.target_address,
+                xrefs.target_instruction_set
+            FROM xrefs
+            JOIN components ON components.id = xrefs.source_component_id
+            WHERE xrefs.target_address = ?
+        """
+        parameters: tuple[object, ...] = (address,)
+        if source_component is not None:
+            query += " AND components.name = ?"
+            parameters = (address, source_component)
+        query += " ORDER BY components.name, xrefs.source_address, xrefs.kind"
+        try:
+            rows = connection.execute(query, parameters).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis xrefs") from exc
+        return tuple(xref_from_row(row) for row in rows)
 
     def set_annotation(self, annotation: LocationAnnotation) -> None:
         connection = self._require_writable()
