@@ -572,6 +572,57 @@ class StackAnalysis:
     slots: tuple[StackSlot, ...]
 
 
+class ArgumentLocationKind(StrEnum):
+    REGISTER = "register"
+    STACK = "stack"
+
+
+@dataclass(frozen=True)
+class ArgumentEvidence:
+    index: int | None
+    kind: ArgumentLocationKind
+    register: Register | None
+    stack_offset: int | None
+    uses: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "uses", tuple(sorted(set(self.uses))))
+        if any(address < 0 for address in self.uses):
+            raise ValueError("argument-use addresses must be non-negative")
+        if self.kind is ArgumentLocationKind.REGISTER:
+            if self.register not in {Register.R0, Register.R1, Register.R2, Register.R3}:
+                raise ValueError("register argument must use r0-r3")
+            if self.stack_offset is not None:
+                raise ValueError("register argument cannot carry a stack offset")
+            if self.index is None or not 0 <= self.index <= 3:
+                raise ValueError("register argument index must be between 0 and 3")
+        elif self.kind is ArgumentLocationKind.STACK:
+            if self.register is not None:
+                raise ValueError("stack argument cannot carry a register")
+            if self.stack_offset is None:
+                raise ValueError("stack argument must carry an entry-SP offset")
+            if self.index is not None:
+                raise ValueError("stack argument index is not inferred")
+
+
+@dataclass(frozen=True)
+class ReturnEvidence:
+    return_address: int
+    value: AbstractValue
+
+    def __post_init__(self) -> None:
+        if self.return_address < 0:
+            raise ValueError("return address must be non-negative")
+
+
+@dataclass(frozen=True)
+class FunctionSummary:
+    arguments: tuple[ArgumentEvidence, ...]
+    returns: tuple[ReturnEvidence, ...]
+    stack_frame: StackFrame
+    stack_slots: tuple[StackSlot, ...]
+
+
 @dataclass(frozen=True)
 class InstructionFlowState:
     instruction: DecodedInstruction
@@ -601,6 +652,7 @@ class FunctionDataFlow:
     blocks: tuple[BlockFlowState, ...]
     instructions: tuple[InstructionFlowState, ...]
     warnings: tuple[str, ...] = ()
+    summary: FunctionSummary | None = None
 
     def at_instruction(self, address: int) -> InstructionFlowState | None:
         return next(
