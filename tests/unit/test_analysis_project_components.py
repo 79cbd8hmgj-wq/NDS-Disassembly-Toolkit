@@ -107,9 +107,11 @@ def test_annotations_persist_and_are_deterministically_ordered(tmp_path: Path) -
 
 
 def test_annotation_requires_registered_component(tmp_path: Path) -> None:
-    with AnalysisProject.create(tmp_path / "game.ndsre") as project:
-        with pytest.raises(AnalysisProjectError, match="component"):
-            project.set_annotation(LocationAnnotation("arm9", 0x02000000))
+    with (
+        AnalysisProject.create(tmp_path / "game.ndsre") as project,
+        pytest.raises(AnalysisProjectError, match="component"),
+    ):
+        project.set_annotation(LocationAnnotation("arm9", 0x02000000))
 
 
 def test_read_only_project_rejects_annotation_write(tmp_path: Path) -> None:
@@ -118,6 +120,8 @@ def test_read_only_project_rejects_annotation_write(tmp_path: Path) -> None:
     with AnalysisProject.create(root) as project:
         project.store_component_analysis(ComponentAnalysisBundle(component))
 
-    with AnalysisProject.open(root, read_only=True) as project:
-        with pytest.raises(AnalysisProjectError, match="read-only"):
-            project.set_annotation(LocationAnnotation("arm9", 0x02000000))
+    with (
+        AnalysisProject.open(root, read_only=True) as project,
+        pytest.raises(AnalysisProjectError, match="read-only"),
+    ):
+        project.set_annotation(LocationAnnotation("arm9", 0x02000000))
