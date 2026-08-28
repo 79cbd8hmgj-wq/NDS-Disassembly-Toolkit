@@ -53,7 +53,7 @@ SQLite is an implementation detail. Public callers interact with toolkit-owned `
 
 ## Project manifest
 
-`project.json` identifies the directory as a toolkit analysis project and points to the database file. Version 1 should remain intentionally small:
+`project.json` identifies the directory as a toolkit analysis project and points to the database file. Version 1 remains intentionally small:
 
 ```json
 {
@@ -84,7 +84,7 @@ project = AnalysisProject.open(path)
 project.close()
 ```
 
-Exact constructor/function spellings may be refined in the implementation plan, but the responsibilities are fixed:
+Exact constructor/function spellings may be refined in the implementation plan, but the responsibilities are fixed.
 
 ### Create
 
@@ -111,9 +111,9 @@ Opening:
 6. refuses unsupported newer project or database versions;
 7. returns a project object only after structural validation succeeds.
 
-Phase 7F does not perform automatic destructive migrations. Older schema versions may become migratable in future phases through explicit migration functions. Version 1 opening logic only needs to recognize the current schema and reject unsupported versions clearly.
+Phase 7F does not perform automatic destructive migrations. Older schema versions may become migratable in future phases through explicit migration functions. Version 1 opening logic only recognizes the current schema and rejects unsupported versions clearly.
 
-A read-only open mode may be included if it remains small and directly useful to Phase 7G. It must not silently upgrade or mutate a project.
+Phase 7F includes explicit read-only opening. A read-only project supports all query and freshness APIs but rejects generated-analysis or annotation writes with `AnalysisProjectError`. Opening read-only must not create, migrate, repair, or otherwise mutate project files.
 
 ## Current-state model, not historical snapshots
 
@@ -134,12 +134,11 @@ For each analyzed component, Phase 7F stores only the metadata needed to identif
 - component name;
 - runtime base address;
 - byte length;
-- SHA-256 digest;
-- optional source-role metadata already owned by the toolkit when required for stable interpretation.
+- SHA-256 digest.
 
 The caller supplies current `Component` bytes when freshness must be checked or analysis must be recomputed.
 
-This keeps commercial ROM contents and extracted copyrighted payloads outside the repository/project database while still allowing exact stale-analysis detection.
+This keeps commercial ROM contents and extracted copyrighted payloads outside the project database while still allowing exact stale-analysis detection.
 
 ## Persistent identity rules
 
@@ -189,7 +188,7 @@ Each component row stores:
 - SHA-256 digest;
 - last successful generated-analysis metadata.
 
-Given a current `Component`, the project can classify persisted state as conceptually:
+Given a current `Component`, the project classifies persisted state as:
 
 ```text
 CURRENT   fingerprint/base/size agree
@@ -208,12 +207,12 @@ Stale detection is deterministic and independent of filesystem timestamps.
 The database stores enough provenance to explain which analyzer/schema produced current generated records:
 
 - database schema version;
-- analysis model/version identifier;
+- `analysis_model_version = 1` for the Phase 7F serialization contract;
 - toolkit package version when available;
 - component fingerprint/base/size;
-- optional successful-analysis timestamp as informational metadata only.
+- successful-analysis timestamp as informational metadata only.
 
-Timestamps never participate in semantic equality, ordering, generated symbol identity, cache validity, or deterministic tests.
+Timestamps never participate in semantic equality, ordering, generated symbol identity, cache validity, or deterministic query results.
 
 The implementation must not require a Git checkout SHA to function. Installed packages may not have repository metadata available.
 
@@ -254,7 +253,7 @@ Nested semantic payloads that are not query-critical may be stored as canonical 
 
 Persist `CrossReference` records and the information required to derive/query the existing direct-call graph.
 
-The database should avoid duplicating a second authoritative call-graph truth if the call graph remains a deterministic view of call xrefs. A SQL view or query-layer derivation is preferable to storing independently mutable call edges.
+The database must not store an independently mutable second copy of the call graph while it remains a deterministic view of call xrefs. The query layer derives call relationships from persisted `CALL` cross-references.
 
 ### Strings
 
@@ -285,7 +284,7 @@ Persist `FunctionDataFlow` without changing its public meaning:
 - abstract values including kind, exact value, owner component, and provenance;
 - attached `FunctionSummary`.
 
-Query-critical register and stack facts should be represented as indexed relational rows rather than one opaque function-sized blob. Small nested deterministic collections such as provenance address tuples or frame-pointer maps may use canonical JSON if that keeps the schema simpler without preventing expected Phase 7G queries.
+Query-critical register and stack facts are represented as indexed relational rows rather than one opaque function-sized blob. Small nested deterministic collections such as provenance address tuples or frame-pointer maps may use canonical JSON if that keeps the schema simpler without preventing expected Phase 7G queries.
 
 ### Function summaries
 
@@ -302,12 +301,12 @@ Phase 7F must not create a competing signature/ABI model.
 
 ## Proposed relational shape
 
-Exact SQL names are implementation details, but schema version 1 should have tables conceptually equivalent to:
+Exact SQL names are implementation details, but schema version 1 has tables conceptually equivalent to:
 
 ```text
 metadata
 components
-analysis_runs/current_analysis_metadata
+analysis_metadata
 functions
 basic_blocks
 instructions
@@ -330,9 +329,11 @@ stack_accesses
 location_annotations
 ```
 
+`analysis_metadata` represents only current successful analysis provenance. It is not an append-only analysis-run history.
+
 Foreign keys connect generated records to their component/function owners. Deleting/replacing one generated function analysis must not orphan dependent rows.
 
-Indexes should support the likely 7G access paths from the start:
+Indexes support the likely 7G access paths from the start:
 
 - component + address;
 - component + address + instruction set;
@@ -344,11 +345,11 @@ Indexes should support the likely 7G access paths from the start:
 - stack slot/function;
 - argument/return function.
 
-The schema should not be over-normalized merely to eliminate tiny JSON fields that are never independently queried.
+The schema must not be over-normalized merely to eliminate tiny JSON fields that are never independently queried.
 
 ## Public project API
 
-The stable Python API should expose toolkit-owned project/query models and hide SQL details.
+The stable Python API exposes toolkit-owned project/query models and hides SQL details.
 
 Conceptually:
 
@@ -367,15 +368,16 @@ with AnalysisProject.open(path) as project:
     )
 ```
 
-The implementation plan may split storage methods by model when that makes testing clearer, but the external architecture should favor transactionally coherent operations rather than forcing consumers to manually coordinate a dozen table writes.
+The implementation plan may split storage methods by model when that makes testing clearer, but the external architecture favors transactionally coherent operations rather than forcing consumers to manually coordinate a dozen table writes.
 
-Expected public concepts include:
+Expected public concepts are:
 
 - `AnalysisProject`;
 - `AnalysisProjectMetadata`;
 - `ComponentAnalysisIdentity` or equivalent fingerprint model;
 - `AnalysisFreshness` (`CURRENT`, `STALE`, `MISSING`);
-- immutable annotation/query result models where needed.
+- `LocationAnnotation`;
+- `AnalysisProjectError`.
 
 Raw `sqlite3.Connection`, `sqlite3.Row`, SQL strings, cursor objects, and table-specific persistence classes are private implementation details.
 
@@ -413,16 +415,20 @@ SQLite foreign-key enforcement is mandatory for every writable connection.
 
 Generated analysis is replaceable. User-authored information is durable.
 
-Phase 7F introduces a deliberately small location-annotation layer keyed by component plus runtime address. It may contain:
+Phase 7F introduces immutable `LocationAnnotation` keyed by component plus runtime address with exactly these user-controlled fields:
 
-- optional user symbol-name override;
-- optional free-form comment;
-- deterministic tag set;
-- bookmark flag.
+```text
+component: str
+address: int
+name_override: str | None
+comment: str | None
+tags: tuple[str, ...]
+bookmarked: bool
+```
 
-The exact immutable model may be named `LocationAnnotation` or equivalent.
+Empty component names and empty non-null name overrides are invalid. Tags are normalized to a deterministic sorted unique tuple and empty tags are invalid. `comment` may be an empty string because clearing/replacing comment text is a normal edit operation.
 
-Annotations are not merged into or rewritten as generated `Symbol` rows. Query APIs may later present an effective display name that overlays a user name on a generated symbol, but storage keeps both sources explicit.
+Annotations are not merged into or rewritten as generated `Symbol` rows. Query APIs may later present an effective display name that overlays `name_override` on a generated symbol, but storage keeps both sources explicit.
 
 Re-analysis of a component must not delete its annotations merely because generated functions/symbols moved or disappeared. An annotation can therefore become orphaned from current generated analysis while remaining attached to its component/address location. Phase 7G may expose orphaned annotations for review.
 
@@ -445,7 +451,9 @@ SQLite integer primary keys may be used internally for foreign keys, but callers
 
 ## Validation and errors
 
-Phase 7F should introduce a project-specific toolkit error type if the existing error hierarchy has no precise fit. SQL exceptions should be translated into stable toolkit-facing errors where they cross the public API boundary.
+Phase 7F adds `AnalysisProjectError(NdsToolkitError)` for expected project-format, schema, freshness/write-mode, validation, and translated SQLite failures. Existing `WorkspaceError` remains specific to extracted/rebuild workspace operations and is not reused for the persistent RE-project subsystem.
+
+Raw SQLite exceptions do not cross the public `AnalysisProject` API boundary for expected operational failures.
 
 Validation rejects at least:
 
@@ -461,7 +469,7 @@ Validation rejects at least:
 - impossible foreign-key/model relationships;
 - writes through a read-only project.
 
-A stale component is not database corruption. It is a first-class freshness result and should only block operations that explicitly require current generated analysis.
+A stale component is not database corruption. It is a first-class freshness result and only blocks operations that explicitly require current generated analysis.
 
 ## Concurrency and file behavior
 
@@ -469,15 +477,15 @@ Phase 7F supports SQLite's normal transactional file safety but does not promise
 
 The public `AnalysisProject` object is not required to be thread-safe. A single writable project connection is the expected Phase 7F usage pattern.
 
-Do not adopt WAL mode merely for theoretical concurrency if it complicates project portability with extra persistent sidecar files. The implementation plan should prefer SQLite's normal journaling unless testing demonstrates a concrete need otherwise.
+Phase 7F uses SQLite's normal rollback-journal mode rather than WAL mode so a closed project remains a self-contained two-file directory without persistent WAL/SHM sidecars.
 
-Project copying should remain as simple as copying the closed `.ndsre` directory.
+Project copying remains as simple as copying the closed `.ndsre` directory.
 
 ## Query surface for Phase 7F
 
-Phase 7F must include enough read APIs to prove persistence is useful and to support Phase 7G without direct SQL access. It should not implement the final interactive command set yet.
+Phase 7F includes enough read APIs to prove persistence is useful and to support Phase 7G without direct SQL access. It does not implement the final interactive command set yet.
 
-Minimum query coverage should include:
+Minimum query coverage includes:
 
 - component listing and freshness;
 - function lookup/listing by component/address/mode;
@@ -494,7 +502,7 @@ Rich search syntax, CLI formatting, fuzzy search, `who-references`, `what-calls`
 
 The preferred write boundary is a coherent generated-analysis bundle for a component or function, not one row at a time from public callers.
 
-The implementation plan should choose the smallest boundaries that maintain consistency:
+The implementation plan chooses the smallest boundaries that maintain consistency:
 
 - component identity/fingerprint registration;
 - component-level generated facts such as strings/symbols/xrefs where appropriate;
@@ -509,11 +517,11 @@ Schema version 1 is created with explicit metadata.
 Opening behavior:
 
 - current supported version: open normally;
-- older version: reject with a clear "migration required" error until an explicit migration exists;
-- newer version: reject writable/open operations that cannot safely interpret it;
+- older version: reject with a clear `AnalysisProjectError` stating that migration is required until an explicit migration exists;
+- newer version: reject with `AnalysisProjectError` because the current toolkit cannot safely interpret it;
 - incomplete/corrupt schema: fail validation rather than attempting automatic repair.
 
-Future migrations must be explicit, transactional, tested against fixture databases, and must preserve user annotations.
+Future migrations must be explicit, transactional, tested against fixture databases, and preserve user annotations.
 
 Phase 7F itself only implements schema version 1 creation/opening and the validation hooks necessary for later migration support.
 
@@ -530,55 +538,56 @@ Required test groups include:
 3. reject malformed manifest JSON;
 4. reject unsupported manifest versions;
 5. reject absolute/traversing database paths;
-6. reject missing/corrupt/unsupported database schema metadata.
+6. reject missing/corrupt/unsupported database schema metadata;
+7. read-only open performs no mutation and rejects writes.
 
 ### Component identity
 
-7. persist component metadata without storing component bytes;
-8. classify identical current bytes as `CURRENT`;
-9. classify changed hash/base/size as `STALE`;
-10. classify unknown components as `MISSING`;
-11. preserve independent identities for overlapping overlays.
+8. persist component metadata without storing component bytes;
+9. classify identical current bytes as `CURRENT`;
+10. classify changed hash/base/size as `STALE`;
+11. classify unknown components as `MISSING`;
+12. preserve independent identities for overlapping overlays.
 
 ### Model round trips
 
-12. round-trip functions and confidence/evidence;
-13. round-trip CFG blocks/instructions/edges/unresolved transfers/decode failures;
-14. round-trip typed instruction semantics without Capstone objects;
-15. round-trip strings;
-16. round-trip generated symbols including overlapping-overlay addresses;
-17. round-trip xrefs without inventing target-component ownership;
-18. round-trip abstract values and deterministic provenance;
-19. round-trip stack states;
-20. round-trip `FunctionDataFlow` and `FunctionSummary` including arguments, returns, frame, slots, and accesses.
+13. round-trip functions and confidence/evidence;
+14. round-trip CFG blocks/instructions/edges/unresolved transfers/decode failures;
+15. round-trip typed instruction semantics without Capstone objects;
+16. round-trip strings;
+17. round-trip generated symbols including overlapping-overlay addresses;
+18. round-trip xrefs without inventing target-component ownership;
+19. round-trip abstract values and deterministic provenance;
+20. round-trip stack states;
+21. round-trip `FunctionDataFlow` and `FunctionSummary` including arguments, returns, frame, slots, and accesses.
 
 ### Transactions
 
-21. simulated insertion failure rolls back a generated-analysis replacement;
-22. failed replacement leaves prior committed analysis intact;
-23. replacing generated analysis removes obsolete generated rows but preserves annotations;
-24. foreign-key/model mismatch is rejected before commit.
+22. simulated insertion failure rolls back a generated-analysis replacement;
+23. failed replacement leaves prior committed analysis intact;
+24. replacing generated analysis removes obsolete generated rows but preserves annotations;
+25. foreign-key/model mismatch is rejected before commit.
 
 ### Annotations
 
-25. user name/comment/tags/bookmark persist across reopen;
-26. annotations survive generated symbol/function replacement;
-27. annotations at the same runtime address in two components remain independent;
-28. annotation return order is deterministic.
+26. user name/comment/tags/bookmark persist across reopen;
+27. annotations survive generated symbol/function replacement;
+28. annotations at the same runtime address in two components remain independent;
+29. annotation return order is deterministic.
 
 ### Queries and determinism
 
-29. function lookup distinguishes ARM/Thumb identities;
-30. symbol and xref address queries are indexed/semantically correct;
-31. returned collections have deterministic ordering independent of insertion order;
-32. persistence round-trip does not change model equality or generated names/evidence ordering.
+30. function lookup distinguishes ARM/Thumb identities;
+31. symbol and xref address queries are indexed/semantically correct;
+32. returned collections have deterministic ordering independent of insertion order;
+33. persistence round-trip does not change model equality or generated names/evidence ordering.
 
 ### Regression gates
 
-33. existing Phase 7A-7E tests remain green;
-34. Ruff passes;
-35. strict mypy passes;
-36. no new runtime dependency appears in project metadata.
+34. existing Phase 7A-7E tests remain green;
+35. Ruff passes;
+36. strict mypy passes;
+37. no new runtime dependency appears in project metadata.
 
 ## Documentation and provenance
 
@@ -615,11 +624,12 @@ Phase 7F does not include:
 Phase 7F is complete when:
 
 1. a version-1 `.ndsre` project can be created, closed, reopened, and structurally validated;
-2. component fingerprints detect current/stale/missing state without storing binary payloads;
-3. the canonical Phase 7A-7E generated analysis models can be persisted and reconstructed without semantic loss;
-4. generated analysis replacement is transactional and preserves user annotations;
-5. component-aware and ARM/Thumb-aware identities survive round trips, including overlapping overlays;
-6. stable read APIs cover the data required by Phase 7G without exposing SQL details;
-7. project/schema versions are explicit and unsupported versions fail safely;
-8. public documentation and provenance are updated;
-9. full pytest, Ruff, and strict-mypy gates pass on the exact PR head and post-merge `main`.
+2. explicit read-only opening supports queries without mutating files and rejects writes;
+3. component fingerprints detect current/stale/missing state without storing binary payloads;
+4. the canonical Phase 7A-7E generated analysis models can be persisted and reconstructed without semantic loss;
+5. generated analysis replacement is transactional and preserves user annotations;
+6. component-aware and ARM/Thumb-aware identities survive round trips, including overlapping overlays;
+7. stable read APIs cover the data required by Phase 7G without exposing SQL details;
+8. project/schema versions are explicit and unsupported versions fail safely;
+9. public documentation and provenance are updated;
+10. full pytest, Ruff, and strict-mypy gates pass on the exact PR head and post-merge `main`.
