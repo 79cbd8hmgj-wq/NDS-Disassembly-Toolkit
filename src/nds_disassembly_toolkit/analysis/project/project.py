@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import suppress
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import TracebackType
 
@@ -19,13 +21,13 @@ from nds_disassembly_toolkit.analysis.model import (
 from nds_disassembly_toolkit.analysis.project.cfg_records import (
     cfg_from_database,
     delete_cfgs,
-    insert_cfgs,
+    insert_cfgs as _insert_cfgs,
     validate_cfg_bundle,
 )
 from nds_disassembly_toolkit.analysis.project.flow_records import (
     data_flow_from_database,
     delete_data_flows,
-    insert_data_flows,
+    insert_data_flows as _insert_data_flows,
     validate_data_flow_bundle,
 )
 from nds_disassembly_toolkit.analysis.project.manifest import (
@@ -44,7 +46,7 @@ from nds_disassembly_toolkit.analysis.project.records import (
     component_id,
     delete_records,
     function_from_row,
-    insert_records,
+    insert_records as _insert_records,
     string_from_row,
     symbol_from_row,
     xref_from_row,
@@ -57,6 +59,148 @@ from nds_disassembly_toolkit.analysis.project.schema import (
     validate_schema,
 )
 from nds_disassembly_toolkit.errors import AnalysisProjectError
+
+
+def _validate_location(
+    component: Component,
+    *,
+    kind: str,
+    address: int,
+    offset: int,
+) -> None:
+    try:
+        expected_offset = component.offset_for_address(address)
+    except ValueError as exc:
+        raise AnalysisProjectError(
+            f"bundle {kind} address is outside the component"
+        ) from exc
+    if offset != expected_offset:
+        raise AnalysisProjectError(f"bundle {kind} offset is inconsistent with component")
+
+
+def _validate_bundle(bundle: ComponentAnalysisBundle) -> None:
+    component = bundle.component
+    function_keys: set[tuple[int, InstructionSet]] = set()
+    for function in bundle.functions:
+        if function.component != component.name:
+            raise AnalysisProjectError("bundle function belongs to a different component")
+        _validate_location(
+            component,
+            kind="function",
+            address=function.address,
+            offset=function.offset,
+        )
+        alignment = 4 if function.instruction_set is InstructionSet.ARM else 2
+        if function.address % alignment:
+            raise AnalysisProjectError("bundle function address is misaligned")
+        key = (function.address, function.instruction_set)
+        if key in function_keys:
+            raise AnalysisProjectError("bundle contains duplicate functions")
+        function_keys.add(key)
+
+    for record in bundle.strings:
+        if record.component != component.name:
+            raise AnalysisProjectError("bundle string belongs to a different component")
+        _validate_location(
+            component,
+            kind="string",
+            address=record.address,
+            offset=record.offset,
+        )
+
+    for symbol in bundle.symbols.symbols:
+        if symbol.component != component.name:
+            raise AnalysisProjectError("bundle symbol belongs to a different component")
+        _validate_location(
+            component,
+            kind="symbol",
+            address=symbol.address,
+            offset=symbol.offset,
+        )
+        if symbol.instruction_set is not None:
+            alignment = 4 if symbol.instruction_set is InstructionSet.ARM else 2
+            if symbol.address % alignment:
+                raise AnalysisProjectError("bundle symbol address is misaligned")
+
+    for reference in bundle.xrefs:
+        if reference.source_component != component.name:
+            raise AnalysisProjectError("bundle xref belongs to a different component")
+        try:
+            component.offset_for_address(reference.source_address)
+        except ValueError as exc:
+            raise AnalysisProjectError(
+                "bundle xref source address is outside the component"
+            ) from exc
+        if reference.source_function_address is not None:
+            source_mode = reference.source_instruction_set
+            if source_mode is None or (
+                reference.source_function_address,
+                source_mode,
+            ) not in function_keys:
+                raise AnalysisProjectError(
+                    "bundle xref source function is not present in bundle functions"
+                )
+
+    validate_cfg_bundle(bundle)
+    validate_data_flow_bundle(bundle)
+
+
+def _upsert_component_identity(
+    connection: sqlite3.Connection,
+    component: Component,
+) -> int:
+    identity = ComponentAnalysisIdentity.from_component(component)
+    connection.execute(
+        """
+        INSERT INTO components(name, base_address, size, sha256)
+        VALUES(?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            base_address = excluded.base_address,
+            size = excluded.size,
+            sha256 = excluded.sha256
+        """,
+        (
+            identity.name,
+            identity.base_address,
+            identity.size,
+            identity.sha256,
+        ),
+    )
+    return component_id(connection, identity.name)
+
+
+def _delete_generated_component_rows(
+    connection: sqlite3.Connection,
+    component_id_value: int,
+) -> None:
+    delete_data_flows(connection, component_id_value)
+    delete_cfgs(connection, component_id_value)
+    delete_records(connection, component_id_value)
+
+
+def _current_toolkit_version() -> str | None:
+    try:
+        return version("nds-disassembly-toolkit")
+    except PackageNotFoundError:
+        return None
+
+
+def _update_component_analysis_metadata(
+    connection: sqlite3.Connection,
+    component_id_value: int,
+) -> None:
+    connection.execute(
+        """
+        UPDATE components
+        SET toolkit_version = ?, analyzed_at = ?
+        WHERE id = ?
+        """,
+        (
+            _current_toolkit_version(),
+            datetime.now(timezone.utc).isoformat(),
+            component_id_value,
+        ),
+    )
 
 
 class AnalysisProject:
@@ -202,33 +346,15 @@ class AnalysisProject:
 
     def store_component_analysis(self, bundle: ComponentAnalysisBundle) -> None:
         connection = self._require_writable()
-        identity = ComponentAnalysisIdentity.from_component(bundle.component)
-        validate_cfg_bundle(bundle)
-        validate_data_flow_bundle(bundle)
+        _validate_bundle(bundle)
         try:
-            connection.execute(
-                """
-                INSERT INTO components(name, base_address, size, sha256)
-                VALUES(?, ?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
-                    base_address = excluded.base_address,
-                    size = excluded.size,
-                    sha256 = excluded.sha256
-                """,
-                (
-                    identity.name,
-                    identity.base_address,
-                    identity.size,
-                    identity.sha256,
-                ),
-            )
-            component_id_value = component_id(connection, identity.name)
-            delete_data_flows(connection, component_id_value)
-            delete_cfgs(connection, component_id_value)
-            delete_records(connection, component_id_value)
-            insert_records(connection, component_id_value, bundle)
-            insert_cfgs(connection, component_id_value, bundle.cfgs)
-            insert_data_flows(connection, component_id_value, bundle.data_flows)
+            connection.execute("BEGIN IMMEDIATE")
+            component_id_value = _upsert_component_identity(connection, bundle.component)
+            _delete_generated_component_rows(connection, component_id_value)
+            _insert_records(connection, component_id_value, bundle)
+            _insert_cfgs(connection, component_id_value, bundle.cfgs)
+            _insert_data_flows(connection, component_id_value, bundle.data_flows)
+            _update_component_analysis_metadata(connection, component_id_value)
             connection.commit()
         except AnalysisProjectError:
             connection.rollback()
@@ -236,6 +362,9 @@ class AnalysisProject:
         except sqlite3.Error as exc:
             connection.rollback()
             raise AnalysisProjectError("cannot store analysis component") from exc
+        except Exception:
+            connection.rollback()
+            raise
 
     def component_identities(self) -> tuple[ComponentAnalysisIdentity, ...]:
         connection = self._require_connection()
