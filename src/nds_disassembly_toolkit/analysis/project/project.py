@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import suppress
 from pathlib import Path
 from types import TracebackType
 
 from nds_disassembly_toolkit.analysis.project.manifest import (
-    ProjectManifest,
     load_manifest,
     resolve_database_path,
     write_manifest,
@@ -136,10 +136,8 @@ class AnalysisProject:
         database_path.unlink(missing_ok=True)
         (root / "project.json.tmp").unlink(missing_ok=True)
         if created_root:
-            try:
+            with suppress(OSError):
                 root.rmdir()
-            except OSError:
-                pass
 
     @property
     def metadata(self) -> AnalysisProjectMetadata:
