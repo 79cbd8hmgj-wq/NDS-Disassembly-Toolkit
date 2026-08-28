@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import IntFlag, StrEnum
 from pathlib import Path
 
 
@@ -101,10 +101,133 @@ class Register(StrEnum):
     R15 = "r15"
     PC = "r15"
 
+    @classmethod
+    def from_name(cls, name: str) -> Register | None:
+        normalized = name.strip().lower()
+        normalized = {"sp": "r13", "lr": "r14", "pc": "r15"}.get(
+            normalized,
+            normalized,
+        )
+        try:
+            return cls(normalized)
+        except ValueError:
+            return None
+
+
+class ConditionCode(StrEnum):
+    INVALID = "invalid"
+    EQ = "eq"
+    NE = "ne"
+    HS = "hs"
+    CS = "hs"
+    LO = "lo"
+    CC = "lo"
+    MI = "mi"
+    PL = "pl"
+    VS = "vs"
+    VC = "vc"
+    HI = "hi"
+    LS = "ls"
+    GE = "ge"
+    LT = "lt"
+    GT = "gt"
+    LE = "le"
+    AL = "al"
+
+
+class OperandKind(StrEnum):
+    REGISTER = "register"
+    IMMEDIATE = "immediate"
+    MEMORY = "memory"
+    REGISTER_LIST = "register_list"
+
+
+class OperandAccess(IntFlag):
+    NONE = 0
+    READ = 1
+    WRITE = 2
+
+
+class ShiftKind(StrEnum):
+    NONE = "none"
+    LSL = "lsl"
+    LSR = "lsr"
+    ASR = "asr"
+    ROR = "ror"
+    RRX = "rrx"
+
+
+@dataclass(frozen=True)
+class OperandShift:
+    kind: ShiftKind = ShiftKind.NONE
+    value: int = 0
+
+
+@dataclass(frozen=True)
+class MemoryOperand:
+    base: Register | None
+    index: Register | None
+    scale: int
+    displacement: int
+    subtract_index: bool = False
+
+
+@dataclass(frozen=True)
+class InstructionOperand:
+    kind: OperandKind
+    access: OperandAccess
+    register: Register | None = None
+    registers: tuple[Register, ...] = ()
+    immediate: int | None = None
+    memory: MemoryOperand | None = None
+    shift: OperandShift = field(default_factory=OperandShift)
+    access_width: int | None = None
+
+    def __post_init__(self) -> None:
+        register_payload = self.register is not None
+        register_list_payload = bool(self.registers)
+        immediate_payload = self.immediate is not None
+        memory_payload = self.memory is not None
+
+        valid_payload = {
+            OperandKind.REGISTER: (
+                register_payload
+                and not register_list_payload
+                and not immediate_payload
+                and not memory_payload
+            ),
+            OperandKind.IMMEDIATE: (
+                immediate_payload
+                and not register_payload
+                and not register_list_payload
+                and not memory_payload
+            ),
+            OperandKind.MEMORY: (
+                memory_payload
+                and not register_payload
+                and not register_list_payload
+                and not immediate_payload
+            ),
+            OperandKind.REGISTER_LIST: (
+                register_list_payload
+                and not register_payload
+                and not immediate_payload
+                and not memory_payload
+            ),
+        }[self.kind]
+        if not valid_payload:
+            raise ValueError(f"operand payload does not match {self.kind.value} kind")
+        if self.access_width is not None and self.access_width <= 0:
+            raise ValueError("operand payload access width must be positive")
+
 
 @dataclass(frozen=True)
 class InstructionSemantics:
-    pass
+    operands: tuple[InstructionOperand, ...] = ()
+    registers_read: tuple[Register, ...] = ()
+    registers_written: tuple[Register, ...] = ()
+    condition: ConditionCode = ConditionCode.AL
+    writeback: bool = False
 
 
 @dataclass(frozen=True)
