@@ -492,11 +492,91 @@ class RegisterState:
         return RegisterState(tuple(updated.items()))
 
 
+class StackAccessKind(StrEnum):
+    LOAD = "load"
+    STORE = "store"
+
+
+class StackSlotKind(StrEnum):
+    LOCAL = "local"
+    SAVED_REGISTER = "saved_register"
+    INCOMING_ARGUMENT = "incoming_argument"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class StackAccess:
+    instruction_address: int
+    kind: StackAccessKind
+    width: int
+
+    def __post_init__(self) -> None:
+        if self.instruction_address < 0:
+            raise ValueError("stack access address must be non-negative")
+        if self.width <= 0:
+            raise ValueError("stack access width must be positive")
+
+
+@dataclass(frozen=True)
+class StackSlot:
+    offset: int
+    kind: StackSlotKind
+    accesses: tuple[StackAccess, ...] = ()
+
+
+@dataclass(frozen=True)
+class StackFrame:
+    frame_size: int | None
+    frame_pointer: Register | None
+    stack_depth_known: bool
+
+    def __post_init__(self) -> None:
+        if self.frame_size is not None and self.frame_size < 0:
+            raise ValueError("stack frame size must be non-negative")
+
+
+@dataclass(frozen=True)
+class StackState:
+    offset: int | None
+    frame_pointers: tuple[tuple[Register, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        normalized: dict[Register, int] = {}
+        for register, offset in self.frame_pointers:
+            if register in normalized:
+                raise ValueError(f"duplicate frame-pointer state for {register.value}")
+            normalized[register] = offset
+        object.__setattr__(
+            self,
+            "frame_pointers",
+            tuple(
+                sorted(
+                    normalized.items(),
+                    key=lambda item: int(item[0].value[1:]),
+                )
+            ),
+        )
+
+    def frame_offset(self, register: Register) -> int | None:
+        for candidate, offset in self.frame_pointers:
+            if candidate is register:
+                return offset
+        return None
+
+
+@dataclass(frozen=True)
+class StackAnalysis:
+    frame: StackFrame
+    slots: tuple[StackSlot, ...]
+
+
 @dataclass(frozen=True)
 class InstructionFlowState:
     instruction: DecodedInstruction
     before: RegisterState
     after: RegisterState
+    stack_before: StackState | None = None
+    stack_after: StackState | None = None
 
     @property
     def address(self) -> int:
@@ -509,6 +589,8 @@ class BlockFlowState:
     instruction_set: InstructionSet
     entry: RegisterState
     exit: RegisterState
+    stack_entry: StackState | None = None
+    stack_exit: StackState | None = None
 
 
 @dataclass(frozen=True)
