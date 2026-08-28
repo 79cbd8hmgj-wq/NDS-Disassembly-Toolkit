@@ -20,6 +20,16 @@ REQUIRED_TABLES = frozenset(
         "cfg_edges",
         "unresolved_transfers",
         "decode_failures",
+        "block_flow",
+        "instruction_flow",
+        "register_flow",
+        "function_warnings",
+        "stack_frames",
+        "stack_slots",
+        "stack_accesses",
+        "argument_evidence",
+        "argument_uses",
+        "return_evidence",
     }
 )
 
@@ -213,9 +223,227 @@ CREATE TABLE decode_failures (
         ON DELETE CASCADE
 );
 
+CREATE TABLE block_flow (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    block_address INTEGER NOT NULL,
+    block_instruction_set TEXT NOT NULL,
+    stack_entry_json TEXT,
+    stack_exit_json TEXT,
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        block_address,
+        block_instruction_set
+    ),
+    FOREIGN KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        block_address,
+        block_instruction_set
+    ) REFERENCES basic_blocks(
+        component_id,
+        function_address,
+        function_instruction_set,
+        address,
+        instruction_set
+    ) ON DELETE CASCADE
+);
+
+CREATE TABLE instruction_flow (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    instruction_address INTEGER NOT NULL,
+    stack_before_json TEXT,
+    stack_after_json TEXT,
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        instruction_address
+    ),
+    FOREIGN KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        instruction_address
+    ) REFERENCES instructions(
+        component_id,
+        function_address,
+        function_instruction_set,
+        address
+    ) ON DELETE CASCADE
+);
+
+CREATE TABLE register_flow (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    scope_kind TEXT NOT NULL,
+    scope_address INTEGER NOT NULL,
+    scope_side TEXT NOT NULL,
+    register TEXT NOT NULL,
+    value_kind TEXT NOT NULL,
+    value INTEGER,
+    owner_component TEXT,
+    provenance_json TEXT NOT NULL,
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        scope_kind,
+        scope_address,
+        scope_side,
+        register
+    ),
+    FOREIGN KEY(component_id, function_address, function_instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE function_warnings (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    text TEXT NOT NULL,
+    PRIMARY KEY(component_id, function_address, function_instruction_set, ordinal),
+    FOREIGN KEY(component_id, function_address, function_instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE stack_frames (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    frame_size INTEGER,
+    frame_pointer TEXT,
+    stack_depth_known INTEGER NOT NULL CHECK(stack_depth_known IN (0, 1)),
+    PRIMARY KEY(component_id, function_address, function_instruction_set),
+    FOREIGN KEY(component_id, function_address, function_instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE stack_slots (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    slot_offset INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        slot_offset
+    ),
+    FOREIGN KEY(component_id, function_address, function_instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE stack_accesses (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    slot_offset INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    instruction_address INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    width INTEGER NOT NULL CHECK(width > 0),
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        slot_offset,
+        ordinal
+    ),
+    FOREIGN KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        slot_offset
+    ) REFERENCES stack_slots(
+        component_id,
+        function_address,
+        function_instruction_set,
+        slot_offset
+    ) ON DELETE CASCADE
+);
+
+CREATE TABLE argument_evidence (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    arg_index INTEGER,
+    kind TEXT NOT NULL,
+    register TEXT,
+    stack_offset INTEGER,
+    PRIMARY KEY(component_id, function_address, function_instruction_set, ordinal),
+    FOREIGN KEY(component_id, function_address, function_instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE argument_uses (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    argument_ordinal INTEGER NOT NULL CHECK(argument_ordinal >= 0),
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    instruction_address INTEGER NOT NULL,
+    PRIMARY KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        argument_ordinal,
+        ordinal
+    ),
+    FOREIGN KEY(
+        component_id,
+        function_address,
+        function_instruction_set,
+        argument_ordinal
+    ) REFERENCES argument_evidence(
+        component_id,
+        function_address,
+        function_instruction_set,
+        ordinal
+    ) ON DELETE CASCADE
+);
+
+CREATE TABLE return_evidence (
+    component_id INTEGER NOT NULL,
+    function_address INTEGER NOT NULL,
+    function_instruction_set TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    return_address INTEGER NOT NULL,
+    value_kind TEXT NOT NULL,
+    value INTEGER,
+    owner_component TEXT,
+    provenance_json TEXT NOT NULL,
+    PRIMARY KEY(component_id, function_address, function_instruction_set, ordinal),
+    FOREIGN KEY(component_id, function_address, function_instruction_set)
+        REFERENCES functions(component_id, address, instruction_set)
+        ON DELETE CASCADE
+);
+
 CREATE INDEX idx_symbol_name ON generated_symbols(name);
 CREATE INDEX idx_xref_source ON xrefs(source_component_id, source_address);
 CREATE INDEX idx_xref_target ON xrefs(target_address);
+CREATE INDEX idx_block_flow_function
+    ON block_flow(component_id, function_address, function_instruction_set);
+CREATE INDEX idx_instruction_flow_function
+    ON instruction_flow(component_id, function_address, function_instruction_set);
+CREATE INDEX idx_register_flow_function
+    ON register_flow(component_id, function_address, function_instruction_set);
+CREATE INDEX idx_register_flow_register ON register_flow(register);
 """
 
 
