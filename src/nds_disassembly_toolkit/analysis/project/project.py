@@ -6,6 +6,7 @@ from contextlib import suppress
 from pathlib import Path
 from types import TracebackType
 
+from nds_disassembly_toolkit.analysis.model import Component
 from nds_disassembly_toolkit.analysis.project.manifest import (
     load_manifest,
     resolve_database_path,
@@ -25,7 +26,6 @@ from nds_disassembly_toolkit.analysis.project.schema import (
     create_schema,
     validate_schema,
 )
-from nds_disassembly_toolkit.analysis.model import Component
 from nds_disassembly_toolkit.errors import AnalysisProjectError
 
 
