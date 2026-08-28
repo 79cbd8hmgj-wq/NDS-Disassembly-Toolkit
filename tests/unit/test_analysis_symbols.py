@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+import nds_disassembly_toolkit.analysis as analysis
 from nds_disassembly_toolkit.analysis.model import (
     BasicBlock,
     CFGEdge,
@@ -9,8 +12,10 @@ from nds_disassembly_toolkit.analysis.model import (
     FunctionControlFlowGraph,
     InstructionSet,
     StringRecord,
+    Symbol,
     SymbolCandidate,
     SymbolKind,
+    SymbolTable,
 )
 from nds_disassembly_toolkit.analysis.symbols import build_symbol_table
 
@@ -227,3 +232,76 @@ def test_symbol_merge_keeps_strongest_confidence_and_sorted_unique_evidence() ->
     symbol = table.at_address(BASE, component="arm9")[0]
     assert symbol.confidence == "medium"
     assert symbol.evidence == ("alpha", "zeta")
+
+
+def test_duplicate_component_names_are_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate component"):
+        build_symbol_table(
+            components=(
+                _component("arm9"),
+                _component("arm9", base=BASE + 0x100),
+            )
+        )
+
+
+def test_record_for_unknown_component_is_rejected_when_components_are_supplied() -> None:
+    with pytest.raises(ValueError, match="unknown component"):
+        build_symbol_table(
+            functions=(_function("overlay_missing"),),
+            components=(_component("arm9"),),
+        )
+
+
+def test_function_address_outside_named_component_is_rejected() -> None:
+    with pytest.raises(ValueError, match="outside arm9"):
+        build_symbol_table(
+            functions=(_function("arm9", BASE + 0x100, offset=0x100),),
+            components=(_component("arm9"),),
+        )
+
+
+def test_string_offset_must_match_named_component() -> None:
+    record = StringRecord(
+        component="arm9",
+        offset=0x24,
+        address=BASE + 0x20,
+        text="battle",
+    )
+
+    with pytest.raises(ValueError, match="offset"):
+        build_symbol_table(strings=(record,), components=(_component("arm9"),))
+
+
+def test_explicit_candidate_offset_must_match_named_component() -> None:
+    candidate = SymbolCandidate(
+        component="arm9",
+        address=BASE + 0x20,
+        offset=0x24,
+        name="gBattleState",
+        confidence="high",
+        evidence="manual symbol",
+    )
+
+    with pytest.raises(ValueError, match="offset"):
+        build_symbol_table(candidates=(candidate,), components=(_component("arm9"),))
+
+
+def test_empty_explicit_candidate_name_is_rejected() -> None:
+    candidate = SymbolCandidate(
+        component="arm9",
+        address=BASE,
+        offset=0,
+        name="",
+        confidence="high",
+        evidence="manual symbol",
+    )
+
+    with pytest.raises(ValueError, match="empty"):
+        build_symbol_table(candidates=(candidate,))
+
+
+def test_symbol_api_is_exported_from_analysis_package() -> None:
+    assert analysis.Symbol is Symbol
+    assert analysis.SymbolKind is SymbolKind
+    assert analysis.SymbolTable is SymbolTable
+    assert analysis.build_symbol_table is build_symbol_table
