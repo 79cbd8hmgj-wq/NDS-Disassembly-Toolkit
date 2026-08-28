@@ -14,7 +14,6 @@ from nds_disassembly_toolkit.analysis.model import (
     FunctionDataFlow,
     FunctionSummary,
     InstructionFlowState,
-    InstructionSet,
     Register,
     RegisterState,
     ReturnEvidence,
