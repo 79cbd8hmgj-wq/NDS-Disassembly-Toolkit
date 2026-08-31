@@ -18,8 +18,8 @@ from nds_disassembly_toolkit.errors import DisassemblyError
 from nds_disassembly_toolkit.nds.overlays import OverlayEntry
 
 
-def _module_params_bytes() -> bytes:
-    values = (
+def _module_params_values() -> tuple[int, ...]:
+    return (
         0x020C0100,
         0x020C0118,
         0x020BAF00,
@@ -29,7 +29,15 @@ def _module_params_bytes() -> bytes:
         0x04027539,
         0xDEC00621,
     )
-    return b"\x00" * 0x20 + struct.pack("<8I", *values) + b"\x00" * 0x20
+
+
+def _module_params_bytes() -> bytes:
+    return (
+        b"\x00" * 0x20
+        + struct.pack("<8I", *_module_params_values())
+        + struct.pack("<I", 0x2106C0DE)
+        + b"\x00" * 0x20
+    )
 
 
 def test_find_module_params_parses_aligned_nitro_block() -> None:
@@ -56,6 +64,23 @@ def test_find_module_params_ignores_unaligned_magic_false_positive() -> None:
 
     assert params is not None
     assert params.offset == 0x20
+
+
+def test_find_module_params_uses_full_signature_pair_to_ignore_aligned_decoy() -> None:
+    data = bytearray(_module_params_bytes())
+    data.extend(struct.pack("<8I", *_module_params_values()))
+    data.extend(struct.pack("<I", 0x12345678))
+
+    params = find_module_params(data)
+
+    assert params is not None
+    assert params.offset == 0x20
+
+
+def test_find_module_params_rejects_magic_without_little_endian_signature() -> None:
+    data = b"\x00" * 0x20 + struct.pack("<8I", *_module_params_values())
+
+    assert find_module_params(data) is None
 
 
 def test_overlay_layout_report_marks_shared_static_boundary() -> None:
