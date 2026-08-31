@@ -332,3 +332,46 @@ Opening a project read-only uses SQLite read-only mode and does not create or mu
 Successful generated-analysis writes record toolkit-version and UTC analysis-time provenance without making either field part of freshness equality. The project format uses SQLite rollback-journal mode so a closed `.ndsre` directory remains self-contained and copyable as its manifest plus database.
 
 Phase 7F is a persistence and query substrate. Rich interactive commands such as project browsing, fuzzy symbol search, `who-references`, `what-calls`, `what-writes`, and debugger-facing workflows belong to Phase 7G rather than this storage layer.
+
+## Phase 7G persistent-project CLI
+
+Phase 7G exposes the Phase 7F project APIs through a deterministic command family without changing the underlying analysis models or persistence schema:
+
+```bash
+nds-toolkit project create game.ndsre
+nds-toolkit project info game.ndsre
+nds-toolkit project functions game.ndsre --component arm9
+nds-toolkit project function game.ndsre arm9 0x02012340 arm
+nds-toolkit project strings game.ndsre --contains battle
+nds-toolkit project symbols game.ndsre --address 0x02012340 --component arm9
+nds-toolkit project xrefs-to game.ndsre 0x02012340
+nds-toolkit project annotations game.ndsre --component arm9
+```
+
+The command family also supports `xrefs-from` for exact source locations and exact-name symbol queries. Function inspection is component/address/mode exact and returns the persisted function together with its CFG, typed instruction semantics, data-flow/stack/ABI summary, and entry annotation when those records exist. A missing exact function is an error rather than an ambiguous `null` result.
+
+All query commands open projects read-only. Runtime addresses and analysis offsets are rendered as canonical hexadecimal strings, enum values use their stable toolkit values, and operand access flags are rendered symbolically as `read`/`write` rather than as implementation bitmasks. Output is deterministic JSON. Any command may write that JSON atomically to a file with `--output`:
+
+```bash
+nds-toolkit project function game.ndsre arm9 0x02012340 arm \
+  --output function-02012340.json
+```
+
+Address-based symbol lookup requires a component because Nintendo DS overlays may share the same runtime address. `xrefs-to` deliberately does not invent target-component ownership from a numeric address; source-component filtering is explicit with `--source-component`.
+
+User annotations remain separate from generated symbols. `annotate` performs patch-style updates: omitted fields are preserved, while explicit clear/unbookmark flags remove them. For example:
+
+```bash
+nds-toolkit project annotate game.ndsre arm9 0x02012340 \
+  --name BattleManager \
+  --comment "confirmed from runtime trace" \
+  --tag runtime \
+  --tag confirmed \
+  --bookmark
+
+nds-toolkit project annotate game.ndsre arm9 0x02012340 --clear-comment
+```
+
+Repeated `--tag` arguments replace the complete normalized tag set. A no-op `annotate` invocation is rejected rather than performing an unnecessary writable project open.
+
+Phase 7G is a presentation/query layer only. It adds no new function discovery, CFG/xref/symbol/data-flow inference, does not embed ROM or component bytes, and adds no third-party dependency. A stateful REPL/TUI is still deferred. Emulator/debugger trace integration is the separate Phase 7H boundary, and pseudo-C/decompiler work remains later.

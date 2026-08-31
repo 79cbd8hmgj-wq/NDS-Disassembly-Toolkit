@@ -6,6 +6,10 @@ from collections.abc import Collection
 from pathlib import Path
 
 from nds_disassembly_toolkit.analysis.cli import add_analysis_parser, run_analysis_command
+from nds_disassembly_toolkit.analysis.project_cli import (
+    add_project_parser,
+    run_project_command,
+)
 from nds_disassembly_toolkit.assets_cli import add_assets_parser, run_assets_command
 from nds_disassembly_toolkit.disassembly_cli import (
     add_disassembly_parser,
@@ -116,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_patch_parser(subparsers)
     add_disassembly_parser(subparsers)
     add_analysis_parser(subparsers)
+    add_project_parser(subparsers)
     add_assets_parser(subparsers)
     add_source_patch_parser(subparsers)
     return parser
@@ -211,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_disassembly_command(arguments)
         if arguments.command == "analyze":
             return run_analysis_command(arguments)
+        if arguments.command == "project":
+            return run_project_command(arguments)
         if arguments.command == "assets":
             return run_assets_command(arguments)
         if arguments.command == "source-patch":
