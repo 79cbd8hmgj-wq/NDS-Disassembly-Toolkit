@@ -5,11 +5,44 @@ from nds_disassembly_toolkit.util import Buffer
 
 
 def is_lz10(data: Buffer) -> bool:
-    return (
-        len(data) >= 4
-        and data[0] == 0x10
-        and (int(data[1]) | (int(data[2]) << 8) | (int(data[3]) << 16)) > 0
-    )
+    if len(data) < 5 or data[0] != 0x10:
+        return False
+
+    declared_size = int(data[1]) | (int(data[2]) << 8) | (int(data[3]) << 16)
+    if declared_size == 0:
+        return False
+
+    source = memoryview(data)
+    source_position = 4
+    output_size = 0
+
+    while output_size < declared_size:
+        if source_position >= len(source):
+            return False
+        flags = int(source[source_position])
+        source_position += 1
+
+        for bit in range(7, -1, -1):
+            if output_size >= declared_size:
+                break
+            if flags & (1 << bit):
+                if source_position + 2 > len(source):
+                    return False
+                first = int(source[source_position])
+                second = int(source[source_position + 1])
+                source_position += 2
+                length = (first >> 4) + 3
+                displacement = (((first & 0x0F) << 8) | second) + 1
+                if displacement > output_size:
+                    return False
+                output_size += min(length, declared_size - output_size)
+            else:
+                if source_position >= len(source):
+                    return False
+                source_position += 1
+                output_size += 1
+
+    return True
 
 
 def lz10_declared_size(data: Buffer) -> int:
