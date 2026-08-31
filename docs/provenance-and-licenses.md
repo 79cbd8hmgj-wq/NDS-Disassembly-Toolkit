@@ -110,6 +110,14 @@ SQLite schema design, canonical JSON codecs, transactional replacement, componen
 
 melonDS is GPL-licensed and therefore remains on the same strict reference boundary as the earlier GPL Nintendo DS tools. Future dynamic-analysis work should prefer process/debugger integration or documented interfaces rather than incorporating melonDS implementation source into this MIT repository.
 
+### Phase 7G persistent-project CLI boundary
+
+Phase 7G is a toolkit-owned presentation and query layer over the public Phase 7F `AnalysisProject` API. Its implementation uses only the Python standard library plus existing toolkit models and project interfaces; it introduces no third-party runtime dependency and incorporates no external implementation source.
+
+The CLI serializer converts toolkit-owned immutable analysis records into deterministic JSON. It does not import Capstone, `sqlite3`, private persistence schema/codec modules, or third-party analysis objects. Query commands open projects read-only, while annotation mutation goes through the existing public writable annotation API rather than issuing direct SQL or altering the project schema.
+
+Phase 7G adds no ROM/component byte persistence, new reverse-engineering inference, emulator integration, game-specific policy, or commercial game data. Capstone therefore remains confined to the decoder boundary, angr remains reference material only, and melonDS remains on the external-integration boundary reserved for the later dynamic-analysis phase.
+
 ## Repository audit observations
 
 During Phase 6 consolidation:
@@ -120,7 +128,7 @@ During Phase 6 consolidation:
 - historical design documents explicitly state that the supplied upstream archives were reference material only and that GPL/upstream implementation source was not vendored or copied;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems rather than transferring game-specific material into the toolkit.
 
-Phase 7A deliberately adds Capstone only as a package dependency. Phases 7B through 7E2 add toolkit-owned CFG, xref/index/call-graph, symbol-recovery, typed-semantic, register-data-flow, stack-frame, argument-evidence, return-evidence, and function-summary models and logic; angr and melonDS remain non-vendored reference material. Phase 7F adds only toolkit-owned SQLite persistence/query logic over those models and no new third-party dependency.
+Phase 7A deliberately adds Capstone only as a package dependency. Phases 7B through 7E2 add toolkit-owned CFG, xref/index/call-graph, symbol-recovery, typed-semantic, register-data-flow, stack-frame, argument-evidence, return-evidence, and function-summary models and logic; angr and melonDS remain non-vendored reference material. Phase 7F adds only toolkit-owned SQLite persistence/query logic over those models and no new third-party dependency. Phase 7G adds only toolkit-owned argparse/JSON project presentation, query, and annotation wiring over the Phase 7F public API; it changes neither `pyproject.toml` nor the persistence schema and adds no dependency.
 
 Text search and manual comparison are useful audit evidence but cannot mathematically prove independent authorship. Future contributors should preserve the boundary above and document any deliberate third-party code incorporation before merging it.
 
