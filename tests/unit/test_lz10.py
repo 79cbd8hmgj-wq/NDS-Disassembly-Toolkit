@@ -26,6 +26,10 @@ def test_lz10_detection_and_declared_size() -> None:
     assert is_lz10(b"\x11\x00\x00\x00") is False
 
 
+def test_lz10_detection_rejects_zero_declared_size_false_positive() -> None:
+    assert is_lz10(bytes.fromhex("10 00 00 00 41 42 43 44")) is False
+
+
 @pytest.mark.parametrize("encoded", [b"", b"\x10", b"\x10\x01\x00"])
 def test_lz10_rejects_truncated_header(encoded: bytes) -> None:
     with pytest.raises(RomFormatError, match="header"):
