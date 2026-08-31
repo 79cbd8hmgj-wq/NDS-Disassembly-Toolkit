@@ -5,7 +5,11 @@ from nds_disassembly_toolkit.util import Buffer
 
 
 def is_lz10(data: Buffer) -> bool:
-    return len(data) >= 4 and data[0] == 0x10
+    return (
+        len(data) >= 4
+        and data[0] == 0x10
+        and (int(data[1]) | (int(data[2]) << 8) | (int(data[3]) << 16)) > 0
+    )
 
 
 def lz10_declared_size(data: Buffer) -> int:
