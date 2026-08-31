@@ -20,14 +20,23 @@ def test_lz10_supports_overlapping_back_reference() -> None:
 
 
 def test_lz10_detection_and_declared_size() -> None:
-    encoded = bytes.fromhex("10 03 02 01")
+    encoded = bytes.fromhex("10 03 00 00 00 41 42 43")
     assert is_lz10(encoded) is True
-    assert lz10_declared_size(encoded) == 0x010203
+    assert lz10_declared_size(bytes.fromhex("10 03 02 01")) == 0x010203
     assert is_lz10(b"\x11\x00\x00\x00") is False
 
 
 def test_lz10_detection_rejects_zero_declared_size_false_positive() -> None:
     assert is_lz10(bytes.fromhex("10 00 00 00 41 42 43 44")) is False
+
+
+def test_lz10_detection_rejects_invalid_back_reference_false_positive() -> None:
+    candidate = bytes.fromhex("10 06 00 00 10 41 42 43 01 14")
+    assert is_lz10(candidate) is False
+
+
+def test_lz10_detection_rejects_truncated_stream_false_positive() -> None:
+    assert is_lz10(bytes.fromhex("10 04 00 00 00 41")) is False
 
 
 @pytest.mark.parametrize("encoded", [b"", b"\x10", b"\x10\x01\x00"])
