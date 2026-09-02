@@ -156,6 +156,12 @@ def _write_trace(
         )
 
 
+def _evidence_value(report: object, address: int, name: str) -> float:
+    rankings = getattr(report, "rankings")
+    ranked = next(item for item in rankings if item.address == address)
+    return next(item.value for item in ranked.evidence if item.name == name)
+
+
 def test_compare_traces_ranks_unambiguous_function_with_transparent_evidence(
     tmp_path: Path,
 ) -> None:
@@ -341,3 +347,111 @@ def test_rankings_break_equal_scores_by_component_address_and_mode(tmp_path: Pat
 
     assert [item.address for item in report.rankings] == [f1.address, f2.address]
     assert report.rankings[0].score == pytest.approx(report.rankings[1].score)
+
+
+def test_dynamic_neighbor_credits_reverse_call_relation(tmp_path: Path) -> None:
+    from nds_disassembly_toolkit.analysis.runtime.trace_diff import compare_traces
+
+    caller = _function("arm9", BASE, BASE)
+    callee = _function("arm9", BASE + 0x40, BASE)
+    call = CrossReference(
+        kind=CrossReferenceKind.CALL,
+        source_component="arm9",
+        source_address=caller.address + 4,
+        source_function_address=caller.address,
+        source_instruction_set=InstructionSet.ARM,
+        target_address=callee.address,
+        target_instruction_set=InstructionSet.ARM,
+    )
+    component = Component("arm9", Path("arm9.bin"), BASE, bytes(0x100))
+    project_root = tmp_path / "game.ndsre"
+    with AnalysisProject.create(project_root) as project:
+        project.store_component_analysis(
+            ComponentAnalysisBundle(
+                component,
+                functions=(caller, callee),
+                cfgs=(_cfg(caller), _cfg(callee)),
+                xrefs=(call,),
+            )
+        )
+
+    baseline = tmp_path / "baseline.ndstrace"
+    target = tmp_path / "target.ndstrace"
+    _write_trace(baseline, (_event(0, BASE + 0x80, StopReasonKind.STEP),))
+    _write_trace(
+        target,
+        (
+            _event(0, caller.address, StopReasonKind.STEP),
+            _event(1, callee.address, StopReasonKind.STEP),
+        ),
+    )
+
+    with AnalysisProject.open(project_root, read_only=True) as project:
+        report = compare_traces(baseline, target, project=project)
+
+    assert _evidence_value(report, callee.address, "dynamic_neighbor") == 1.0
+
+
+def test_dynamic_neighbor_does_not_credit_ambiguous_call_target(tmp_path: Path) -> None:
+    from nds_disassembly_toolkit.analysis.runtime.trace_diff import compare_traces
+
+    caller = _function("arm9", BASE, BASE)
+    arm9 = Component("arm9", Path("arm9.bin"), BASE, bytes(0x100))
+    overlay_3 = Component(
+        "overlay_3", Path("overlay_3.bin"), OVERLAY_BASE, bytes(0x80)
+    )
+    overlay_7 = Component(
+        "overlay_7", Path("overlay_7.bin"), OVERLAY_BASE, bytes(0x80)
+    )
+    function_3 = _function("overlay_3", OVERLAY_BASE, OVERLAY_BASE)
+    function_7 = _function("overlay_7", OVERLAY_BASE, OVERLAY_BASE)
+    ambiguous_call = CrossReference(
+        kind=CrossReferenceKind.CALL,
+        source_component="arm9",
+        source_address=caller.address + 4,
+        source_function_address=caller.address,
+        source_instruction_set=InstructionSet.ARM,
+        target_address=OVERLAY_BASE,
+        target_instruction_set=InstructionSet.ARM,
+    )
+    project_root = tmp_path / "game.ndsre"
+    with AnalysisProject.create(project_root) as project:
+        project.store_component_analysis(
+            ComponentAnalysisBundle(
+                arm9,
+                functions=(caller,),
+                cfgs=(_cfg(caller),),
+                xrefs=(ambiguous_call,),
+            )
+        )
+        project.store_component_analysis(
+            ComponentAnalysisBundle(
+                overlay_3,
+                functions=(function_3,),
+                cfgs=(_cfg(function_3),),
+            )
+        )
+        project.store_component_analysis(
+            ComponentAnalysisBundle(
+                overlay_7,
+                functions=(function_7,),
+                cfgs=(_cfg(function_7),),
+            )
+        )
+
+    baseline = tmp_path / "baseline.ndstrace"
+    target = tmp_path / "target.ndstrace"
+    _write_trace(baseline, (_event(0, BASE + 0x80, StopReasonKind.STEP),))
+    _write_trace(
+        target,
+        (
+            _event(0, caller.address, StopReasonKind.STEP),
+            _event(1, OVERLAY_BASE, StopReasonKind.STEP),
+        ),
+    )
+
+    with AnalysisProject.open(project_root, read_only=True) as project:
+        report = compare_traces(baseline, target, project=project)
+
+    assert len(report.ambiguous_correlations) == 1
+    assert _evidence_value(report, caller.address, "dynamic_neighbor") == 0.0
