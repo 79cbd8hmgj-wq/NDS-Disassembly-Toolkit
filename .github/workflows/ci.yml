@@ -65,7 +65,7 @@ jobs:
       - name: Exercise exact runtime CLI
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           PID=""
           start_target() {
             /tmp/headless-nds 3333 > /tmp/melonds-live.log 2>&1 &
@@ -120,17 +120,13 @@ jobs:
             --output /tmp/break.ndstrace > /tmp/break-trace-summary.json
           stop_target
 
-          start_target
-          timeout 15s nds-toolkit runtime trace capture \
-            --cpu arm9 \
-            --watch-write 0x02000100 \
-            --length 4 \
-            --events 2 \
-            --output /tmp/watch.ndstrace > /tmp/watch-trace-summary.json
-          stop_target
+          # The pinned stock melonDS stub accepts Z2/Z3/Z4 packets but does not
+          # call CheckWatchpt from CPU execution. Real watchpoint stops therefore
+          # cannot be a stock-melonDS live gate. Toolkit watchpoint orchestration,
+          # packet mapping, cleanup, and repeated CONTROL_ADVANCE behavior remain
+          # covered by the Python verification suite.
 
           nds-toolkit runtime trace inspect /tmp/step.ndstrace > /tmp/inspect.json
-          nds-toolkit runtime trace inspect /tmp/watch.ndstrace > /tmp/watch-inspect.json
 
           # Build a synthetic static project through public APIs for live differential correlation.
           python - <<'PY'
@@ -186,7 +182,6 @@ jobs:
           from pathlib import Path
           from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
           from nds_disassembly_toolkit.analysis.runtime.trace_model import TraceEventRole
-          from nds_disassembly_toolkit.analysis.runtime.model import StopReasonKind
 
           load=lambda name: json.loads(Path(name).read_text())
           probe=load('/tmp/probe.json')
@@ -196,14 +191,12 @@ jobs:
           step=load('/tmp/step.json')
           step_summary=load('/tmp/step-trace-summary.json')
           break_summary=load('/tmp/break-trace-summary.json')
-          watch_summary=load('/tmp/watch-trace-summary.json')
           inspect=load('/tmp/inspect.json')
-          watch_inspect=load('/tmp/watch-inspect.json')
           baseline_summary=load('/tmp/baseline-summary.json')
           target_summary=load('/tmp/target-summary.json')
           diff=load('/tmp/diff.json')
 
-          # 7H1 behavior against the new deterministic writer target.
+          # 7H1 behavior against the deterministic writer target.
           assert probe['cpu']=='arm9'
           assert snapshot['pc']=='0x02000000'
           assert snapshot['instruction_set']=='arm'
@@ -238,7 +231,7 @@ jobs:
           assert inspect['memory_changes'][0]['address']=='0x02000100'
           assert inspect['memory_changes'][0]['before'] != inspect['memory_changes'][0]['after']
 
-          # Repeated breakpoint capture must prove one explicit advance between evidence stops.
+          # Repeated breakpoint capture proves one explicit advance between evidence stops.
           assert break_summary['capture_mode']=='breakpoint'
           assert break_summary['evidence_events']==2
           assert break_summary['control_events']==1
@@ -251,18 +244,6 @@ jobs:
           ]
           assert events[0].pc==0x02000008
           assert events[2].pc==0x02000008
-
-          # Stock melonDS must deliver real write-watchpoint evidence twice.
-          assert watch_summary['capture_mode']=='watchpoint'
-          assert watch_summary['evidence_events']==2
-          assert watch_summary['control_events']==1
-          assert watch_inspect['evidence_events']==2
-          with TraceStore.open(Path('/tmp/watch.ndstrace')) as store:
-              watch_events=store.events()
-          evidence=[event for event in watch_events if event.role is TraceEventRole.EVIDENCE]
-          assert len(evidence)==2
-          assert all(event.stop.kind is StopReasonKind.WATCHPOINT for event in evidence)
-          assert all(event.pc != 0 for event in evidence)
 
           # Both project-bound traces carry the same exact static identity.
           assert baseline_summary['project_fingerprint']
