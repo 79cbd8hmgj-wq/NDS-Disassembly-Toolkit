@@ -95,7 +95,9 @@ def _flow(function: FunctionCandidate) -> FunctionDataFlow:
     )
 
 
-def _persisted_flow(function: FunctionCandidate) -> tuple[FunctionControlFlowGraph, FunctionDataFlow]:
+def _persisted_flow(
+    function: FunctionCandidate,
+) -> tuple[FunctionControlFlowGraph, FunctionDataFlow]:
     block = BasicBlock(
         function.component,
         function.address,
