@@ -10,6 +10,10 @@ from nds_disassembly_toolkit.analysis.decompiler import (
     DecompilationResult,
     decompile_function,
 )
+from nds_disassembly_toolkit.analysis.investigation_cli import (
+    add_investigate_parser,
+    run_investigate_command,
+)
 from nds_disassembly_toolkit.analysis.model import (
     AbstractValue,
     ArgumentEvidence,
@@ -504,6 +508,8 @@ def add_project_parser(subparsers: Any) -> None:
     )
     _add_output_argument(decompile_parser)
 
+    add_investigate_parser(commands)
+
     strings_parser = commands.add_parser("strings", help="list persisted strings")
     strings_parser.add_argument("project", type=Path)
     strings_parser.add_argument("--component")
@@ -801,6 +807,8 @@ def run_project_command(arguments: argparse.Namespace) -> int:
         return _run_function(arguments)
     if arguments.project_command == "decompile":
         return _run_decompile(arguments)
+    if arguments.project_command == "investigate":
+        return run_investigate_command(arguments, _write_json, _write_text)
     if arguments.project_command == "strings":
         return _run_strings(arguments)
     if arguments.project_command == "symbols":
