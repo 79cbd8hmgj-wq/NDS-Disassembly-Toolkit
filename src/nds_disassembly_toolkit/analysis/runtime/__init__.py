@@ -1,3 +1,4 @@
+from nds_disassembly_toolkit.analysis.runtime.melonds import MelonDSSession
 from nds_disassembly_toolkit.analysis.runtime.model import (
     BreakpointKind,
     RegisterSnapshot,
@@ -18,6 +19,7 @@ from nds_disassembly_toolkit.errors import (
 
 __all__ = [
     "BreakpointKind",
+    "MelonDSSession",
     "RegisterSnapshot",
     "RuntimeAnalysisError",
     "RuntimeComponentLocation",
