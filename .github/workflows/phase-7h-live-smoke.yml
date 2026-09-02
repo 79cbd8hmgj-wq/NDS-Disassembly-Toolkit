@@ -1,0 +1,211 @@
+name: Phase 7H live melonDS smoke
+
+on:
+  push:
+    branches:
+      - phase-7h-melonds-debugger
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install toolkit
+        run: python -m pip install -e .
+
+      - name: Build stock melonDS core with GDB and no JIT
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/melonDS-emu/melonDS.git /tmp/melonds
+          git -C /tmp/melonds checkout 906e9ebb27da8c6a715cd7abab4abfe8a8d29427
+          cmake -S /tmp/melonds -B /tmp/melonds/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_JIT=OFF \
+            -DENABLE_GDBSTUB=ON \
+            -DENABLE_OGLRENDERER=OFF \
+            -DBUILD_QT_SDL=OFF
+          cmake --build /tmp/melonds/build --target core -j2
+
+      - name: Build headless live ARM9 smoke target
+        shell: bash
+        run: |
+          cat > /tmp/headless_platform.cpp <<'CPP'
+          #include "Platform.h"
+          #include <cstdio>
+          #include <cstdarg>
+          #include <cstring>
+          #include <chrono>
+          #include <thread>
+          #include <mutex>
+          #include <condition_variable>
+          #include <functional>
+          #include <dlfcn.h>
+          #include <sys/stat.h>
+
+          namespace melonDS::Platform {
+          struct FileHandle { FILE* f; };
+          struct Thread { std::thread t; explicit Thread(std::function<void()> fn): t(std::move(fn)) {} };
+          struct Semaphore { std::mutex m; std::condition_variable cv; int count=0; };
+          struct Mutex { std::mutex m; };
+          struct AACDecoder {};
+          struct DynamicLibrary { void* h=nullptr; };
+          void SignalStop(StopReason, void*) {}
+          std::string GetLocalFilePath(const std::string& filename){ return filename; }
+          static const char* mode_to_c(FileMode mode){
+              bool r=(mode&Read)==Read, w=(mode&Write)==Write, append=(mode&Append)==Append;
+              bool preserve=(mode&Preserve)==Preserve, text=(mode&Text)==Text;
+              if(append) return r?(text?"a+":"a+b"):(text?"a":"ab");
+              if(r&&w) return preserve?(text?"r+":"r+b"):(text?"w+":"w+b");
+              if(w) return text?"w":"wb";
+              return text?"r":"rb";
+          }
+          FileHandle* OpenFile(const std::string& path, FileMode mode){ FILE* f=std::fopen(path.c_str(),mode_to_c(mode)); return f?new FileHandle{f}:nullptr; }
+          FileHandle* OpenLocalFile(const std::string& path, FileMode mode){ return OpenFile(path,mode); }
+          bool FileExists(const std::string& name){ struct stat st{}; return stat(name.c_str(),&st)==0; }
+          bool LocalFileExists(const std::string& name){ return FileExists(name); }
+          bool CheckFileWritable(const std::string& p){ FILE* f=std::fopen(p.c_str(),"ab"); if(!f)return false; std::fclose(f); return true; }
+          bool CheckLocalFileWritable(const std::string& p){ return CheckFileWritable(p); }
+          bool CloseFile(FileHandle* f){ if(!f)return false; bool ok=std::fclose(f->f)==0; delete f; return ok; }
+          bool IsEndOfFile(FileHandle* f){ return !f||std::feof(f->f); }
+          bool FileReadLine(char* s,int n,FileHandle* f){ return f&&std::fgets(s,n,f->f); }
+          u64 FilePosition(FileHandle* f){ if(!f)return 0; long p=std::ftell(f->f); return p<0?0:(u64)p; }
+          bool FileSeek(FileHandle* f,s64 off,FileSeekOrigin o){ if(!f)return false; int w=o==FileSeekOrigin::Start?SEEK_SET:(o==FileSeekOrigin::Current?SEEK_CUR:SEEK_END); return std::fseek(f->f,(long)off,w)==0; }
+          void FileRewind(FileHandle* f){ if(f)std::rewind(f->f); }
+          u64 FileRead(void* d,u64 s,u64 c,FileHandle* f){ return f?std::fread(d,(size_t)s,(size_t)c,f->f):0; }
+          bool FileFlush(FileHandle* f){ return f&&std::fflush(f->f)==0; }
+          u64 FileWrite(const void* d,u64 s,u64 c,FileHandle* f){ return f?std::fwrite(d,(size_t)s,(size_t)c,f->f):0; }
+          u64 FileWriteFormatted(FileHandle* f,const char* fmt,...){ if(!f)return 0; va_list ap; va_start(ap,fmt); int n=std::vfprintf(f->f,fmt,ap); va_end(ap); return n<0?0:(u64)n; }
+          u64 FileLength(FileHandle* f){ if(!f)return 0; long old=std::ftell(f->f); if(old<0)return 0; if(std::fseek(f->f,0,SEEK_END))return 0; long end=std::ftell(f->f); std::fseek(f->f,old,SEEK_SET); return end<0?0:(u64)end; }
+          void Log(LogLevel level,const char* fmt,...){ const char* p=level==Error?"ERR":level==Warn?"WRN":level==Info?"INF":"DBG"; std::fprintf(stderr,"[%s] ",p); va_list ap; va_start(ap,fmt); std::vfprintf(stderr,fmt,ap); va_end(ap); }
+          Thread* Thread_Create(std::function<void()> fn){ return new Thread(std::move(fn)); }
+          void Thread_Free(Thread* t){ if(!t)return; if(t->t.joinable())t->t.detach(); delete t; }
+          void Thread_Wait(Thread* t){ if(t&&t->t.joinable())t->t.join(); }
+          Semaphore* Semaphore_Create(){ return new Semaphore; }
+          void Semaphore_Free(Semaphore* s){ delete s; }
+          void Semaphore_Reset(Semaphore* s){ if(!s)return; std::lock_guard<std::mutex> l(s->m); s->count=0; }
+          void Semaphore_Wait(Semaphore* s){ std::unique_lock<std::mutex> l(s->m); s->cv.wait(l,[&]{return s->count>0;}); --s->count; }
+          bool Semaphore_TryWait(Semaphore* s,int ms){ std::unique_lock<std::mutex> l(s->m); if(ms==0){if(s->count<=0)return false;} else if(!s->cv.wait_for(l,std::chrono::milliseconds(ms),[&]{return s->count>0;}))return false; --s->count; return true; }
+          void Semaphore_Post(Semaphore* s,int count){ {std::lock_guard<std::mutex> l(s->m); s->count+=count;} s->cv.notify_all(); }
+          Mutex* Mutex_Create(){ return new Mutex; } void Mutex_Free(Mutex* m){delete m;} void Mutex_Lock(Mutex* m){m->m.lock();} void Mutex_Unlock(Mutex* m){m->m.unlock();} bool Mutex_TryLock(Mutex* m){return m->m.try_lock();}
+          void Sleep(u64 us){std::this_thread::sleep_for(std::chrono::microseconds(us));}
+          u64 GetMSCount(){return (u64)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+          u64 GetUSCount(){return (u64)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+          void WriteNDSSave(const u8*,u32,u32,u32,void*){} void WriteGBASave(const u8*,u32,u32,u32,void*){} void WriteFirmware(const Firmware&,u32,u32,void*){} void WriteDateTime(int,int,int,int,int,int,void*){}
+          void MP_Begin(void*){} void MP_End(void*){} int MP_SendPacket(u8*,int n,u64,void*){return n;} int MP_RecvPacket(u8*,u64*,void*){return 0;} int MP_SendCmd(u8*,int n,u64,void*){return n;} int MP_SendReply(u8*,int n,u64,u16,void*){return n;} int MP_SendAck(u8*,int n,u64,void*){return n;} int MP_RecvHostPacket(u8*,u64*,void*){return 0;} u16 MP_RecvReplies(u8*,u64,u16,void*){return 0;}
+          int Net_SendPacket(u8*,int n,void*){return n;} int Net_RecvPacket(u8*,void*){return 0;}
+          void Camera_Start(int,void*){} void Camera_Stop(int,void*){} void Camera_CaptureFrame(int,u32* f,int w,int h,bool,void*){if(f)std::memset(f,0,(size_t)w*h*sizeof(u32));}
+          void Mic_Start(void*){} void Mic_Stop(void*){} int Mic_ReadInput(s16* d,int n,void*){if(d)std::memset(d,0,(size_t)n*sizeof(s16)); return n;}
+          AACDecoder* AAC_Init(){return nullptr;} void AAC_DeInit(AACDecoder*){} bool AAC_Configure(AACDecoder*,int,int){return false;} bool AAC_DecodeFrame(AACDecoder*,const void*,int,void*,int){return false;}
+          bool Addon_KeyDown(KeyType,void*){return false;} void Addon_RumbleStart(u32,void*){} void Addon_RumbleStop(void*){} float Addon_MotionQuery(MotionQueryType,void*){return 0.0f;}
+          DynamicLibrary* DynamicLibrary_Load(const char* lib){void* h=dlopen(lib,RTLD_LAZY); return h?new DynamicLibrary{h}:nullptr;} void DynamicLibrary_Unload(DynamicLibrary* l){if(!l)return;if(l->h)dlclose(l->h);delete l;} void* DynamicLibrary_LoadFunction(DynamicLibrary* l,const char* n){return l&&l->h?dlsym(l->h,n):nullptr;}
+          }
+          CPP
+
+          cat > /tmp/headless_nds.cpp <<'CPP'
+          #include "NDS.h"
+          #include "Args.h"
+          #include "ARM.h"
+          #include <cstdio>
+          #include <cstdlib>
+          #include <memory>
+          using namespace melonDS;
+          int main(int argc,char** argv){
+              int port=argc>1?std::atoi(argv[1]):3333;
+              NDSArgs args; args.JIT=std::nullopt;
+              GDBArgs gdb; gdb.PortARM9=(u16)port; gdb.PortARM7=0; gdb.ARM9BreakOnStartup=true; args.GDB=gdb;
+              auto nds=std::make_unique<NDS>(std::move(args)); nds->Reset();
+              constexpr u32 base=0x02000000;
+              nds->ARM9Write32(base+0x00,0xE3A00001);
+              nds->ARM9Write32(base+0x04,0xE2800001);
+              nds->ARM9Write32(base+0x08,0xE2800001);
+              nds->ARM9Write32(base+0x0C,0xEAFFFFFE);
+              nds->ARM9.CPSR=0x1F; nds->ARM9.JumpTo(base); nds->Start();
+              std::fprintf(stderr,"live ARM9 target port=%d base=%08x\n",port,base);
+              while(nds->IsRunning()) nds->RunFrame();
+              return 0;
+          }
+          CPP
+
+          SRC=/tmp/melonds/src
+          BUILD=/tmp/melonds/build/src
+          g++ -std=gnu++17 -O2 -DGDBSTUB_ENABLED -DARCHITECTURE_x86_64=1 -fwrapv \
+            -I"$SRC" -I"$BUILD" -I"$SRC/teakra/include" \
+            /tmp/headless_nds.cpp /tmp/headless_platform.cpp \
+            "$BUILD/libcore.a" "$BUILD/teakra/src/libteakra.a" \
+            -lm -lpthread -ldl -o /tmp/headless-nds
+
+      - name: Exercise exact toolkit CLI against live melonDS ARM9
+        shell: bash
+        run: |
+          set -euo pipefail
+          PID=""
+          start_target() {
+            /tmp/headless-nds 3333 > /tmp/melonds-live.log 2>&1 &
+            PID=$!
+            sleep 1
+            kill -0 "$PID"
+          }
+          stop_target() {
+            if [ -n "${PID:-}" ]; then
+              kill "$PID" 2>/dev/null || true
+              wait "$PID" 2>/dev/null || true
+              PID=""
+            fi
+          }
+          trap stop_target EXIT
+
+          start_target
+          timeout 10s nds-toolkit runtime probe --cpu arm9 > /tmp/probe.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime snapshot --cpu arm9 > /tmp/snapshot.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime read-memory --cpu arm9 0x02000000 0x40 > /tmp/memory.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime run-until --cpu arm9 --break 0x02000008 > /tmp/run-until.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime step --cpu arm9 --count 1 > /tmp/step.json
+          stop_target
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          probe=json.loads(Path('/tmp/probe.json').read_text())
+          snapshot=json.loads(Path('/tmp/snapshot.json').read_text())
+          memory=json.loads(Path('/tmp/memory.json').read_text())
+          run_until=json.loads(Path('/tmp/run-until.json').read_text())
+          step=json.loads(Path('/tmp/step.json').read_text())
+          assert probe['cpu']=='arm9'
+          assert snapshot['pc']=='0x02000000'
+          assert snapshot['instruction_set']=='arm'
+          assert memory['length']=='0x00000040'
+          assert memory['data'].startswith('0100a0e3010080e2010080e2feffffea')
+          assert run_until['condition']['address']=='0x02000008'
+          assert run_until['snapshot']['pc']=='0x02000008'
+          assert run_until['snapshot']['stop']['kind']=='breakpoint'
+          regs={x['name']:x['value'] for x in run_until['snapshot']['registers']}
+          assert regs['r0']=='0x00000002'
+          assert step['count']==1
+          assert step['final_snapshot']['pc']=='0x02000004'
+          regs={x['name']:x['value'] for x in step['final_snapshot']['registers']}
+          assert regs['r0']=='0x00000001'
+          print('Phase 7H live smoke passed')
+          print(Path('/tmp/probe.json').read_text())
+          print(Path('/tmp/run-until.json').read_text())
+          print(Path('/tmp/step.json').read_text())
+          PY
