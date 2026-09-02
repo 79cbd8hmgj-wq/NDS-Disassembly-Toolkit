@@ -65,6 +65,8 @@ _EXPECTED_TRAP_KINDS = frozenset(
 
 
 class _RSPClientLike(Protocol):
+    def initial_ack_handshake(self) -> None: ...
+
     def negotiate(self) -> RSPCapabilities: ...
 
     def read_registers(self) -> bytes: ...
@@ -110,6 +112,7 @@ class MelonDSSession:
         resolved_port = cpu.default_port if port is None else port
         client = RSPClient.connect(host, resolved_port, timeout=timeout)
         try:
+            client.initial_ack_handshake()
             capabilities = client.negotiate()
         except BaseException:
             with suppress(Exception):
