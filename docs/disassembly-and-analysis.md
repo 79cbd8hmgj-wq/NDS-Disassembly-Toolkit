@@ -374,4 +374,44 @@ nds-toolkit project annotate game.ndsre arm9 0x02012340 --clear-comment
 
 Repeated `--tag` arguments replace the complete normalized tag set. A no-op `annotate` invocation is rejected rather than performing an unnecessary writable project open.
 
-Phase 7G is a presentation/query layer only. It adds no new function discovery, CFG/xref/symbol/data-flow inference, does not embed ROM or component bytes, and adds no third-party dependency. A stateful REPL/TUI is still deferred. Emulator/debugger trace integration is the separate Phase 7H boundary, and pseudo-C/decompiler work remains later.
+Phase 7G is a presentation/query layer only. It adds no new function discovery, CFG/xref/symbol/data-flow inference, does not embed ROM or component bytes, and adds no third-party dependency. A stateful REPL/TUI is still deferred. Emulator/debugger trace integration is the separate Phase 7H boundary.
+
+## Phase 7I conservative pseudo-C decompiler
+
+Phase 7I derives deterministic, conservative pseudo-C directly from the evidence already stored in a Phase 7F `.ndsre` project. It is a read-only view: no pseudo-C is written back to the project, no schema migration is required, and current symbols or user annotations affect the next decompilation immediately.
+
+The command identifies a function exactly by component, runtime address, and ARM/Thumb mode:
+
+```bash
+nds-toolkit project decompile game.ndsre arm9 0x02012340 --mode arm
+
+nds-toolkit project decompile game.ndsre arm9 0x02012340 \
+  --mode arm \
+  --format json
+
+nds-toolkit project decompile game.ndsre overlay_7 0x02200000 \
+  --mode thumb \
+  --output function-02200000.c
+```
+
+Text is the default output. `--format json` returns a small deterministic envelope containing component, address, instruction set, resolved function name, pseudo-C, fallback status, and warnings. Both text and JSON use the same atomic `--output` replacement behavior as other project commands.
+
+The decompiler consumes only toolkit-owned persisted evidence:
+
+- exact function and ARM/Thumb identity;
+- CFG/basic-block structure and direct control-flow edges;
+- typed decoded instruction semantics;
+- intraprocedural exact register/address/constant flow;
+- recovered stack slots, arguments, and return evidence;
+- component-aware symbols and user annotation name overrides;
+- exact direct-call targets and persisted project relationships.
+
+The output deliberately prefers truthful incompleteness over convincing guesses. Stack slots become structural names such as `local_04`, register arguments use names such as `arg0`, and memory accesses use only decoder-proven width types such as `uint8_t`, `uint16_t`, or `uint32_t`. Phase 7I does not infer source structs, classes, signed memory types, rich prototypes, or semantic gameplay names.
+
+Control-flow structuring is likewise conservative. Proven straight-line regions, simple `if`, `if/else`, early-return forms, and simple natural pre-test/post-test loops may be rendered with high-level syntax. If a graph is multi-entry, irreducible, or otherwise unsafe to structure, the decompiler retains canonical `loc_XXXXXXXX` labels and `goto` statements instead of fabricating a structured construct.
+
+Unsupported instructions remain visible with their source address. Ambiguous direct calls into overlapping Nintendo DS overlay address ranges retain a structural target name instead of being assigned to a guessed component. Exact component identity is never discarded merely because two overlays share a runtime address.
+
+Pseudo-C is **reverse-engineering assistance, not recovered original source and not a claim of recompilable C**. It is intended to reduce the human work of translating ARM/Thumb instructions into function-level behavior while keeping the evidence boundary inspectable.
+
+Phase 7H runtime traces remain a separate evidence source and are not silently mixed into Phase 7I output. A later Phase 7J investigation/prioritization layer can combine static pseudo-C, strings/xrefs/constants, call relationships, and Phase 7H runtime evidence to rank and explain which functions should be investigated next.
