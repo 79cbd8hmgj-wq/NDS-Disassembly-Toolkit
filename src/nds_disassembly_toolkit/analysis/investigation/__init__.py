@@ -7,6 +7,7 @@ from nds_disassembly_toolkit.analysis.investigation.model import (
     InvestigationReport,
     InvestigationRequest,
 )
+from nds_disassembly_toolkit.analysis.investigation.service import investigate_project
 
 __all__ = [
     "InvestigationCandidate",
@@ -14,4 +15,5 @@ __all__ = [
     "InvestigationEvidenceKind",
     "InvestigationReport",
     "InvestigationRequest",
+    "investigate_project",
 ]
