@@ -24,7 +24,8 @@ from nds_disassembly_toolkit.errors import RuntimeTargetStateError
 
 
 class RuntimeCaptureSession(Protocol):
-    cpu: RuntimeCpu
+    @property
+    def cpu(self) -> RuntimeCpu: ...
 
     def read_memory(self, address: int, length: int) -> bytes: ...
 
