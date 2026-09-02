@@ -333,10 +333,12 @@ def _collect_call_neighbors(
         for reference in project.xrefs_to(direct.address):
             if reference.kind is not CrossReferenceKind.CALL:
                 continue
-            if (
-                reference.target_instruction_set is not None
-                and reference.target_instruction_set is not direct.instruction_set
-            ):
+            resolved_target = _resolve_call_target(
+                address_index,
+                reference.target_address,
+                reference.target_instruction_set,
+            )
+            if resolved_target != direct_key:
                 continue
             source = _source_function_key(reference)
             if source is None or source not in functions or source == direct_key:
