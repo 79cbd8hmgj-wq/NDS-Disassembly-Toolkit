@@ -414,4 +414,22 @@ Unsupported instructions remain visible with their source address. Ambiguous dir
 
 Pseudo-C is **reverse-engineering assistance, not recovered original source and not a claim of recompilable C**. It is intended to reduce the human work of translating ARM/Thumb instructions into function-level behavior while keeping the evidence boundary inspectable.
 
-Phase 7H runtime traces remain a separate evidence source and are not silently mixed into Phase 7I output. A later Phase 7J investigation/prioritization layer can combine static pseudo-C, strings/xrefs/constants, call relationships, and Phase 7H runtime evidence to rank and explain which functions should be investigated next.
+Phase 7H runtime traces remain a separate evidence source and are not silently mixed into Phase 7I output.
+
+## Phase 7J investigation and prioritization
+
+Phase 7J provides a read-only evidence-fusion layer that answers which persisted functions should be inspected next and why. It combines explicit text clues, typed immediate constants, requested-address xrefs, optional Phase 7H2 trace differentials, and exactly one hop of persisted call relationships using fixed transparent weights.
+
+```bash
+nds-toolkit project investigate game.ndsre \
+  --text battle \
+  --constant 500 \
+  --baseline idle.ndstrace \
+  --target battle.ndstrace \
+  --top 10 \
+  --decompile
+```
+
+Candidate identity remains `(component, runtime_address, instruction_set)`. Ambiguous component-less call targets are not guessed, and string/xref evidence is suppressed when overlapping components persist different strings at the same numeric runtime address. Optional pseudo-C is delegated to the Phase 7I decompiler only after deterministic ranking and `--top` truncation, so it is context rather than a hidden score source.
+
+`project investigate` opens `.ndsre` read-only and reads `.ndstrace` files offline. Phase 7J introduces no persistence migration, debugger connection, new decoder/runtime engine, or new third-party dependency. See `docs/investigation.md` for selector semantics, score weights, output formats, and examples.
