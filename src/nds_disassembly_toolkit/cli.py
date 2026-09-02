@@ -10,6 +10,7 @@ from nds_disassembly_toolkit.analysis.project_cli import (
     add_project_parser,
     run_project_command,
 )
+from nds_disassembly_toolkit.analysis.runtime_cli import add_runtime_parser
 from nds_disassembly_toolkit.assets_cli import add_assets_parser, run_assets_command
 from nds_disassembly_toolkit.disassembly_cli import (
     add_disassembly_parser,
@@ -121,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_disassembly_parser(subparsers)
     add_analysis_parser(subparsers)
     add_project_parser(subparsers)
+    add_runtime_parser(subparsers)
     add_assets_parser(subparsers)
     add_source_patch_parser(subparsers)
     return parser
