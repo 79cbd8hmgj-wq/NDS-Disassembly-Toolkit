@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from nds_disassembly_toolkit.analysis.investigation import (
     InvestigationCandidate,
@@ -44,8 +45,20 @@ def add_investigate_parser(commands: Any) -> None:
     )
     parser.add_argument("project", type=Path)
     parser.add_argument("--text")
-    parser.add_argument("--constant", dest="constants", type=_signed_int, action="append", default=[])
-    parser.add_argument("--address", dest="addresses", type=_unsigned_int, action="append", default=[])
+    parser.add_argument(
+        "--constant",
+        dest="constants",
+        type=_signed_int,
+        action="append",
+        default=[],
+    )
+    parser.add_argument(
+        "--address",
+        dest="addresses",
+        type=_unsigned_int,
+        action="append",
+        default=[],
+    )
     parser.add_argument("--component")
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--target", type=Path)
