@@ -93,7 +93,7 @@ def test_memory_diff_requires_same_region_and_before_after_order() -> None:
 
     with pytest.raises(ValueError, match="same memory region"):
         diff_memory_snapshots(before, wrong_region)
-    with pytest.raises(ValueError, match="BEFORE.*AFTER"):
+    with pytest.raises(ValueError, match=r"BEFORE.*AFTER"):
         diff_memory_snapshots(after, before)
 
 
