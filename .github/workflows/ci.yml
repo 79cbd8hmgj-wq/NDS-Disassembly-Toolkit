@@ -65,7 +65,7 @@ jobs:
       - name: Exercise exact runtime CLI
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           PID=""
           start_target() {
             /tmp/headless-nds 3333 > /tmp/melonds-live.log 2>&1 &
