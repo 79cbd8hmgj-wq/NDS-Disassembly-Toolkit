@@ -12,7 +12,7 @@ from nds_disassembly_toolkit.analysis.runtime import (
     StopReasonKind,
 )
 from nds_disassembly_toolkit.analysis.runtime.rsp import RSPCapabilities, RSPStopReply
-from nds_disassembly_toolkit.errors import RuntimeProtocolError
+from nds_disassembly_toolkit.errors import RuntimeConnectionError, RuntimeProtocolError
 
 
 def _register_blob(*, pc: int = 0x02000100, cpsr: int = 0x13) -> bytes:
@@ -154,6 +154,20 @@ def test_step_classifies_stop_and_captures_snapshot() -> None:
     assert client.calls[-2:] == [("step",), ("read_registers",)]
 
 
+def test_step_does_not_misclassify_non_trap_signal() -> None:
+    class SignalClient(FakeRSPClient):
+        def step(self) -> RSPStopReply:
+            self.calls.append(("step",))
+            return RSPStopReply(signal=11, raw="S0b")
+
+    client = SignalClient()
+    session = MelonDSSession(RuntimeCpu.ARM9, client, client.capabilities)
+
+    snapshot = session.step()
+    assert snapshot.stop.kind is StopReasonKind.SIGNAL
+    assert snapshot.stop.signal == 11
+
+
 def test_continue_classifies_generic_signal_stop() -> None:
     client = FakeRSPClient()
     session = MelonDSSession(RuntimeCpu.ARM9, client, client.capabilities)
@@ -178,6 +192,22 @@ def test_run_until_breakpoint_installs_and_removes_temporary_condition() -> None
     ]
 
 
+def test_run_until_breakpoint_does_not_misclassify_unrelated_signal() -> None:
+    class SignalClient(FakeRSPClient):
+        def continue_execution(self) -> RSPStopReply:
+            self.calls.append(("continue",))
+            return RSPStopReply(signal=2, raw="S02")
+
+    client = SignalClient()
+    session = MelonDSSession(RuntimeCpu.ARM9, client, client.capabilities)
+
+    snapshot = session.run_until_breakpoint(0x02001234, length=4)
+    assert snapshot.stop.kind is StopReasonKind.SIGNAL
+    assert snapshot.stop.signal == 2
+    assert snapshot.stop.address is None
+    assert client.calls[-1] == ("remove", 1, 0x02001234, 4)
+
+
 @pytest.mark.parametrize(
     ("kind", "rsp_kind"),
     [
@@ -198,6 +228,41 @@ def test_run_until_watchpoint_maps_semantic_kind(
     assert snapshot.stop.address == 0x02100000
     assert client.calls[0] == ("insert", rsp_kind, 0x02100000, 4)
     assert client.calls[-1] == ("remove", rsp_kind, 0x02100000, 4)
+
+
+def test_temporary_cleanup_error_does_not_mask_snapshot_failure() -> None:
+    class FailingClient(FakeRSPClient):
+        def read_registers(self) -> bytes:
+            self.calls.append(("read_registers",))
+            raise RuntimeProtocolError("snapshot failed")
+
+        def remove_breakpoint(self, kind: int, address: int, length: int) -> None:
+            self.calls.append(("remove", kind, address, length))
+            raise RuntimeConnectionError("cleanup failed")
+
+    client = FailingClient()
+    session = MelonDSSession(RuntimeCpu.ARM9, client, client.capabilities)
+
+    with pytest.raises(RuntimeProtocolError, match="snapshot failed"):
+        session.run_until_breakpoint(0x02001234, length=4)
+
+    assert client.calls[-1] == ("remove", 1, 0x02001234, 4)
+
+
+def test_context_cleanup_error_does_not_mask_primary_failure() -> None:
+    class FailingDetachClient(FakeRSPClient):
+        def detach(self) -> None:
+            self.calls.append(("detach",))
+            raise RuntimeConnectionError("detach failed")
+
+    client = FailingDetachClient()
+    session = MelonDSSession(RuntimeCpu.ARM9, client, client.capabilities)
+
+    with pytest.raises(ValueError, match="primary failure"):
+        with session:
+            raise ValueError("primary failure")
+
+    assert client.calls == [("detach",)]
 
 
 def test_context_manager_detaches_session() -> None:
