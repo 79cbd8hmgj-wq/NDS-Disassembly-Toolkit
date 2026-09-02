@@ -225,6 +225,64 @@ def test_watchpoint_capture_forwards_kind_address_and_length(tmp_path: Path) -> 
     ]
 
 
+@pytest.mark.parametrize(
+    "kind",
+    (BreakpointKind.READ, BreakpointKind.WRITE, BreakpointKind.ACCESS),
+)
+def test_repeated_watchpoint_capture_advances_before_rearming(
+    tmp_path: Path,
+    kind: BreakpointKind,
+) -> None:
+    from nds_disassembly_toolkit.analysis.runtime.capture import capture_trace
+
+    destination = tmp_path / f"watch-{kind.value}.ndstrace"
+    watched_address = 0x02100000
+    session = FakeSession(
+        steps=(_snapshot(0x02000014),),
+        watchpoints=(
+            _snapshot(
+                0x02000010,
+                kind=StopReasonKind.WATCHPOINT,
+                address=watched_address,
+            ),
+            _snapshot(
+                0x02000010,
+                kind=StopReasonKind.WATCHPOINT,
+                address=watched_address,
+            ),
+        ),
+    )
+    config = TraceCaptureConfig(
+        cpu=RuntimeCpu.ARM9,
+        mode=TraceCaptureMode.WATCHPOINT,
+        limit=2,
+        timeout=5.0,
+        condition_kind=kind,
+        condition_address=watched_address,
+        condition_length=4,
+    )
+
+    capture_trace(session, config, destination)
+
+    assert session.calls == [
+        ("run_until_watchpoint", kind, watched_address, 4),
+        ("step",),
+        ("run_until_watchpoint", kind, watched_address, 4),
+    ]
+    with TraceStore.open(destination) as store:
+        events = store.events()
+    assert [event.role for event in events] == [
+        TraceEventRole.EVIDENCE,
+        TraceEventRole.CONTROL_ADVANCE,
+        TraceEventRole.EVIDENCE,
+    ]
+    assert [event.stop.kind for event in events] == [
+        StopReasonKind.WATCHPOINT,
+        StopReasonKind.STEP,
+        StopReasonKind.WATCHPOINT,
+    ]
+
+
 def test_capture_reads_memory_before_execution_and_after_final_stop(tmp_path: Path) -> None:
     from nds_disassembly_toolkit.analysis.runtime.capture import capture_trace
 
