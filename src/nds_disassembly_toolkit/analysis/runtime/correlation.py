@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from nds_disassembly_toolkit.analysis.model import FunctionCandidate
 from nds_disassembly_toolkit.analysis.project import AnalysisProject
 from nds_disassembly_toolkit.analysis.runtime.model import (
     RuntimeComponentLocation,
@@ -79,7 +80,7 @@ def correlate_trace_event(
     event: TraceEvent,
 ) -> TraceEventCorrelation:
     candidates: list[TraceEventComponentCorrelation] = []
-    functions = []
+    functions: list[FunctionCandidate] = []
     for identity in sorted(
         project.component_identities(),
         key=lambda candidate: candidate.name,
