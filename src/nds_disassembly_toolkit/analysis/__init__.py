@@ -43,6 +43,8 @@ from nds_disassembly_toolkit.analysis.decompiler import (
     UnknownExpression,
     UnknownStatement,
     VariableExpression,
+    decompile_function,
+    render_pseudo_c,
 )
 from nds_disassembly_toolkit.analysis.functions import discover_functions
 from nds_disassembly_toolkit.analysis.model import (
@@ -223,12 +225,14 @@ __all__ = [
     "build_xref_index",
     "cluster_numeric_matches",
     "decode_instruction",
+    "decompile_function",
     "discover_functions",
     "extract_ascii_strings",
     "filter_strings",
     "find_pointer_references",
     "function_address_for_reference",
     "nearest_function_start",
+    "render_pseudo_c",
     "scan_scaled_byte_rows",
     "write_report",
 ]
