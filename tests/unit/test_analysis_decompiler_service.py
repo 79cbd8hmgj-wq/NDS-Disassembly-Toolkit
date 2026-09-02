@@ -103,7 +103,7 @@ def test_decompile_function_works_with_read_only_project(tmp_path: Path) -> None
 
     assert result.ir.name == "UserEntry"
     assert result.structured.function is result.ir
-    assert result.pseudo_c == "void UserEntry(void)\n{\n}\n"
+    assert result.pseudo_c == "void UserEntry(void) {\n}\n"
 
 
 @pytest.mark.parametrize(
