@@ -48,3 +48,15 @@ class RuntimeTimeoutError(RuntimeAnalysisError):
 
 class RuntimeTargetStateError(RuntimeAnalysisError):
     """Raised when the target state is unsuitable for a requested operation."""
+
+
+class RuntimeTraceError(RuntimeAnalysisError):
+    """Raised when persisted runtime trace work cannot complete safely."""
+
+
+class RuntimeTraceFormatError(RuntimeTraceError):
+    """Raised when a .ndstrace file violates its persisted format contract."""
+
+
+class RuntimeTraceMismatchError(RuntimeTraceError):
+    """Raised when two known trace targets cannot be compared safely."""
