@@ -7,6 +7,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     GotoNode,
     IfNode,
     LabelNode,
+    LoopNode,
     ReturnStatement,
     StatementNode,
     StructuredFunction,
@@ -42,13 +43,78 @@ def _local_edges(
     )
 
 
-def _incoming_counts(function: DecompiledFunction) -> dict[int, int]:
+def _predecessors(function: DecompiledFunction) -> dict[int, frozenset[int]]:
     blocks = _block_map(function)
-    counts = {address: 0 for address in blocks}
+    values: dict[int, set[int]] = {address: set() for address in blocks}
     for block in function.blocks:
         for edge in _local_edges(block, blocks):
-            counts[edge.target_address] += 1
-    return counts
+            values[edge.target_address].add(block.address)
+    return {
+        address: frozenset(sorted(predecessors))
+        for address, predecessors in values.items()
+    }
+
+
+def _incoming_counts(function: DecompiledFunction) -> dict[int, int]:
+    return {
+        address: len(predecessors)
+        for address, predecessors in _predecessors(function).items()
+    }
+
+
+def _dominators(function: DecompiledFunction) -> dict[int, frozenset[int]]:
+    blocks = _block_map(function)
+    if not blocks or function.address not in blocks:
+        return {}
+    predecessors = _predecessors(function)
+    all_blocks = frozenset(blocks)
+    dominators = {
+        address: (
+            frozenset({address}) if address == function.address else all_blocks
+        )
+        for address in blocks
+    }
+
+    changed = True
+    while changed:
+        changed = False
+        for address in sorted(blocks):
+            if address == function.address:
+                continue
+            parents = tuple(sorted(predecessors[address]))
+            if not parents:
+                updated = frozenset({address})
+            else:
+                shared = set(dominators[parents[0]])
+                for parent in parents[1:]:
+                    shared.intersection_update(dominators[parent])
+                shared.add(address)
+                updated = frozenset(shared)
+            if updated != dominators[address]:
+                dominators[address] = updated
+                changed = True
+    return dominators
+
+
+def _back_edges(function: DecompiledFunction) -> tuple[CFGEdge, ...]:
+    blocks = _block_map(function)
+    dominators = _dominators(function)
+    return tuple(
+        sorted(
+            (
+                edge
+                for block in function.blocks
+                for edge in _local_edges(block, blocks)
+                if edge.target_address in dominators.get(block.address, frozenset())
+            ),
+            key=lambda edge: (
+                edge.target_address,
+                edge.source_address,
+                edge.kind.value,
+                edge.source_instruction_address,
+            ),
+        )
+    )
 
 
 def _branch_statement(block: DecompiledBlock) -> BranchStatement | None:
@@ -87,6 +153,152 @@ def _fallback_function(function: DecompiledFunction) -> StructuredFunction:
         ):
             body.append(GotoNode(edge.target_address))
     return StructuredFunction(function, tuple(body), True)
+
+
+def _linear_region_to_header(
+    start: int,
+    header: int,
+    blocks: dict[int, DecompiledBlock],
+) -> tuple[int, ...] | None:
+    region: list[int] = []
+    seen: set[int] = set()
+    current = start
+    while current != header:
+        if current in seen or current not in blocks:
+            return None
+        seen.add(current)
+        region.append(current)
+        edges = _local_edges(blocks[current], blocks)
+        if len(edges) != 1:
+            return None
+        current = edges[0].target_address
+    return tuple(region)
+
+
+def _linear_region_to_latch(
+    header: int,
+    latch: int,
+    blocks: dict[int, DecompiledBlock],
+) -> tuple[int, ...] | None:
+    region: list[int] = []
+    seen: set[int] = set()
+    current = header
+    while True:
+        if current in seen or current not in blocks:
+            return None
+        seen.add(current)
+        region.append(current)
+        if current == latch:
+            return tuple(region)
+        edges = _local_edges(blocks[current], blocks)
+        if len(edges) != 1:
+            return None
+        current = edges[0].target_address
+
+
+def _region_is_single_entry(
+    region: frozenset[int],
+    header: int,
+    predecessors: dict[int, frozenset[int]],
+) -> bool:
+    for address in region:
+        outside = predecessors[address] - region
+        if address == header:
+            if outside:
+                return False
+            continue
+        if outside:
+            return False
+    return True
+
+
+def _try_pretest_loop(
+    block: DecompiledBlock,
+    blocks: dict[int, DecompiledBlock],
+    predecessors: dict[int, frozenset[int]],
+    back_edges: tuple[CFGEdge, ...],
+) -> tuple[LoopNode, int, frozenset[int]] | None:
+    branch = _branch_statement(block)
+    if branch is None or branch.condition is None or _statement_nodes(block):
+        return None
+    candidates = tuple(
+        edge for edge in back_edges if edge.target_address == block.address
+    )
+    if len(candidates) != 1:
+        return None
+    back_edge = candidates[0]
+    edges = _local_edges(block, blocks)
+    if len(edges) != 2:
+        return None
+    taken = _edge_of_kind(edges, CFGEdgeKind.BRANCH)
+    fallthrough = _edge_of_kind(edges, CFGEdgeKind.FALLTHROUGH)
+    if taken is None or fallthrough is None:
+        return None
+    if taken.target_address == fallthrough.target_address:
+        return None
+
+    path = _linear_region_to_header(taken.target_address, block.address, blocks)
+    if not path or path[-1] != back_edge.source_address:
+        return None
+    region = frozenset({block.address, *path})
+    if not _region_is_single_entry(region, block.address, predecessors):
+        return None
+    if fallthrough.target_address in region:
+        return None
+
+    body: list[StructuredNode] = []
+    for address in path:
+        body.extend(_statement_nodes(blocks[address]))
+    return (
+        LoopNode(branch.condition, tuple(body), post_test=False),
+        fallthrough.target_address,
+        region,
+    )
+
+
+def _try_posttest_loop(
+    block: DecompiledBlock,
+    blocks: dict[int, DecompiledBlock],
+    predecessors: dict[int, frozenset[int]],
+    back_edges: tuple[CFGEdge, ...],
+) -> tuple[LoopNode, int, frozenset[int]] | None:
+    candidates = tuple(
+        edge for edge in back_edges if edge.target_address == block.address
+    )
+    if len(candidates) != 1:
+        return None
+    back_edge = candidates[0]
+    latch = blocks[back_edge.source_address]
+    branch = _branch_statement(latch)
+    if branch is None or branch.condition is None:
+        return None
+    latch_edges = _local_edges(latch, blocks)
+    if len(latch_edges) != 2:
+        return None
+    taken = _edge_of_kind(latch_edges, CFGEdgeKind.BRANCH)
+    fallthrough = _edge_of_kind(latch_edges, CFGEdgeKind.FALLTHROUGH)
+    if taken is None or fallthrough is None:
+        return None
+    if taken.target_address != block.address:
+        return None
+
+    path = _linear_region_to_latch(block.address, latch.address, blocks)
+    if path is None:
+        return None
+    region = frozenset(path)
+    if not _region_is_single_entry(region, block.address, predecessors):
+        return None
+    if fallthrough.target_address in region:
+        return None
+
+    body: list[StructuredNode] = []
+    for address in path:
+        body.extend(_statement_nodes(blocks[address]))
+    return (
+        LoopNode(branch.condition, tuple(body), post_test=True),
+        fallthrough.target_address,
+        region,
+    )
 
 
 def _try_early_return(
@@ -196,6 +408,8 @@ def structure_function(function: DecompiledFunction) -> StructuredFunction:
     if len(blocks) != len(function.blocks) or function.address not in blocks:
         return _fallback_function(function)
     incoming = _incoming_counts(function)
+    predecessors = _predecessors(function)
+    back_edges = _back_edges(function)
     body: list[StructuredNode] = []
     consumed: set[int] = set()
     current = function.address
@@ -205,6 +419,18 @@ def structure_function(function: DecompiledFunction) -> StructuredFunction:
         prefix = _statement_nodes(block)
         branch = _branch_statement(block)
         edges = _local_edges(block, blocks)
+
+        loop = _try_pretest_loop(block, blocks, predecessors, back_edges)
+        if loop is None:
+            loop = _try_posttest_loop(block, blocks, predecessors, back_edges)
+        if loop is not None:
+            node, next_address, region = loop
+            if consumed.intersection(region):
+                return _fallback_function(function)
+            body.append(node)
+            consumed.update(region)
+            current = next_address
+            continue
 
         if branch is not None and branch.condition is not None:
             structured = (
