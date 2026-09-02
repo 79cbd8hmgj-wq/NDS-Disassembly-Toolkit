@@ -34,6 +34,7 @@ from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     MemorySnapshotPhase,
     TraceCaptureConfig,
     TraceCaptureMode,
+    TraceDiffReport,
     TraceEvent,
     TraceEventRole,
     TraceMemoryRegion,
@@ -156,9 +157,8 @@ def _write_trace(
         )
 
 
-def _evidence_value(report: object, address: int, name: str) -> float:
-    rankings = getattr(report, "rankings")
-    ranked = next(item for item in rankings if item.address == address)
+def _evidence_value(report: TraceDiffReport, address: int, name: str) -> float:
+    ranked = next(item for item in report.rankings if item.address == address)
     return next(item.value for item in ranked.evidence if item.name == name)
 
 
