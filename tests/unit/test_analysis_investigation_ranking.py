@@ -26,7 +26,11 @@ from nds_disassembly_toolkit.analysis.investigation import (
 )
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, ComponentAnalysisBundle
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
-from nds_disassembly_toolkit.analysis.runtime.model import RegisterSnapshot, RuntimeStop, StopReasonKind
+from nds_disassembly_toolkit.analysis.runtime.model import (
+    RegisterSnapshot,
+    RuntimeStop,
+    StopReasonKind,
+)
 from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     TraceCaptureConfig,
     TraceCaptureMode,
@@ -73,14 +77,25 @@ def _cfg(function: FunctionCandidate, immediate: int | None = None) -> FunctionC
     )
     return FunctionControlFlowGraph(
         function,
-        (BasicBlock(function.component, function.address, function.offset, InstructionSet.ARM, (instruction,)),),
+        (
+            BasicBlock(
+                function.component,
+                function.address,
+                function.offset,
+                InstructionSet.ARM,
+                (instruction,),
+            ),
+        ),
         (),
         (),
         (),
     )
 
 
-def _call(source: FunctionCandidate, target: FunctionCandidate | tuple[int, InstructionSet]) -> CrossReference:
+def _call(
+    source: FunctionCandidate,
+    target: FunctionCandidate | tuple[int, InstructionSet],
+) -> CrossReference:
     if isinstance(target, FunctionCandidate):
         target_address = target.address
         target_mode = target.instruction_set
