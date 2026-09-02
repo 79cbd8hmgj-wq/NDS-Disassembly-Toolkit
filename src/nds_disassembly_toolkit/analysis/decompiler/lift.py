@@ -11,6 +11,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     DecompiledBlock,
     DecompiledFunction,
     DecompilerExpression,
+    DecompilerStatement,
     RegisterExpression,
     SourceRef,
     UnaryExpression,
@@ -394,7 +395,7 @@ def lift_function(
         cfg.blocks,
         key=lambda item: (item.address, item.instruction_set.value),
     ):
-        statements = []
+        statements: list[DecompilerStatement] = []
         current_values: dict[Register, DecompilerExpression] = {}
         pending_compare: tuple[DecompilerExpression, DecompilerExpression] | None = None
 
