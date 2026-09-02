@@ -18,7 +18,12 @@ def _module_params_bytes() -> bytes:
         0x04027539,
         0xDEC00621,
     )
-    return b"\x00" * 0x20 + struct.pack("<8I", *values) + b"\x00" * 0x20
+    return (
+        b"\x00" * 0x20
+        + struct.pack("<8I", *values)
+        + struct.pack("<I", 0x2106C0DE)
+        + b"\x00" * 0x20
+    )
 
 
 def test_cli_disasm_module_params_outputs_json(tmp_path: Path, capsys) -> None:

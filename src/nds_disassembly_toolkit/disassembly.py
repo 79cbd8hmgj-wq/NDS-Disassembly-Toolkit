@@ -12,7 +12,8 @@ from nds_disassembly_toolkit.errors import DisassemblyError
 from nds_disassembly_toolkit.nds.overlays import OverlayEntry
 
 MODULE_PARAMS_MAGIC = 0xDEC00621
-MODULE_PARAMS_SIZE = 32
+MODULE_PARAMS_TRAILING_MAGIC = 0x2106C0DE
+MODULE_PARAMS_SIZE = 36
 MODULE_PARAMS_MAGIC_OFFSET = 28
 
 
@@ -35,11 +36,11 @@ def find_module_params(
     base_address: int = 0,
 ) -> ModuleParams | None:
     source = bytes(data)
-    magic = struct.pack("<I", MODULE_PARAMS_MAGIC)
+    signature = struct.pack("<II", MODULE_PARAMS_MAGIC, MODULE_PARAMS_TRAILING_MAGIC)
     candidates: list[int] = []
     cursor = 0
     while True:
-        magic_offset = source.find(magic, cursor)
+        magic_offset = source.find(signature, cursor)
         if magic_offset < 0:
             break
         start = magic_offset - MODULE_PARAMS_MAGIC_OFFSET
