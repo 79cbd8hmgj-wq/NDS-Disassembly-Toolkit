@@ -49,7 +49,7 @@ Use `--json` for deterministic machine-readable output and `--output PATH` for a
 
 At least one investigation selector is required.
 
-- `--text TEXT` performs a case-insensitive substring match against persisted strings and user annotation names/comments/tags. A matching string contributes only to functions that actually reference the string through persisted xrefs.
+- `--text TEXT` performs a case-insensitive substring match against persisted strings and user annotation names/comments/tags. A matching string contributes only to functions that actually reference the string through persisted xrefs. Because persisted xrefs contain a numeric target rather than a target component, string-derived xref evidence is suppressed when multiple persisted strings from overlapping components share that runtime address.
 - `--constant VALUE` is repeatable. Constants are matched only against persisted typed `IMMEDIATE` instruction operands. Human-readable assembly operand strings are never parsed for scoring.
 - `--address ADDRESS` is repeatable. The engine uses persisted cross-references targeting that exact address and credits only references with a known source-function identity.
 - `--component NAME` restricts static candidate functions/evidence to one persisted component.
@@ -100,7 +100,7 @@ overlay_3:0x02200000 arm
 overlay_7:0x02200000 arm
 ```
 
-Runtime-address equality never merges overlay functions.
+Runtime-address equality never merges overlay functions. The same conservative rule applies to text evidence: a numeric xref is not assigned to one matching overlay string when another persisted overlay string occupies the same runtime address.
 
 ## Names and pseudo-C
 
