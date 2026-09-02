@@ -568,7 +568,9 @@ class TraceStore:
         if summary.project_fingerprint != self._config.project_fingerprint:
             raise RuntimeTraceFormatError("runtime trace summary fingerprint does not match config")
         if summary.memory_regions != len(self._config.memory_regions):
-            raise RuntimeTraceFormatError("runtime trace summary memory count does not match config")
+            raise RuntimeTraceFormatError(
+                "runtime trace summary memory count does not match config"
+            )
 
         evidence, control = self._validate_event_rows()
         if summary.evidence_events != evidence or summary.control_events != control:
