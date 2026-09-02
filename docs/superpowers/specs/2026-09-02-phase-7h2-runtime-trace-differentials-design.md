@@ -47,7 +47,7 @@ This is easy to inspect manually but is weaker for binary memory snapshots, inde
 ## Core design decisions
 
 1. **Runtime facts and static interpretation remain separate.** `.ndstrace` stores observed PCs, stops, registers, memory bytes, capture configuration, and provenance. It does not persist copied function names or symbols from `.ndsre`.
-2. **`.ndsre` schema version 1 remains unchanged throughout 7H2.** Static correlation occurs at report time through the existing public `AnalysisProject` API.
+2. **`.ndsre` schema version 1 remains unchanged throughout 7H2.** Static correlation occurs at report time through the existing public `AnalysisProject` API plus narrowly scoped read-only query helpers added in this phase.
 3. **All captures are bounded.** Every capture has a finite event/step limit and timeout. The CLI never starts an unbounded instruction trace.
 4. **Incomplete captures do not become valid final trace files.** Capture writes to a sibling temporary SQLite file, validates/finalizes it, then atomically replaces the requested destination.
 5. **Control operations are auditable.** A repeated breakpoint/watchpoint capture may require an advancing single-step after a hit. Such steps are stored as control events and excluded from behavioral hit counts by default instead of being silently hidden.
@@ -70,6 +70,14 @@ src/nds_disassembly_toolkit/analysis/runtime/
 ├── memory_diff.py          # before/after memory comparison
 └── trace_diff.py           # trace comparison, correlation, ranking
 ```
+
+Add only read-only query methods to:
+
+```text
+src/nds_disassembly_toolkit/analysis/project/project.py
+```
+
+No change to `analysis/project/schema.py`, `SCHEMA_VERSION`, or `ANALYSIS_MODEL_VERSION` is permitted for 7H2.
 
 CLI integration remains in:
 
@@ -392,26 +400,79 @@ Rules:
 - if one or both fingerprints are absent, raw-address comparison is allowed, but the report explicitly marks target identity as unverified;
 - a project supplied at report time is correlated independently and does not rewrite the stored trace.
 
+## Read-only project query extensions
+
+Trace-level correlation needs efficient queries that the existing exact-address Phase 7H1 API does not currently expose. 7H2 adds these methods to `AnalysisProject` without changing persistence schema or write behavior.
+
+### `functions_containing`
+
+```python
+project.functions_containing(
+    component: str,
+    address: int,
+    instruction_set: InstructionSet,
+) -> tuple[FunctionCandidate, ...]
+```
+
+Returns every persisted function in the component for which either:
+
+- the function entry exactly matches `(address, instruction_set)`; or
+- a persisted instruction row for that function exactly matches `(address, instruction_set)`.
+
+Results are deduplicated and ordered by function address then instruction-set value. Returning a tuple instead of one function preserves the possibility of overlapping/alternative persisted CFG ownership.
+
+### `xrefs_to_range`
+
+```python
+project.xrefs_to_range(
+    start_address: int,
+    end_address: int,
+    *,
+    source_component: str | None = None,
+) -> tuple[CrossReference, ...]
+```
+
+Uses a half-open range `[start_address, end_address)`. `end_address` must be greater than `start_address`. Returns xrefs whose target address lies in that range, ordered by target address, source component, source address, and xref kind.
+
+This avoids issuing one `xrefs_to()` query per changed byte when correlating memory differentials.
+
+### `xrefs_from_function`
+
+```python
+project.xrefs_from_function(
+    component: str,
+    function_address: int,
+    instruction_set: InstructionSet,
+) -> tuple[CrossReference, ...]
+```
+
+Returns persisted xrefs whose recorded source function identity matches the requested function. Results are ordered by source address, target address, and kind.
+
+This supports transparent call-neighbor and changed-memory-reference evidence without reaching into the project connection from the runtime package.
+
+All three methods are read-only, use existing indexed/static records, follow the current `AnalysisProjectError` boundary, and require no schema migration.
+
 ## Static correlation
 
 Trace capture works without `.ndsre`.
 
-When a project is supplied to `runtime trace inspect` or `runtime diff`, correlation uses only the existing read-only `AnalysisProject` API.
+When a project is supplied to `runtime trace inspect` or `runtime diff`, correlation uses only the read-only `AnalysisProject` API.
 
 For each runtime evidence PC:
 
 1. use the stored ARM/Thumb instruction-set identity;
 2. find every persisted component whose runtime range contains the PC;
-3. independently query exact function/symbol/annotation evidence for each component candidate;
-4. preserve all candidates in deterministic component-name order.
+3. call `functions_containing(component, pc, instruction_set)` for each component candidate;
+4. independently query exact symbol/annotation evidence for each component candidate;
+5. preserve all component and function candidates in deterministic order.
 
-### Ambiguous overlay policy
+### Ambiguous overlay/function policy
 
-If exactly one component/function identity can be established, the event may contribute to that function's dynamic hit count.
+An event has an unambiguous function identity only when the complete candidate set across all covering components contains exactly one function identity.
 
-If several overlapping components remain possible, the report records all candidates with `ambiguous=true`. Such an event contributes to raw-address statistics but is excluded from function ranking by default.
+If several components or several persisted functions remain possible, the report records all candidates with `ambiguous=true`. Such an event contributes to raw-address statistics but is excluded from function aggregation/ranking by default.
 
-This avoids artificially crediting the same runtime event to multiple inactive overlays.
+This avoids artificially crediting the same runtime event to multiple inactive overlays or overlapping persisted CFG interpretations.
 
 7H2 may later add proven overlay residency evidence, but it must not infer residency solely from an overlapping address.
 
@@ -478,17 +539,17 @@ For each function report:
 - whether any evidence stop PC corresponds to a configured breakpoint/watchpoint hit;
 - static xrefs from the function into changed memory ranges when available.
 
-Ambiguous overlay candidates are listed separately and do not inflate aggregate function counts.
+Ambiguous component/function candidates are listed separately and do not inflate aggregate function counts.
 
 ## Memory-to-code correlation
 
-When the target trace contains changed memory regions and a project is supplied, the report checks persisted static xrefs whose target addresses fall inside changed ranges.
+When the target trace contains changed memory regions and a project is supplied, each contiguous changed range is queried with `project.xrefs_to_range(start, end)`.
 
 This is evidence that a function statically references a changed address, not proof that the observed runtime write came from that particular xref.
 
 The report wording and ranking evidence must preserve that distinction.
 
-Watchpoint stop PCs provide stronger direct runtime evidence: when a watchpoint event stops at PC X, the unambiguously correlated function containing X is marked as a runtime condition-hit function.
+Watchpoint stop PCs provide stronger direct runtime evidence: when a watchpoint event stops at PC X, the unique result of runtime function correlation for X is marked as a runtime condition-hit function. Ambiguous watchpoint stop PCs do not receive this bonus.
 
 ## Transparent function ranking
 
@@ -520,13 +581,13 @@ Feature definitions:
 
 ### `changed_memory_reference`
 
-`1.0` when the static project contains an xref from the function to an address inside a target-trace changed memory range; otherwise `0.0`.
+`1.0` when `xrefs_from_function(...)` includes an xref whose target lies inside a target-trace changed memory range; otherwise `0.0`.
 
 This means "static reference to changed memory," not "proven runtime writer."
 
 ### `dynamic_neighbor`
 
-`1.0` when the static project shows a call relationship between the function and another unambiguously correlated target-exclusive dynamic candidate; otherwise `0.0`.
+`1.0` when a call-kind xref returned by `xrefs_from_function(...)` connects the function to another unambiguously correlated target-exclusive dynamic candidate, in either caller or callee direction after deterministic reverse-edge lookup; otherwise `0.0`.
 
 The report emits every raw feature value, weight, and textual evidence item. Equal scores use deterministic tie-breaking by component name, function address, then instruction-set identity.
 
@@ -658,10 +719,13 @@ Cover:
 - repeated watchpoint control-advance behavior;
 - target-exit handling;
 - exact project fingerprint canonicalization;
+- `functions_containing` exact-entry/instruction/overlap behavior;
+- `xrefs_to_range` half-open range and deterministic ordering;
+- `xrefs_from_function` identity filtering;
 - trace fingerprint matching/mismatch rules;
 - raw-address frequency normalization;
 - function aggregation;
-- overlay ambiguity exclusion from ranking;
+- overlay/function ambiguity exclusion from ranking;
 - changed-memory xref correlation;
 - ranking feature calculation, weights, and deterministic tie-breaking;
 - CLI JSON and error-code behavior.
@@ -670,7 +734,7 @@ Mock/fake session objects are used for deterministic orchestration tests. RSP pa
 
 ### Integration tests
 
-Use real temporary `.ndstrace` SQLite files and existing static-project fixtures to verify complete capture → inspect → diff workflows, including ambiguous overlays and project fingerprint behavior.
+Use real temporary `.ndstrace` SQLite files and existing static-project fixtures to verify complete capture → inspect → diff workflows, including ambiguous overlays/functions and project fingerprint behavior.
 
 ### Live melonDS gate
 
@@ -715,8 +779,9 @@ The live smoke remains a release gate for 7H2, not an optional manual note.
 ### Phase 7H2D — project correlation
 
 - exact project fingerprinting;
+- read-only containment/range/function xref helpers;
 - trace inspection with static correlation;
-- conservative overlay ambiguity handling;
+- conservative overlay/function ambiguity handling;
 - changed-memory xref lookup.
 
 ### Phase 7H2E — behavioral differential
@@ -749,6 +814,7 @@ Phase 7H2 does not add:
 - a custom or patched melonDS fork;
 - melonDS as a runtime Python dependency;
 - runtime tables inside `.ndsre`;
+- any `.ndsre` schema/model version change;
 - automatic overlay residency inference without direct evidence;
 - automatic structure/type inference;
 - symbolic execution or angr integration;
@@ -765,10 +831,11 @@ Phase 7H2 is complete when all of the following are true:
 1. a user can create a bounded step, repeated-breakpoint, or repeated-watchpoint `.ndstrace` against the verified 7H1 melonDS session;
 2. configured memory regions produce trustworthy BEFORE/AFTER evidence;
 3. traces can be inspected without a static project and correlated conservatively with one when supplied;
-4. two traces can be compared as baseline vs target behavior with normalized raw-address and function-level evidence;
-5. target-relevant unambiguous functions receive transparent deterministic rankings with explicit evidence;
-6. overlapping overlays are never silently guessed or double-counted;
-7. `.ndsre` schema version 1 remains unchanged;
-8. no new runtime dependency or copied melonDS implementation code is introduced;
-9. full pytest/Ruff/strict-mypy verification passes on the exact integration head;
-10. the stock-melonDS live capture/differential smoke passes on the exact integration head and again on post-merge `main`.
+4. dynamic PCs inside persisted functions can be correlated through public read-only project queries without direct database access from the runtime package;
+5. two traces can be compared as baseline vs target behavior with normalized raw-address and function-level evidence;
+6. target-relevant unambiguous functions receive transparent deterministic rankings with explicit evidence;
+7. overlapping overlays/functions are never silently guessed or double-counted;
+8. `.ndsre` schema/model versions remain unchanged;
+9. no new runtime dependency or copied melonDS implementation code is introduced;
+10. full pytest/Ruff/strict-mypy verification passes on the exact integration head;
+11. the stock-melonDS live capture/differential smoke passes on the exact integration head and again on post-merge `main`.
