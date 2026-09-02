@@ -48,6 +48,15 @@ def test_command_frames_request_and_acknowledges_fragmented_response() -> None:
     assert sock.sent == [b"$qSupported#37", b"+"]
 
 
+def test_initial_ack_handshake_sends_and_receives_ack() -> None:
+    sock = FakeSocket([b"+"])
+    client = RSPClient(sock)
+
+    client.initial_ack_handshake()
+
+    assert sock.sent == [b"+"]
+
+
 def test_command_rejects_bad_response_checksum() -> None:
     sock = FakeSocket([b"+", b"$OK#00"])
     client = RSPClient(sock)
