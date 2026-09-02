@@ -26,3 +26,105 @@ jobs:
         run: python -m ruff check .
       - name: Mypy
         run: python -m mypy src/nds_disassembly_toolkit
+
+  phase-7h-live-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install toolkit
+        run: python -m pip install -e .
+      - name: Build stock melonDS core
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/melonDS-emu/melonDS.git /tmp/melonds
+          git -C /tmp/melonds checkout 906e9ebb27da8c6a715cd7abab4abfe8a8d29427
+          cmake -S /tmp/melonds -B /tmp/melonds/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_JIT=OFF \
+            -DENABLE_GDBSTUB=ON \
+            -DENABLE_OGLRENDERER=OFF \
+            -DBUILD_QT_SDL=OFF
+          cmake --build /tmp/melonds/build --target core -j2
+      - name: Build live ARM9 target
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SRC=/tmp/melonds/src
+          BUILD=/tmp/melonds/build/src
+          g++ -std=gnu++17 -O2 -DGDBSTUB_ENABLED -DARCHITECTURE_x86_64=1 -fwrapv \
+            -I"$SRC" -I"$BUILD" -I"$SRC/teakra/include" \
+            .github/smoke/headless_nds.cpp .github/smoke/headless_platform.cpp \
+            "$BUILD/libcore.a" "$BUILD/teakra/src/libteakra.a" \
+            -lm -lpthread -ldl -o /tmp/headless-nds
+      - name: Exercise exact runtime CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          PID=""
+          start_target() {
+            /tmp/headless-nds 3333 > /tmp/melonds-live.log 2>&1 &
+            PID=$!
+            sleep 1
+            kill -0 "$PID"
+          }
+          stop_target() {
+            if [ -n "${PID:-}" ]; then
+              kill "$PID" 2>/dev/null || true
+              wait "$PID" 2>/dev/null || true
+              PID=""
+            fi
+          }
+          trap stop_target EXIT
+
+          start_target
+          timeout 10s nds-toolkit runtime probe --cpu arm9 > /tmp/probe.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime snapshot --cpu arm9 > /tmp/snapshot.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime read-memory --cpu arm9 0x02000000 0x40 > /tmp/memory.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime run-until --cpu arm9 --break 0x02000008 > /tmp/run-until.json
+          stop_target
+
+          start_target
+          timeout 10s nds-toolkit runtime step --cpu arm9 --count 1 > /tmp/step.json
+          stop_target
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          probe=json.loads(Path('/tmp/probe.json').read_text())
+          snapshot=json.loads(Path('/tmp/snapshot.json').read_text())
+          memory=json.loads(Path('/tmp/memory.json').read_text())
+          run_until=json.loads(Path('/tmp/run-until.json').read_text())
+          step=json.loads(Path('/tmp/step.json').read_text())
+          assert probe['cpu']=='arm9'
+          assert snapshot['pc']=='0x02000000'
+          assert snapshot['instruction_set']=='arm'
+          assert memory['length']=='0x00000040'
+          assert memory['data'].startswith('0100a0e3010080e2010080e2feffffea')
+          assert run_until['condition']['address']=='0x02000008'
+          assert run_until['snapshot']['pc']=='0x02000008'
+          assert run_until['snapshot']['stop']['kind']=='breakpoint'
+          regs={entry['name']:entry['value'] for entry in run_until['snapshot']['registers']}
+          assert regs['r0']=='0x00000002'
+          assert step['count']==1
+          assert step['final_snapshot']['pc']=='0x02000004'
+          regs={entry['name']:entry['value'] for entry in step['final_snapshot']['registers']}
+          assert regs['r0']=='0x00000001'
+          print('Phase 7H live smoke passed')
+          print(Path('/tmp/run-until.json').read_text())
+          print(Path('/tmp/step.json').read_text())
+          PY
