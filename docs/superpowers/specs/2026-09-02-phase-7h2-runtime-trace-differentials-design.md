@@ -101,7 +101,7 @@ TraceEventRole
 
 `EVIDENCE` events contribute to hit-frequency and behavioral differential calculations.
 
-`CONTROL_ADVANCE` records a debugger single-step performed only to move the target away from a just-hit persistent stop condition before the next repeated capture cycle. Control events remain persisted and inspectable but are excluded from behavioral counts unless a future explicit option requests them.
+`CONTROL_ADVANCE` records a debugger single-step performed only to move the target away from a just-hit stop condition before the next repeated capture cycle. Control events remain persisted and inspectable but are excluded from behavioral counts unless a future explicit option requests them.
 
 ### Public records
 
@@ -154,7 +154,7 @@ Each event contains:
 - optional signal;
 - optional stop address;
 - raw stop payload for protocol-level auditability;
-- complete canonical register mapping when captured.
+- complete canonical register mapping.
 
 The first 7H2 implementation captures registers for every persisted event. If event volume later proves this too expensive, register sampling may become configurable in a later phase; 7H2 does not prematurely add that policy surface.
 
@@ -252,7 +252,7 @@ On any failure before replacement, the temporary trace is removed and an existin
 Example:
 
 ```bash
-nds-toolkit runtime trace \
+nds-toolkit runtime trace capture \
   --cpu arm9 \
   --steps 2000 \
   --output attack.ndstrace
@@ -269,7 +269,7 @@ A target exit is a valid terminal runtime event and completes the trace early. A
 Example:
 
 ```bash
-nds-toolkit runtime trace \
+nds-toolkit runtime trace capture \
   --cpu arm9 \
   --break 0x02012340 \
   --events 100 \
@@ -293,7 +293,7 @@ The explicit advance step prevents an immediate re-hit at the same stopped instr
 Example:
 
 ```bash
-nds-toolkit runtime trace \
+nds-toolkit runtime trace capture \
   --cpu arm9 \
   --watch-write 0x02100000 \
   --length 4 \
@@ -329,7 +329,7 @@ Breakpoint/watchpoint modes require `--events`. Step mode rejects `--events`.
 Memory regions are configured with repeatable CLI arguments:
 
 ```bash
-nds-toolkit runtime trace \
+nds-toolkit runtime trace capture \
   --cpu arm9 \
   --steps 500 \
   --memory 0x02100000:0x1000 \
@@ -351,7 +351,7 @@ A successful trace with configured memory regions requires complete BEFORE and A
 
 `memory_diff.py` compares equal-sized BEFORE/AFTER snapshots and returns deterministic contiguous changed byte ranges.
 
-For each range, reports may additionally expose aligned interpretations when fully covered by the changed span:
+For each range, reports additionally expose aligned interpretations only when the complete interpreted word lies within the configured region and at least one byte in that word changed:
 
 - little-endian 16-bit old/new values at 2-byte aligned addresses;
 - little-endian 32-bit old/new values at 4-byte aligned addresses.
@@ -362,9 +362,29 @@ No datatype or structure semantics are inferred in 7H2.
 
 ## Static-project fingerprint
 
-When capture is given `--project game.ndsre`, the toolkit computes a stable fingerprint from the persisted project identity and ordered component hashes without copying project symbols/functions into the trace.
+When capture is given `--project game.ndsre`, the toolkit computes a stable SHA-256 fingerprint using only existing public `AnalysisProject` data.
 
-The fingerprint allows later comparison code to detect traces known to come from different static target builds.
+The canonical fingerprint document is:
+
+```json
+{
+  "analysis_model_version": 1,
+  "components": [
+    {
+      "base_address": 33554432,
+      "name": "arm9",
+      "sha256": "...64 lowercase hex characters...",
+      "size": 123456
+    }
+  ],
+  "project_format_version": 1,
+  "schema_version": 1
+}
+```
+
+The actual values come from `project.metadata` and `project.component_identities()`. Components are ordered by component name, matching the public project API contract. The document is encoded as UTF-8 JSON with `sort_keys=True`, `separators=(",", ":")`, and no trailing newline. The lowercase hexadecimal SHA-256 digest of those exact bytes is the stored project fingerprint.
+
+The fingerprint deliberately excludes toolkit version, analysis timestamps, generated symbols, annotations, functions, CFG/data-flow records, and other derived analysis so improving static analysis does not make an unchanged target build appear to be a different runtime target.
 
 Rules:
 
@@ -380,7 +400,7 @@ When a project is supplied to `runtime trace inspect` or `runtime diff`, correla
 
 For each runtime evidence PC:
 
-1. derive ARM/Thumb from the stored CPSR/instruction-set identity;
+1. use the stored ARM/Thumb instruction-set identity;
 2. find every persisted component whose runtime range contains the PC;
 3. independently query exact function/symbol/annotation evidence for each component candidate;
 4. preserve all candidates in deterministic component-name order.
@@ -517,7 +537,7 @@ No score is labeled as a probability.
 ### Capture
 
 ```text
-nds-toolkit runtime trace [connection options] CAPTURE_SELECTOR --output TRACE
+nds-toolkit runtime trace capture [connection options] CAPTURE_SELECTOR --output TRACE
 ```
 
 Supported selectors:
@@ -539,21 +559,36 @@ Additional options:
 --timeout SECONDS             inherited runtime timeout semantics
 ```
 
-Successful capture prints deterministic JSON summary to stdout unless the established CLI output conventions require only the destination summary. The `.ndstrace` database is always the authoritative full capture.
+On success, capture always writes the authoritative `.ndstrace` to the path passed through `--output` and prints one deterministic JSON summary to stdout with these top-level fields:
+
+```text
+trace
+cpu
+capture_mode
+evidence_events
+control_events
+memory_regions
+terminated_by
+project_fingerprint
+```
+
+`terminated_by` is one of `limit` or `target_exit`. Capture does not use a second JSON output-file option because `--output` is reserved for the trace database.
 
 ### Inspect
 
 ```text
-nds-toolkit runtime trace inspect TRACE [--project PROJECT]
+nds-toolkit runtime trace inspect TRACE [--project PROJECT] [--output JSON]
 ```
+
+Without `--output`, deterministic JSON is written to stdout. With `--output`, the established atomic JSON replacement behavior is used.
 
 ### Diff
 
 ```text
-nds-toolkit runtime diff BASELINE TARGET [--project PROJECT]
+nds-toolkit runtime diff BASELINE TARGET [--project PROJECT] [--output JSON]
 ```
 
-Diff output is deterministic JSON and may use the existing `--output` atomic JSON-file behavior.
+Without `--output`, deterministic JSON is written to stdout. With `--output`, the established atomic JSON replacement behavior is used.
 
 ## Error model
 
@@ -622,6 +657,7 @@ Cover:
 - repeated breakpoint control-advance behavior;
 - repeated watchpoint control-advance behavior;
 - target-exit handling;
+- exact project fingerprint canonicalization;
 - trace fingerprint matching/mismatch rules;
 - raw-address frequency normalization;
 - function aggregation;
@@ -678,7 +714,7 @@ The live smoke remains a release gate for 7H2, not an optional manual note.
 
 ### Phase 7H2D — project correlation
 
-- project fingerprinting;
+- exact project fingerprinting;
 - trace inspection with static correlation;
 - conservative overlay ambiguity handling;
 - changed-memory xref lookup.
