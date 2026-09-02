@@ -129,9 +129,11 @@ def test_decompile_function_reports_exact_missing_evidence(
         include_flow=include_flow,
     )
 
-    with AnalysisProject.open(root, read_only=True) as project:
-        with pytest.raises(DecompilerError) as captured:
-            decompile_function(project, "arm9", BASE, InstructionSet.ARM)
+    with (
+        AnalysisProject.open(root, read_only=True) as project,
+        pytest.raises(DecompilerError) as captured,
+    ):
+        decompile_function(project, "arm9", BASE, InstructionSet.ARM)
 
     assert str(captured.value) == expected
 
