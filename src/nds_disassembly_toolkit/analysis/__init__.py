@@ -47,6 +47,14 @@ from nds_disassembly_toolkit.analysis.decompiler import (
     render_pseudo_c,
 )
 from nds_disassembly_toolkit.analysis.functions import discover_functions
+from nds_disassembly_toolkit.analysis.investigation import (
+    InvestigationCandidate,
+    InvestigationEvidence,
+    InvestigationEvidenceKind,
+    InvestigationReport,
+    InvestigationRequest,
+    investigate_project,
+)
 from nds_disassembly_toolkit.analysis.model import (
     AbstractValue,
     AbstractValueKind,
@@ -175,6 +183,11 @@ __all__ = [
     "InstructionOperand",
     "InstructionSemantics",
     "InstructionSet",
+    "InvestigationCandidate",
+    "InvestigationEvidence",
+    "InvestigationEvidenceKind",
+    "InvestigationReport",
+    "InvestigationRequest",
     "LabelNode",
     "LocationAnnotation",
     "LoopNode",
@@ -231,6 +244,7 @@ __all__ = [
     "filter_strings",
     "find_pointer_references",
     "function_address_for_reference",
+    "investigate_project",
     "nearest_function_start",
     "render_pseudo_c",
     "scan_scaled_byte_rows",

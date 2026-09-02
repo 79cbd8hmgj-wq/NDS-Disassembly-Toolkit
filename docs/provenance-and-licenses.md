@@ -31,7 +31,7 @@ This is an engineering provenance record, not a substitute for legal advice.
 | ndstool | https://github.com/devkitPro/ndstool | GNU GPL v3 (`COPYING`) | Comparison/reference for conventional NDS extraction/repacking behavior | No source vendored or copied; parser/rebuilder remains toolkit-owned |
 | pret DS disassembly tools | https://github.com/pret/ds_disassembly_tools | **No explicit license found** during audit | Workflow concepts such as module parameters, overlay layout, labelled regions, and disassembly comparison | Implementation source is treated as unavailable for copying |
 | Capstone | https://github.com/capstone-engine/capstone | BSD 3-Clause-style license (`LICENSES/LICENSE.TXT` in supplied archive) | ARM/Thumb decoding and semantic instruction metadata | `capstone>=5,<7` is a runtime dependency; no Capstone source is vendored |
-| angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied archive) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, persistence, and decompiler-stage separation | Reference only through Phase 7I; no angr runtime dependency or source incorporation |
+| angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied archive) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, persistence, decompiler-stage separation, and evidence-oriented RE workflow design | Reference only through Phase 7J; no angr runtime dependency or source incorporation |
 | melonDS | https://github.com/melonDS-emu/melonDS | GNU GPL v3 | Nintendo DS runtime behavior and GDB-RSP interoperability | External GPL process/build only; no melonDS implementation is copied, linked, translated, or vendored into the MIT toolkit |
 
 ### Archive-origin caveats
@@ -133,13 +133,22 @@ The pseudo-C is a read-only derived view. It is not stored in `.ndsre`, does not
 
 Phase 7I deliberately preserves uncertainty rather than inventing source semantics: unsupported instructions remain visible, ambiguous overlay targets are not assigned to a guessed component, unproven control flow falls back to labels/gotos, and memory typing is limited to decoder-proven access widths. It does not claim source-level type recovery or recompilable-C equivalence.
 
+## Phase 7J investigation/prioritization boundary
+
+Phase 7J is independently authored toolkit code that combines existing toolkit-owned evidence rather than adding a new decoder, emulator integration, symbolic executor, decompiler, or persistence layer. It reads persisted `.ndsre` functions, CFG instruction semantics, strings, xrefs, symbols, and annotations through the public project API; optional runtime evidence is obtained by delegating to the existing Phase 7H2 `.ndstrace` comparison service; optional pseudo-C context is obtained by delegating to the existing Phase 7I decompiler service.
+
+The investigation engine uses deterministic fixed weights and preserves component-aware `(component, runtime_address, instruction_set)` identity. Typed constants are read from toolkit-owned semantic operands rather than assembly display strings. One-hop call-neighbor evidence is propagated only when a call target has a unique persisted `(runtime address, instruction set)` identity, so overlapping Nintendo DS overlays are not guessed.
+
+Phase 7J is read-only: it adds no `.ndsre` or `.ndstrace` schema migration, persists no rankings or pseudo-C, opens analysis projects read-only, and establishes no melonDS connection. It introduces no new third-party dependency and incorporates no source from angr, Ghidra, RetDec, melonDS, or another reverse-engineering implementation.
+
 ## Repository audit observations
 
 - no upstream NDSFactory, Tinke, NitroPacker, ndstool, pret, angr, melonDS, Ghidra, or RetDec source tree is vendored beneath toolkit source;
 - Capstone is the only Phase 7 external runtime analysis dependency and remains behind the decoder boundary;
-- Phase 7F/7G/7H/7I add toolkit-owned persistence, CLI, RSP, trace, differential, ranking, and conservative pseudo-C code without changing that dependency boundary;
+- Phase 7F/7G/7H/7I/7J add toolkit-owned persistence, CLI, RSP, trace, differential, ranking, conservative pseudo-C, and evidence-fusion code without changing that dependency boundary;
 - Phase 7H uses an external stock melonDS build only in interoperability CI;
 - Phase 7I changes neither `.ndsre` schema nor runtime-analysis behavior and persists no generated pseudo-C;
+- Phase 7J changes neither `.ndsre` nor `.ndstrace` schema, persists no investigation ranking, and reuses the existing Phase 7H2 differential and Phase 7I decompiler boundaries;
 - the repository contains source, tests, documentation, schemas, and synthetic/headless test harness material, not commercial ROMs or extracted copyrighted game assets;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems.
 

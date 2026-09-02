@@ -23,6 +23,7 @@ The standalone toolkit now provides:
 - conservative evidence-backed ARM/Thumb pseudo-C generated from persisted CFG, data-flow, stack/ABI, symbol, and annotation evidence, with safe control-flow structuring and explicit uncertainty fallback;
 - melonDS GDB-RSP runtime inspection for ARM9/ARM7, including snapshots, memory reads, temporary code conditions, and bounded stepping;
 - portable `.ndstrace` capture, BEFORE/AFTER memory differentials, read-only static-project correlation, behavioral trace comparison, and transparent dynamic function ranking;
+- deterministic Phase 7J investigation ranking that fuses matching strings/annotations, typed constants, requested-address xrefs, one-hop call relationships, and existing runtime trace differentials, with optional top-candidate pseudo-C previews;
 - reusable CLI parser/runner helpers so game projects can consume toolkit commands while enforcing stricter game-specific policy.
 
 The primary CLI entry point is `nds-toolkit` (or `python -m nds_disassembly_toolkit`).
@@ -50,10 +51,14 @@ nds-toolkit disasm --help
 nds-toolkit analyze --help
 nds-toolkit project --help
 nds-toolkit project decompile game.ndsre arm9 0x02012340 --mode arm
+nds-toolkit project investigate game.ndsre --text power --constant 500 --top 25
+nds-toolkit project investigate game.ndsre --baseline idle.ndstrace --target attack.ndstrace --decompile
 nds-toolkit runtime --help
 nds-toolkit assets inventory GAME.nds --output assets.json
 nds-toolkit source-patch build work/game source-patch.json
 ```
+
+`project investigate` is read-only. Supply at least one text, constant, address, or baseline/target trace selector. Static and runtime evidence are scored with fixed transparent weights, ambiguous overlapping-overlay call targets are never guessed, and `--decompile` runs the existing conservative decompiler only for candidates that survive ranking and `--top` truncation.
 
 ### ROM profiles and support policy
 
