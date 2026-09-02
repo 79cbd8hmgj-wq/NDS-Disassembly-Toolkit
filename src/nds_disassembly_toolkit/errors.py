@@ -30,6 +30,10 @@ class AnalysisProjectError(NdsToolkitError):
     """Raised when a persistent analysis project cannot be used safely."""
 
 
+class InvestigationError(AnalysisProjectError):
+    """Raised when an investigation request cannot be evaluated safely."""
+
+
 class DecompilerError(NdsToolkitError):
     """Raised when conservative decompilation cannot be completed safely."""
 
