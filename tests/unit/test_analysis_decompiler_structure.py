@@ -8,6 +8,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     DecompiledFunction,
     GotoNode,
     IfNode,
+    LoopNode,
     ReturnStatement,
     SourceRef,
     StatementNode,
@@ -184,6 +185,110 @@ def test_unstructured_multi_entry_region_uses_labels_and_gotos() -> None:
     shared = _block(BASE + 8, (_return(BASE + 8),))
 
     structured = structure_function(_function(entry, extra, shared))
+
+    assert structured.fallback_used is True
+    assert any(isinstance(item, GotoNode) for item in structured.body)
+
+
+def test_simple_pretest_loop_structures() -> None:
+    condition = _condition(BASE)
+    header = _block(
+        BASE,
+        (BranchStatement(condition, BASE + 4, InstructionSet.ARM, _source(BASE)),),
+        (
+            _edge(BASE, BASE + 4, CFGEdgeKind.BRANCH),
+            _edge(BASE, BASE + 8, CFGEdgeKind.FALLTHROUGH),
+        ),
+    )
+    body = _block(
+        BASE + 4,
+        (
+            _effect(BASE + 4, "body"),
+            BranchStatement(None, BASE, InstructionSet.ARM, _source(BASE + 4)),
+        ),
+        (_edge(BASE + 4, BASE, CFGEdgeKind.BRANCH),),
+    )
+    exit_block = _block(BASE + 8, (_return(BASE + 8),))
+
+    structured = structure_function(_function(header, body, exit_block))
+
+    loop = next(item for item in structured.body if isinstance(item, LoopNode))
+    assert loop.condition == condition
+    assert loop.post_test is False
+    assert loop.body
+    assert structured.fallback_used is False
+
+
+def test_simple_posttest_loop_structures() -> None:
+    condition = _condition(BASE + 4)
+    header = _block(
+        BASE,
+        (_effect(BASE, "body"),),
+        (_edge(BASE, BASE + 4, CFGEdgeKind.FALLTHROUGH),),
+    )
+    latch = _block(
+        BASE + 4,
+        (
+            _effect(BASE + 4, "latch"),
+            BranchStatement(condition, BASE, InstructionSet.ARM, _source(BASE + 4)),
+        ),
+        (
+            _edge(BASE + 4, BASE, CFGEdgeKind.BRANCH),
+            _edge(BASE + 4, BASE + 8, CFGEdgeKind.FALLTHROUGH),
+        ),
+    )
+    exit_block = _block(BASE + 8, (_return(BASE + 8),))
+
+    structured = structure_function(_function(header, latch, exit_block))
+
+    loop = next(item for item in structured.body if isinstance(item, LoopNode))
+    assert loop.condition == condition
+    assert loop.post_test is True
+    assert loop.body
+    assert structured.fallback_used is False
+
+
+def test_irreducible_back_edges_fall_back() -> None:
+    entry_condition = _condition(BASE)
+    latch_condition = _condition(BASE + 8)
+    entry = _block(
+        BASE,
+        (
+            BranchStatement(
+                entry_condition,
+                BASE + 4,
+                InstructionSet.ARM,
+                _source(BASE),
+            ),
+        ),
+        (
+            _edge(BASE, BASE + 4, CFGEdgeKind.BRANCH),
+            _edge(BASE, BASE + 8, CFGEdgeKind.FALLTHROUGH),
+        ),
+    )
+    header = _block(
+        BASE + 4,
+        (_effect(BASE + 4, "header"),),
+        (_edge(BASE + 4, BASE + 8, CFGEdgeKind.FALLTHROUGH),),
+    )
+    latch = _block(
+        BASE + 8,
+        (
+            BranchStatement(
+                latch_condition,
+                BASE + 4,
+                InstructionSet.ARM,
+                _source(BASE + 8),
+            ),
+        ),
+        (
+            _edge(BASE + 8, BASE + 4, CFGEdgeKind.BRANCH),
+            _edge(BASE + 8, BASE + 12, CFGEdgeKind.FALLTHROUGH),
+        ),
+    )
+    exit_block = _block(BASE + 12, (_return(BASE + 12),))
+
+    structured = structure_function(_function(entry, header, latch, exit_block))
 
     assert structured.fallback_used is True
     assert any(isinstance(item, GotoNode) for item in structured.body)
