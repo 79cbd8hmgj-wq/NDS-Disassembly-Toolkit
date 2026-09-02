@@ -10,7 +10,10 @@ from nds_disassembly_toolkit.analysis.project_cli import (
     add_project_parser,
     run_project_command,
 )
-from nds_disassembly_toolkit.analysis.runtime_cli import add_runtime_parser
+from nds_disassembly_toolkit.analysis.runtime_cli import (
+    add_runtime_parser,
+    run_runtime_command,
+)
 from nds_disassembly_toolkit.assets_cli import add_assets_parser, run_assets_command
 from nds_disassembly_toolkit.disassembly_cli import (
     add_disassembly_parser,
@@ -220,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_analysis_command(arguments)
         if arguments.command == "project":
             return run_project_command(arguments)
+        if arguments.command == "runtime":
+            return run_runtime_command(arguments)
         if arguments.command == "assets":
             return run_assets_command(arguments)
         if arguments.command == "source-patch":
