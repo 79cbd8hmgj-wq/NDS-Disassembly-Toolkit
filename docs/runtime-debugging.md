@@ -191,7 +191,7 @@ Phase 7H1 deliberately does **not** add:
 - a stateful debugger REPL/TUI;
 - decompiled or pseudo-C output.
 
-Those boundaries keep the runtime bridge reusable by Bakugan and other game projects without moving consumer-specific evidence into the generic toolkit.
+Those boundaries keep the runtime bridge reusable across game projects without moving consumer-specific evidence into the generic toolkit.
 
 ## Verification status
 
