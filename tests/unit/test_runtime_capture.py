@@ -269,8 +269,11 @@ def test_repeated_watchpoint_capture_advances_before_rearming(
         ("step",),
         ("run_until_watchpoint", kind, watched_address, 4),
     ]
-    with TraceStore.open(destination) as store:
+    store = TraceStore.open(destination)
+    try:
         events = store.events()
+    finally:
+        store.close()
     assert [event.role for event in events] == [
         TraceEventRole.EVIDENCE,
         TraceEventRole.CONTROL_ADVANCE,
