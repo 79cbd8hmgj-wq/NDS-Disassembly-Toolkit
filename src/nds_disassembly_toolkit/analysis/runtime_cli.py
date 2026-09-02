@@ -18,6 +18,11 @@ from nds_disassembly_toolkit.analysis.runtime import (
     correlate_snapshot,
 )
 from nds_disassembly_toolkit.analysis.runtime.rsp import RSPCapabilities
+from nds_disassembly_toolkit.analysis.runtime.trace_diff import compare_traces, inspect_trace
+from nds_disassembly_toolkit.analysis.runtime.trace_model import (
+    TraceDiffReport,
+    TraceInspection,
+)
 
 _MAX_STEP_COUNT = 256
 _MAX_TRACE_STEPS = 100000
@@ -315,6 +320,59 @@ def _snapshot_json(
     }
 
 
+def _trace_inspection_json(inspection: TraceInspection) -> dict[str, object]:
+    return {
+        "addresses": [
+            {
+                "count": item.hit.count,
+                "cpu": item.hit.cpu.value,
+                "frequency": item.hit.frequency,
+                "instruction_set": item.hit.instruction_set.value,
+                "pc": _hex(item.hit.pc),
+            }
+            for item in inspection.addresses
+        ],
+        "capture_status": inspection.capture_status,
+        "control_events": inspection.control_events,
+        "evidence_events": inspection.evidence_events,
+        "events": inspection.events,
+        "integrity_ok": inspection.integrity_ok,
+        "memory_regions": [
+            {
+                "address": _hex(item.region.address),
+                "after_sha256": item.after_sha256,
+                "before_sha256": item.before_sha256,
+                "changed_bytes": item.changed_bytes,
+                "changed_ranges": item.changed_ranges,
+                "length": _hex(item.region.length),
+                "ordinal": item.region.ordinal,
+            }
+            for item in inspection.memory_regions
+        ],
+        "trace_schema_version": inspection.trace_schema_version,
+    }
+
+
+def _trace_diff_json(report: TraceDiffReport) -> dict[str, object]:
+    return {
+        "address_deltas": [
+            {
+                "baseline_frequency": item.baseline_frequency,
+                "baseline_hits": item.baseline_hits,
+                "classification": item.classification,
+                "cpu": item.cpu.value,
+                "frequency_delta": item.frequency_delta,
+                "instruction_set": item.instruction_set.value,
+                "pc": _hex(item.pc),
+                "target_frequency": item.target_frequency,
+                "target_hits": item.target_hits,
+            }
+            for item in report.address_deltas
+        ],
+        "target_identity_verified": report.target_identity_verified,
+    }
+
+
 def _correlate_if_requested(
     project_path: Path | None,
     snapshot: RuntimeSnapshot,
@@ -323,6 +381,32 @@ def _correlate_if_requested(
         return None
     with AnalysisProject.open(project_path, read_only=True) as project:
         return correlate_snapshot(project, snapshot)
+
+
+def _inspect_trace_command(arguments: argparse.Namespace) -> int:
+    if arguments.runtime_trace_command != "inspect":
+        raise ValueError("runtime trace requires capture or inspect")
+    if arguments.project is None:
+        inspection = inspect_trace(arguments.trace)
+    else:
+        with AnalysisProject.open(arguments.project, read_only=True) as project:
+            inspection = inspect_trace(arguments.trace, project=project)
+    _write_json(_trace_inspection_json(inspection), arguments.output)
+    return 0
+
+
+def _diff_trace_command(arguments: argparse.Namespace) -> int:
+    if arguments.project is None:
+        report = compare_traces(arguments.baseline, arguments.target)
+    else:
+        with AnalysisProject.open(arguments.project, read_only=True) as project:
+            report = compare_traces(
+                arguments.baseline,
+                arguments.target,
+                project=project,
+            )
+    _write_json(_trace_diff_json(report), arguments.output)
+    return 0
 
 
 def _connect(arguments: argparse.Namespace) -> MelonDSSession:
@@ -381,6 +465,11 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
     if command is None:
         raise ValueError("a runtime subcommand is required")
 
+    if command == "trace" and arguments.runtime_trace_command == "inspect":
+        return _inspect_trace_command(arguments)
+    if command == "diff":
+        return _diff_trace_command(arguments)
+
     with _connect(arguments) as session:
         if command == "probe":
             payload = {
@@ -438,5 +527,8 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 arguments.output,
             )
             return 0
+
+        if command == "trace" and arguments.runtime_trace_command == "capture":
+            raise ValueError("runtime trace capture is not implemented yet")
 
     raise ValueError(f"unknown runtime subcommand: {command}")
