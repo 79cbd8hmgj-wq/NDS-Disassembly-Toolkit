@@ -242,3 +242,48 @@ class TraceSummary:
         if self.memory_regions < 0:
             raise ValueError("trace memory region count must be non-negative")
         _validate_fingerprint(self.project_fingerprint)
+
+
+@dataclass(frozen=True, slots=True)
+class AlignedMemoryValueChange:
+    address: int
+    width: int
+    before: int
+    after: int
+
+    def __post_init__(self) -> None:
+        _validate_u32(self.address, name="aligned memory value address")
+        if self.width not in {2, 4}:
+            raise ValueError("aligned memory value width must be 2 or 4")
+        if self.address % self.width:
+            raise ValueError("aligned memory value address is misaligned")
+        maximum = (1 << (self.width * 8)) - 1
+        if not 0 <= self.before <= maximum or not 0 <= self.after <= maximum:
+            raise ValueError("aligned memory value is outside its declared width")
+        if self.before == self.after:
+            raise ValueError("aligned memory value change must change value")
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryChange:
+    region_ordinal: int
+    address: int
+    before: bytes
+    after: bytes
+    values16: tuple[AlignedMemoryValueChange, ...] = ()
+    values32: tuple[AlignedMemoryValueChange, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.region_ordinal < 0:
+            raise ValueError("memory change region ordinal must be non-negative")
+        _validate_u32(self.address, name="memory change address")
+        if not self.before or len(self.before) != len(self.after):
+            raise ValueError("memory change byte ranges must be non-empty and equal length")
+        if self.before == self.after:
+            raise ValueError("memory change must contain changed bytes")
+        if self.address + len(self.before) > _U32_MAX + 1:
+            raise ValueError("memory change extends outside the unsigned 32-bit address space")
+        if any(value.width != 2 for value in self.values16):
+            raise ValueError("values16 entries must be 2-byte changes")
+        if any(value.width != 4 for value in self.values32):
+            raise ValueError("values32 entries must be 4-byte changes")
