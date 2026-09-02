@@ -424,10 +424,10 @@ def structure_function(function: DecompiledFunction) -> StructuredFunction:
         if loop is None:
             loop = _try_posttest_loop(block, blocks, predecessors, back_edges)
         if loop is not None:
-            node, next_address, region = loop
+            loop_node, next_address, region = loop
             if consumed.intersection(region):
                 return _fallback_function(function)
-            body.append(node)
+            body.append(loop_node)
             consumed.update(region)
             current = next_address
             continue
@@ -440,11 +440,11 @@ def structure_function(function: DecompiledFunction) -> StructuredFunction:
             )
             if structured is None:
                 return _fallback_function(function)
-            node, next_address, region = structured
+            if_node, next_address, region = structured
             if consumed.intersection(region):
                 return _fallback_function(function)
             body.extend(prefix)
-            body.append(node)
+            body.append(if_node)
             consumed.update(region)
             current = next_address
             continue
