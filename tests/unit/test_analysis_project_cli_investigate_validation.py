@@ -25,7 +25,7 @@ def test_investigate_rejects_empty_request_before_project_open(
 ) -> None:
     opened = _block_project_open(monkeypatch)
 
-    assert main(["project", "investigate", "game.ndsre"]) == 2
+    assert main(["project", "investigate", "game.ndsre"]) == 4
     assert opened == []
     assert "at least one investigation selector" in capsys.readouterr().err
 
@@ -46,7 +46,7 @@ def test_investigate_rejects_one_sided_trace_before_project_open(
                 "idle.ndstrace",
             ]
         )
-        == 2
+        == 4
     )
     assert opened == []
     assert "baseline and target traces" in capsys.readouterr().err
