@@ -28,3 +28,23 @@ class DisassemblyError(NdsToolkitError):
 
 class AnalysisProjectError(NdsToolkitError):
     """Raised when a persistent analysis project cannot be used safely."""
+
+
+class RuntimeAnalysisError(NdsToolkitError):
+    """Raised when a runtime-analysis operation cannot be completed safely."""
+
+
+class RuntimeConnectionError(RuntimeAnalysisError):
+    """Raised when a runtime debugger endpoint cannot be reached."""
+
+
+class RuntimeProtocolError(RuntimeAnalysisError):
+    """Raised when a runtime debugger peer violates the expected protocol."""
+
+
+class RuntimeTimeoutError(RuntimeAnalysisError):
+    """Raised when a runtime debugger operation times out."""
+
+
+class RuntimeTargetStateError(RuntimeAnalysisError):
+    """Raised when the target state is unsuitable for a requested operation."""

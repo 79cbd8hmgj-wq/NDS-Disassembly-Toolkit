@@ -1,0 +1,443 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+import nds_disassembly_toolkit.analysis.runtime_cli as runtime_cli
+from nds_disassembly_toolkit.analysis.runtime import (
+    BreakpointKind,
+    RegisterSnapshot,
+    RuntimeComponentLocation,
+    RuntimeCpu,
+    RuntimeLocation,
+    RuntimeSnapshot,
+    RuntimeStop,
+    StopReasonKind,
+)
+from nds_disassembly_toolkit.analysis.runtime.rsp import RSPCapabilities
+from nds_disassembly_toolkit.cli import build_parser, main
+from nds_disassembly_toolkit.errors import RuntimeConnectionError
+
+
+def _snapshot(
+    pc: int = 0x02000010,
+    *,
+    stop_kind: StopReasonKind = StopReasonKind.BREAKPOINT,
+) -> RuntimeSnapshot:
+    return RuntimeSnapshot(
+        cpu=RuntimeCpu.ARM9,
+        registers=RegisterSnapshot.from_mapping(
+            {
+                "r0": 1,
+                "pc": pc,
+                "cpsr": 0x13,
+            }
+        ),
+        stop=RuntimeStop(stop_kind, signal=5, address=pc, raw="T05"),
+    )
+
+
+class _FakeSession:
+    def __init__(self, snapshots: list[RuntimeSnapshot] | None = None) -> None:
+        self.capabilities = RSPCapabilities(
+            features=(("PacketSize", "400"), ("QStartNoAckMode", True)),
+            packet_size=0x400,
+        )
+        self.events: list[object] = []
+        self.connect_kwargs: dict[str, object] = {}
+        self._snapshots = list(snapshots or [_snapshot()])
+
+    def __enter__(self) -> _FakeSession:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.detach()
+
+    def detach(self) -> None:
+        self.events.append("detach")
+
+    def snapshot(self) -> RuntimeSnapshot:
+        self.events.append("snapshot")
+        return self._snapshots[0]
+
+    def read_memory(self, address: int, length: int) -> bytes:
+        self.events.append(("read-memory", address, length))
+        return b"\x00\xab\xff"[:length]
+
+    def run_until_breakpoint(self, address: int, *, length: int = 4) -> RuntimeSnapshot:
+        self.events.append(("break", address, length))
+        return self._snapshots[0]
+
+    def run_until_watchpoint(
+        self,
+        kind: BreakpointKind,
+        address: int,
+        *,
+        length: int = 4,
+    ) -> RuntimeSnapshot:
+        self.events.append(("watch", kind, address, length))
+        return self._snapshots[0]
+
+    def step(self) -> RuntimeSnapshot:
+        index = sum(event == "step" for event in self.events)
+        self.events.append("step")
+        return self._snapshots[index]
+
+
+def _install_fake_session(monkeypatch: pytest.MonkeyPatch, session: _FakeSession) -> None:
+    class _Factory:
+        @classmethod
+        def connect(cls, **kwargs: object) -> _FakeSession:
+            session.connect_kwargs = dict(kwargs)
+            return session
+
+    monkeypatch.setattr(runtime_cli, "MelonDSSession", _Factory, raising=False)
+
+
+def _json_text(payload: object) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+@pytest.mark.parametrize(
+    ("argv", "runtime_command"),
+    [
+        (["runtime", "probe", "--cpu", "arm9"], "probe"),
+        (
+            [
+                "runtime",
+                "snapshot",
+                "--cpu",
+                "arm7",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "3334",
+                "--project",
+                "game.ndsre",
+            ],
+            "snapshot",
+        ),
+        (
+            [
+                "runtime",
+                "read-memory",
+                "--cpu",
+                "arm9",
+                "0x02000000",
+                "0x100",
+            ],
+            "read-memory",
+        ),
+        (
+            [
+                "runtime",
+                "run-until",
+                "--cpu",
+                "arm9",
+                "--break",
+                "0x02012340",
+            ],
+            "run-until",
+        ),
+        (
+            [
+                "runtime",
+                "run-until",
+                "--cpu",
+                "arm9",
+                "--watch-write",
+                "0x02100000",
+                "--length",
+                "4",
+            ],
+            "run-until",
+        ),
+        (["runtime", "step", "--cpu", "arm9", "--count", "4"], "step"),
+    ],
+)
+def test_runtime_parser_accepts_phase_7h1_commands(
+    argv: list[str],
+    runtime_command: str,
+) -> None:
+    arguments = build_parser().parse_args(argv)
+    assert arguments.command == "runtime"
+    assert arguments.runtime_command == runtime_command
+
+
+def test_runtime_parser_requires_cpu() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["runtime", "probe"])
+    assert exc_info.value.code == 2
+
+
+def test_runtime_run_until_rejects_conflicting_stop_conditions() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(
+            [
+                "runtime",
+                "run-until",
+                "--cpu",
+                "arm9",
+                "--break",
+                "0x02000000",
+                "--watch-write",
+                "0x02100000",
+            ]
+        )
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["runtime", "read-memory", "--cpu", "arm9", "0x02000000", "0"],
+        ["runtime", "run-until", "--cpu", "arm9", "--break", "0x02000000", "--length", "0"],
+        ["runtime", "step", "--cpu", "arm9", "--count", "0"],
+        ["runtime", "step", "--cpu", "arm9", "--count", "257"],
+    ],
+)
+def test_runtime_parser_rejects_unsafe_bounds(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(argv)
+    assert exc_info.value.code == 2
+
+
+def test_runtime_probe_reports_capabilities_without_target_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession()
+    _install_fake_session(monkeypatch, session)
+    arguments = build_parser().parse_args(["runtime", "probe", "--cpu", "arm9"])
+
+    assert runtime_cli.run_runtime_command(arguments) == 0
+
+    assert session.connect_kwargs == {
+        "cpu": RuntimeCpu.ARM9,
+        "host": "127.0.0.1",
+        "port": None,
+        "timeout": 5.0,
+    }
+    assert session.events == ["detach"]
+    assert capsys.readouterr().out == _json_text(
+        {
+            "capabilities": {
+                "features": [
+                    {"name": "PacketSize", "value": "400"},
+                    {"name": "QStartNoAckMode", "value": True},
+                ],
+                "packet_size": "0x00000400",
+            },
+            "cpu": "arm9",
+            "host": "127.0.0.1",
+            "port": 3333,
+        }
+    )
+
+
+def test_runtime_snapshot_json_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession()
+    _install_fake_session(monkeypatch, session)
+    arguments = build_parser().parse_args(["runtime", "snapshot", "--cpu", "arm9"])
+
+    assert runtime_cli.run_runtime_command(arguments) == 0
+
+    assert session.events == ["snapshot", "detach"]
+    assert capsys.readouterr().out == _json_text(
+        {
+            "correlation": None,
+            "cpu": "arm9",
+            "cpsr": "0x00000013",
+            "instruction_set": "arm",
+            "pc": "0x02000010",
+            "registers": [
+                {"name": "r0", "value": "0x00000001"},
+                {"name": "pc", "value": "0x02000010"},
+                {"name": "cpsr", "value": "0x00000013"},
+            ],
+            "stop": {
+                "address": "0x02000010",
+                "kind": "breakpoint",
+                "raw": "T05",
+                "signal": 5,
+            },
+        }
+    )
+
+
+def test_runtime_read_memory_writes_atomic_deterministic_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession()
+    _install_fake_session(monkeypatch, session)
+    output = tmp_path / "memory.json"
+    arguments = build_parser().parse_args(
+        [
+            "runtime",
+            "read-memory",
+            "--cpu",
+            "arm9",
+            "0x02000000",
+            "3",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert runtime_cli.run_runtime_command(arguments) == 0
+
+    assert session.events == [("read-memory", 0x02000000, 3), "detach"]
+    assert capsys.readouterr().out == ""
+    assert output.read_text(encoding="utf-8") == _json_text(
+        {
+            "address": "0x02000000",
+            "cpu": "arm9",
+            "data": "00abff",
+            "length": "0x00000003",
+        }
+    )
+    assert not output.with_suffix(".json.tmp").exists()
+
+
+def test_runtime_run_until_delegates_watchpoint_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession()
+    _install_fake_session(monkeypatch, session)
+    arguments = build_parser().parse_args(
+        [
+            "runtime",
+            "run-until",
+            "--cpu",
+            "arm9",
+            "--watch-write",
+            "0x02100000",
+            "--length",
+            "4",
+        ]
+    )
+
+    assert runtime_cli.run_runtime_command(arguments) == 0
+
+    assert session.events == [
+        ("watch", BreakpointKind.WRITE, 0x02100000, 4),
+        "detach",
+    ]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["condition"] == {
+        "address": "0x02100000",
+        "kind": "write",
+        "length": "0x00000004",
+    }
+    assert payload["snapshot"]["pc"] == "0x02000010"
+
+
+def test_runtime_step_returns_final_snapshot_and_ordered_stop_pcs(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession(
+        [
+            _snapshot(0x02000012, stop_kind=StopReasonKind.STEP),
+            _snapshot(0x02000014, stop_kind=StopReasonKind.STEP),
+        ]
+    )
+    _install_fake_session(monkeypatch, session)
+    arguments = build_parser().parse_args(
+        ["runtime", "step", "--cpu", "arm9", "--count", "2"]
+    )
+
+    assert runtime_cli.run_runtime_command(arguments) == 0
+
+    assert session.events == ["step", "step", "detach"]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 2
+    assert payload["stop_pcs"] == ["0x02000012", "0x02000014"]
+    assert payload["final_snapshot"]["pc"] == "0x02000014"
+
+
+def test_runtime_project_correlation_opens_project_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession()
+    _install_fake_session(monkeypatch, session)
+    project = object()
+    open_calls: list[tuple[Path, bool]] = []
+
+    class _ProjectContext:
+        def __enter__(self) -> object:
+            return project
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+    class _AnalysisProject:
+        @classmethod
+        def open(cls, path: Path, *, read_only: bool = False) -> _ProjectContext:
+            open_calls.append((path, read_only))
+            return _ProjectContext()
+
+    def _correlate(candidate_project: object, snapshot: RuntimeSnapshot) -> RuntimeLocation:
+        assert candidate_project is project
+        return RuntimeLocation(
+            pc=snapshot.pc,
+            instruction_set=snapshot.instruction_set,
+            candidates=(RuntimeComponentLocation(component="arm9"),),
+        )
+
+    monkeypatch.setattr(runtime_cli, "AnalysisProject", _AnalysisProject, raising=False)
+    monkeypatch.setattr(runtime_cli, "correlate_snapshot", _correlate, raising=False)
+    arguments = build_parser().parse_args(
+        [
+            "runtime",
+            "snapshot",
+            "--cpu",
+            "arm9",
+            "--project",
+            "game.ndsre",
+        ]
+    )
+
+    assert runtime_cli.run_runtime_command(arguments) == 0
+
+    assert open_calls == [(Path("game.ndsre"), True)]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["correlation"] == {
+        "candidates": [
+            {
+                "annotation": None,
+                "component": "arm9",
+                "function": None,
+                "symbols": [],
+            }
+        ],
+        "instruction_set": "arm",
+        "pc": "0x02000010",
+    }
+
+
+def test_runtime_errors_use_existing_top_level_toolkit_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _FailingFactory:
+        @classmethod
+        def connect(cls, **kwargs: Any) -> None:
+            raise RuntimeConnectionError("runtime peer unavailable")
+
+    monkeypatch.setattr(runtime_cli, "MelonDSSession", _FailingFactory, raising=False)
+
+    assert main(["runtime", "probe", "--cpu", "arm9"]) == 4
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "runtime peer unavailable\n"
