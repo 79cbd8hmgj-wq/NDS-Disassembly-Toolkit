@@ -78,7 +78,7 @@ class RSPClient:
             raise ValueError("runtime timeout must be positive")
         try:
             peer = socket.create_connection((host, port), timeout=timeout)
-        except (socket.timeout, TimeoutError) as exc:
+        except TimeoutError as exc:
             raise RuntimeTimeoutError(
                 f"timed out connecting to runtime debugger at {host}:{port}"
             ) from exc
@@ -107,7 +107,7 @@ class RSPClient:
             raise RuntimeConnectionError("runtime debugger connection is closed")
         try:
             self._peer.sendall(data)
-        except (socket.timeout, TimeoutError) as exc:
+        except TimeoutError as exc:
             raise RuntimeTimeoutError("runtime debugger send timed out") from exc
         except OSError as exc:
             raise RuntimeConnectionError("runtime debugger send failed") from exc
@@ -117,7 +117,7 @@ class RSPClient:
             raise RuntimeConnectionError("runtime debugger connection is closed")
         try:
             chunk = self._peer.recv(4096)
-        except (socket.timeout, TimeoutError) as exc:
+        except TimeoutError as exc:
             raise RuntimeTimeoutError("runtime debugger receive timed out") from exc
         except OSError as exc:
             raise RuntimeConnectionError("runtime debugger receive failed") from exc
