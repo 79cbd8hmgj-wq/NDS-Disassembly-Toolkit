@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Protocol, Self
 
 from nds_disassembly_toolkit.analysis.runtime.model import (
@@ -53,6 +54,14 @@ _BREAKPOINT_KIND_TO_RSP = {
     BreakpointKind.READ: 3,
     BreakpointKind.ACCESS: 4,
 }
+_TRAP_SIGNAL = 5
+_EXPECTED_TRAP_KINDS = frozenset(
+    {
+        StopReasonKind.BREAKPOINT,
+        StopReasonKind.WATCHPOINT,
+        StopReasonKind.STEP,
+    }
+)
 
 
 class _RSPClientLike(Protocol):
@@ -102,8 +111,9 @@ class MelonDSSession:
         client = RSPClient.connect(host, resolved_port, timeout=timeout)
         try:
             capabilities = client.negotiate()
-        except Exception:
-            client.close()
+        except BaseException:
+            with suppress(Exception):
+                client.close()
             raise
         return cls(cpu, client, capabilities)
 
@@ -145,10 +155,24 @@ class MelonDSSession:
             return RuntimeStop(
                 StopReasonKind.EXITED,
                 signal=reply.signal,
-                address=address,
                 raw=reply.raw,
             )
-        return RuntimeStop(kind, signal=reply.signal, address=address, raw=reply.raw)
+
+        resolved_kind = kind
+        resolved_address = address
+        if kind in _EXPECTED_TRAP_KINDS and reply.signal != _TRAP_SIGNAL:
+            resolved_kind = (
+                StopReasonKind.SIGNAL
+                if reply.signal is not None
+                else StopReasonKind.UNKNOWN
+            )
+            resolved_address = None
+        return RuntimeStop(
+            resolved_kind,
+            signal=reply.signal,
+            address=resolved_address,
+            raw=reply.raw,
+        )
 
     def snapshot(self, stop: RuntimeStop | None = None) -> RuntimeSnapshot:
         registers = self._decode_registers(self._client.read_registers())
@@ -202,9 +226,13 @@ class MelonDSSession:
                 StopReasonKind.BREAKPOINT,
                 address=address,
             )
-            return self.snapshot(stop)
-        finally:
-            self.remove_breakpoint(BreakpointKind.CODE, address, length=length)
+            snapshot = self.snapshot(stop)
+        except BaseException:
+            with suppress(Exception):
+                self.remove_breakpoint(BreakpointKind.CODE, address, length=length)
+            raise
+        self.remove_breakpoint(BreakpointKind.CODE, address, length=length)
+        return snapshot
 
     def run_until_watchpoint(
         self,
@@ -223,9 +251,13 @@ class MelonDSSession:
                 StopReasonKind.WATCHPOINT,
                 address=address,
             )
-            return self.snapshot(stop)
-        finally:
-            self.remove_breakpoint(kind, address, length=length)
+            snapshot = self.snapshot(stop)
+        except BaseException:
+            with suppress(Exception):
+                self.remove_breakpoint(kind, address, length=length)
+            raise
+        self.remove_breakpoint(kind, address, length=length)
+        return snapshot
 
     def interrupt(self) -> None:
         self._client.interrupt()
@@ -240,4 +272,8 @@ class MelonDSSession:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        self.close()
+        if exc_type is None:
+            self.close()
+            return
+        with suppress(Exception):
+            self.close()
