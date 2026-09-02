@@ -38,3 +38,13 @@ def test_data_flow_api_is_exported() -> None:
     assert analysis.BlockFlowState is BlockFlowState
     assert analysis.FunctionDataFlow is FunctionDataFlow
     assert analysis.analyze_data_flow is analyze_data_flow
+
+
+def test_decompiler_api_is_exported() -> None:
+    for name in (
+        "DecompilationResult",
+        "DecompilerError",
+        "DecompiledFunction",
+        "StructuredFunction",
+    ):
+        assert hasattr(analysis, name), name
