@@ -316,7 +316,7 @@ Expected: all pass.
 
 - [ ] **Step 4: Audit scope**
 
-Verify `git diff main...HEAD -- pyproject.toml` is empty; no Bakugan/B6RE/game-specific identifiers appear; no `sqlite3` import exists in runtime code; no `capstone` import exists in runtime code; no copied melonDS source/header files are present; project schema files are unchanged.
+Verify `git diff main...HEAD -- pyproject.toml` is empty; no consumer-specific/game-specific identifiers appear; no `sqlite3` import exists in runtime code; no `capstone` import exists in runtime code; no copied melonDS source/header files are present; project schema files are unchanged.
 
 - [ ] **Step 5: Commit final docs/audit changes**
 
