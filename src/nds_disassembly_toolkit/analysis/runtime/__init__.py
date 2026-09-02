@@ -1,3 +1,4 @@
+from nds_disassembly_toolkit.analysis.runtime.correlation import correlate_snapshot
 from nds_disassembly_toolkit.analysis.runtime.melonds import MelonDSSession
 from nds_disassembly_toolkit.analysis.runtime.model import (
     BreakpointKind,
@@ -32,4 +33,5 @@ __all__ = [
     "RuntimeTargetStateError",
     "RuntimeTimeoutError",
     "StopReasonKind",
+    "correlate_snapshot",
 ]
