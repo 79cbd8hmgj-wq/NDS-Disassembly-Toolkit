@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from nds_disassembly_toolkit.analysis.model import (
+    CrossReference,
     FunctionCandidate,
     InstructionSet,
     Symbol,
@@ -396,8 +397,81 @@ class TraceAddressDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceFunctionDelta:
+    component: str
+    address: int
+    instruction_set: InstructionSet
+    baseline_hits: int
+    target_hits: int
+    baseline_frequency: float
+    target_frequency: float
+    classification: str
+    dynamic_pcs: tuple[int, ...]
+    symbols: tuple[Symbol, ...]
+    annotation: LocationAnnotation | None
+    condition_hit: bool
+    condition_stop_pcs: tuple[int, ...]
+    changed_memory_references: tuple[CrossReference, ...]
+
+    def __post_init__(self) -> None:
+        _validate_u32(self.address, name="trace function delta address")
+        if self.baseline_hits < 0 or self.target_hits < 0:
+            raise ValueError("trace function delta hit counts must be non-negative")
+        if self.baseline_hits == 0 and self.target_hits == 0:
+            raise ValueError("trace function delta requires at least one hit")
+        if not 0.0 <= self.baseline_frequency <= 1.0:
+            raise ValueError("baseline function frequency must be between zero and one")
+        if not 0.0 <= self.target_frequency <= 1.0:
+            raise ValueError("target function frequency must be between zero and one")
+        if self.classification not in {"baseline_only", "target_only", "shared"}:
+            raise ValueError("trace function delta classification is invalid")
+        if tuple(sorted(set(self.dynamic_pcs))) != self.dynamic_pcs:
+            raise ValueError("dynamic PCs must be sorted and unique")
+        if tuple(sorted(set(self.condition_stop_pcs))) != self.condition_stop_pcs:
+            raise ValueError("condition stop PCs must be sorted and unique")
+        if self.condition_hit != bool(self.condition_stop_pcs):
+            raise ValueError("condition hit must match the presence of condition stop PCs")
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionRankEvidence:
+    name: str
+    value: float
+    weight: float
+    contribution: float
+    reasons: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("rank evidence name must not be empty")
+        if self.value < 0.0 or self.weight < 0.0 or self.contribution < 0.0:
+            raise ValueError("rank evidence values must be non-negative")
+        if not self.reasons:
+            raise ValueError("rank evidence must include at least one reason")
+
+
+@dataclass(frozen=True, slots=True)
+class RankedFunctionCandidate:
+    component: str
+    address: int
+    instruction_set: InstructionSet
+    score: float
+    evidence: tuple[FunctionRankEvidence, ...]
+
+    def __post_init__(self) -> None:
+        _validate_u32(self.address, name="ranked function address")
+        if self.score < 0.0:
+            raise ValueError("ranked function score must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
 class TraceDiffReport:
     baseline_config: TraceCaptureConfig
     target_config: TraceCaptureConfig
     target_identity_verified: bool
     address_deltas: tuple[TraceAddressDelta, ...]
+    function_deltas: tuple[TraceFunctionDelta, ...] = ()
+    ambiguous_correlations: tuple[TraceEventCorrelation, ...] = ()
+    baseline_memory_changes: tuple[MemoryChange, ...] = ()
+    target_memory_changes: tuple[MemoryChange, ...] = ()
+    rankings: tuple[RankedFunctionCandidate, ...] = ()
