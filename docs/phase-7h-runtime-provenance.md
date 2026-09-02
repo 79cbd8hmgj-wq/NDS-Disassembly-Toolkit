@@ -64,7 +64,7 @@ Static project correlation is read-only and goes through `AnalysisProject.open(.
 
 ## Game-specific boundary
 
-No Bakugan/B6RE address, symbol, patch, record schema, gameplay assumption, or consumer-specific confidence rule belongs in the Phase 7H runtime package. Game projects may consume runtime snapshots and correlate them with their own `.ndsre` analysis, but interpretation remains consumer-owned.
+No game-specific address, symbol, patch, record schema, gameplay assumption, or consumer-specific confidence rule belongs in the Phase 7H runtime package. Game projects may consume runtime snapshots and correlate them with their own `.ndsre` analysis, but interpretation remains consumer-owned.
 
 ## Security boundary
 
