@@ -55,7 +55,15 @@ def _cfg(function: FunctionCandidate, immediate: int) -> FunctionControlFlowGrap
     )
     return FunctionControlFlowGraph(
         function,
-        (BasicBlock("arm9", function.address, function.offset, InstructionSet.ARM, (instruction,)),),
+        (
+            BasicBlock(
+                "arm9",
+                function.address,
+                function.offset,
+                InstructionSet.ARM,
+                (instruction,),
+            ),
+        ),
         (),
         (),
         (),
