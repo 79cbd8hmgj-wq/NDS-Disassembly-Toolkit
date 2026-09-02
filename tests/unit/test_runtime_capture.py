@@ -110,7 +110,8 @@ def test_step_capture_persists_bounded_evidence_events(tmp_path: Path) -> None:
     assert summary.evidence_events == 3
     assert summary.control_events == 0
     assert session.calls == [("step",), ("step",), ("step",)]
-    with TraceStore.open(destination) as store:
+    store = TraceStore.open(destination)
+    try:
         assert [
             (event.ordinal, event.role, event.pc) for event in store.events()
         ] == [
@@ -118,6 +119,8 @@ def test_step_capture_persists_bounded_evidence_events(tmp_path: Path) -> None:
             (1, TraceEventRole.EVIDENCE, 0x02000008),
             (2, TraceEventRole.EVIDENCE, 0x0200000C),
         ]
+    finally:
+        store.close()
 
 
 def test_step_capture_stops_on_target_exit(tmp_path: Path) -> None:
@@ -179,7 +182,8 @@ def test_repeated_breakpoint_capture_advances_before_rearming(tmp_path: Path) ->
         ("step",),
         ("run_until_breakpoint", 0x02000008, 4),
     ]
-    with TraceStore.open(destination) as store:
+    store = TraceStore.open(destination)
+    try:
         assert [
             (event.ordinal, event.role, event.pc) for event in store.events()
         ] == [
@@ -187,6 +191,8 @@ def test_repeated_breakpoint_capture_advances_before_rearming(tmp_path: Path) ->
             (1, TraceEventRole.CONTROL_ADVANCE, 0x0200000C),
             (2, TraceEventRole.EVIDENCE, 0x02000008),
         ]
+    finally:
+        store.close()
 
 
 def test_watchpoint_capture_forwards_kind_address_and_length(tmp_path: Path) -> None:
@@ -243,11 +249,14 @@ def test_capture_reads_memory_before_execution_and_after_final_stop(tmp_path: Pa
         ("step",),
         ("read_memory", region.address, region.length),
     ]
-    with TraceStore.open(destination) as store:
+    store = TraceStore.open(destination)
+    try:
         before = store.memory_snapshot(0, MemorySnapshotPhase.BEFORE)
         after = store.memory_snapshot(0, MemorySnapshotPhase.AFTER)
         assert before is not None and before.data == b"AAAA"
         assert after is not None and after.data == b"BBBB"
+    finally:
+        store.close()
 
 
 def test_failed_after_read_preserves_existing_destination(tmp_path: Path) -> None:
