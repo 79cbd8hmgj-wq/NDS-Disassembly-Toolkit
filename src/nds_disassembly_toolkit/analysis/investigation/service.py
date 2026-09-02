@@ -12,10 +12,12 @@ from nds_disassembly_toolkit.analysis.investigation.model import (
     InvestigationRequest,
 )
 from nds_disassembly_toolkit.analysis.model import (
+    CrossReference,
     CrossReferenceKind,
     FunctionCandidate,
     InstructionSet,
     OperandKind,
+    Symbol,
     SymbolKind,
 )
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, LocationAnnotation
@@ -46,13 +48,13 @@ def _function_key(function: FunctionCandidate) -> _FunctionKey:
     return function.component, function.address, function.instruction_set
 
 
-def _source_function_key(reference: object) -> _FunctionKey | None:
-    source_function_address = getattr(reference, "source_function_address")
-    source_instruction_set = getattr(reference, "source_instruction_set")
+def _source_function_key(reference: CrossReference) -> _FunctionKey | None:
+    source_function_address = reference.source_function_address
+    source_instruction_set = reference.source_instruction_set
     if source_function_address is None or source_instruction_set is None:
         return None
     return (
-        getattr(reference, "source_component"),
+        reference.source_component,
         source_function_address,
         source_instruction_set,
     )
@@ -214,7 +216,10 @@ def _collect_address_evidence(
                 evidence,
                 key,
                 InvestigationEvidenceKind.ADDRESS_XREF,
-                reason=f"static {reference.kind.value} reference to requested address 0x{address:08x}",
+                reason=(
+                    f"static {reference.kind.value} reference to requested address "
+                    f"0x{address:08x}"
+                ),
                 address=address,
             )
 
@@ -351,7 +356,7 @@ def _collect_call_neighbors(
 def _display_context(
     project: AnalysisProject,
     function: FunctionCandidate,
-) -> tuple[str, tuple[object, ...], LocationAnnotation | None]:
+) -> tuple[str, tuple[Symbol, ...], LocationAnnotation | None]:
     symbols = project.symbols_at(function.component, function.address)
     annotation = project.annotation(function.component, function.address)
     if annotation is not None and annotation.name_override is not None:
@@ -404,7 +409,7 @@ def _build_candidates(
                 name=name,
                 score=score,
                 evidence=tuple(rendered_evidence),
-                symbols=symbols,  # type: ignore[arg-type]
+                symbols=symbols,
                 annotation=annotation,
             )
         )
