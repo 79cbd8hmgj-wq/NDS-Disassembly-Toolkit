@@ -10,17 +10,35 @@ from nds_disassembly_toolkit.analysis.runtime.model import (
     RuntimeStop,
     StopReasonKind,
 )
+from nds_disassembly_toolkit.analysis.runtime.trace_model import (
+    TRACE_SCHEMA_VERSION,
+    MemorySnapshot,
+    MemorySnapshotPhase,
+    TraceCaptureConfig,
+    TraceCaptureMode,
+    TraceEvent,
+    TraceEventRole,
+    TraceMemoryRegion,
+    TraceSummary,
+    TraceTermination,
+)
 from nds_disassembly_toolkit.errors import (
     RuntimeAnalysisError,
     RuntimeConnectionError,
     RuntimeProtocolError,
     RuntimeTargetStateError,
     RuntimeTimeoutError,
+    RuntimeTraceError,
+    RuntimeTraceFormatError,
+    RuntimeTraceMismatchError,
 )
 
 __all__ = [
+    "TRACE_SCHEMA_VERSION",
     "BreakpointKind",
     "MelonDSSession",
+    "MemorySnapshot",
+    "MemorySnapshotPhase",
     "RegisterSnapshot",
     "RuntimeAnalysisError",
     "RuntimeComponentLocation",
@@ -32,6 +50,16 @@ __all__ = [
     "RuntimeStop",
     "RuntimeTargetStateError",
     "RuntimeTimeoutError",
+    "RuntimeTraceError",
+    "RuntimeTraceFormatError",
+    "RuntimeTraceMismatchError",
     "StopReasonKind",
+    "TraceCaptureConfig",
+    "TraceCaptureMode",
+    "TraceEvent",
+    "TraceEventRole",
+    "TraceMemoryRegion",
+    "TraceSummary",
+    "TraceTermination",
     "correlate_snapshot",
 ]
