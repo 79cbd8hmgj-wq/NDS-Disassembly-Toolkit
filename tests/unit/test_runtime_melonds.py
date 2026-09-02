@@ -286,9 +286,8 @@ def test_context_cleanup_error_does_not_mask_primary_failure() -> None:
     client = FailingDetachClient()
     session = MelonDSSession(RuntimeCpu.ARM9, client, client.capabilities)
 
-    with pytest.raises(ValueError, match="primary failure"):
-        with session:
-            raise ValueError("primary failure")
+    with pytest.raises(ValueError, match="primary failure"), session:
+        raise ValueError("primary failure")
 
     assert client.calls == [("detach",)]
 
