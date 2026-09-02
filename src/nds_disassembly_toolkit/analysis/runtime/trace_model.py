@@ -5,7 +5,12 @@ from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 
-from nds_disassembly_toolkit.analysis.model import InstructionSet
+from nds_disassembly_toolkit.analysis.model import (
+    FunctionCandidate,
+    InstructionSet,
+    Symbol,
+)
+from nds_disassembly_toolkit.analysis.project.model import LocationAnnotation
 from nds_disassembly_toolkit.analysis.runtime.model import (
     BreakpointKind,
     RegisterSnapshot,
@@ -287,3 +292,78 @@ class MemoryChange:
             raise ValueError("values16 entries must be 2-byte changes")
         if any(value.width != 4 for value in self.values32):
             raise ValueError("values32 entries must be 4-byte changes")
+
+
+@dataclass(frozen=True, slots=True)
+class TraceEventComponentCorrelation:
+    component: str
+    functions: tuple[FunctionCandidate, ...]
+    symbols: tuple[Symbol, ...]
+    annotation: LocationAnnotation | None
+
+
+@dataclass(frozen=True, slots=True)
+class TraceEventCorrelation:
+    pc: int
+    instruction_set: InstructionSet
+    candidates: tuple[TraceEventComponentCorrelation, ...]
+    ambiguous: bool
+    resolved_function: FunctionCandidate | None
+
+
+@dataclass(frozen=True, slots=True)
+class TraceAddressHit:
+    cpu: RuntimeCpu
+    pc: int
+    instruction_set: InstructionSet
+    count: int
+    frequency: float
+
+    def __post_init__(self) -> None:
+        _validate_u32(self.pc, name="trace address hit pc")
+        if self.count <= 0:
+            raise ValueError("trace address hit count must be positive")
+        if not 0.0 <= self.frequency <= 1.0:
+            raise ValueError("trace address hit frequency must be between zero and one")
+
+
+@dataclass(frozen=True, slots=True)
+class TraceAddressInspection:
+    hit: TraceAddressHit
+    correlation: TraceEventCorrelation | None
+
+
+@dataclass(frozen=True, slots=True)
+class TraceMemoryRegionInspection:
+    region: TraceMemoryRegion
+    before_sha256: str
+    after_sha256: str
+    changed_ranges: int
+    changed_bytes: int
+
+    def __post_init__(self) -> None:
+        if self.changed_ranges < 0 or self.changed_bytes < 0:
+            raise ValueError("trace memory change counts must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class TraceInspection:
+    config: TraceCaptureConfig
+    trace_schema_version: int
+    capture_status: str
+    events: int
+    evidence_events: int
+    control_events: int
+    addresses: tuple[TraceAddressInspection, ...]
+    memory_regions: tuple[TraceMemoryRegionInspection, ...]
+    integrity_ok: bool
+
+    def __post_init__(self) -> None:
+        if self.trace_schema_version <= 0:
+            raise ValueError("trace inspection schema version must be positive")
+        if not self.capture_status:
+            raise ValueError("trace inspection capture status must not be empty")
+        if min(self.events, self.evidence_events, self.control_events) < 0:
+            raise ValueError("trace inspection event counts must be non-negative")
+        if self.evidence_events + self.control_events != self.events:
+            raise ValueError("trace inspection event role counts must equal event count")
