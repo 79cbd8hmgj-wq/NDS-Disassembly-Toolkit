@@ -66,7 +66,7 @@ For a text query, the collector searches:
 3. persisted `LocationAnnotation.comment`;
 4. persisted annotation tags.
 
-A matched string contributes to functions with an xref to that string's address. A matched annotation directly contributes when the annotated address is a persisted function entry. For annotations on non-entry addresses, containing functions are resolved through persisted instruction ownership when possible.
+A matched string contributes to functions with an xref to that string's address only when that numeric address identifies exactly one persisted string record across the project. Because persisted xrefs do not encode a target component, string-derived xref evidence is suppressed when overlapping components store different strings at the same runtime address rather than guessing which overlay the reference means. A matched annotation directly contributes when the annotated address is a persisted function entry. For annotations on non-entry addresses, containing functions are resolved through persisted instruction ownership when possible.
 
 Generated symbol names are used as candidate display names and explanation context. Exact generated names are not treated as free-text evidence unless they are attached to a location reached by another selector; this avoids requiring a broad new symbol-enumeration API in Phase 7J.
 
@@ -220,6 +220,7 @@ The TDD suite must cover:
 
 - overlay-safe candidate identity;
 - text → string → xref → function ranking;
+- ambiguous overlapping string targets are not guessed;
 - annotation text evidence;
 - typed-immediate constant matching in ARM and Thumb CFGs;
 - address/xref matching;
