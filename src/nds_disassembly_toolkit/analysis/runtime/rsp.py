@@ -140,6 +140,10 @@ class RSPClient:
             raise RuntimeProtocolError("runtime debugger rejected the RSP packet")
         raise RuntimeProtocolError("runtime debugger returned an invalid RSP acknowledgement")
 
+    def initial_ack_handshake(self) -> None:
+        self._send(b"+")
+        self._read_ack()
+
     def _receive_packet(self) -> str:
         while self._read_byte() != ord("$"):
             pass
