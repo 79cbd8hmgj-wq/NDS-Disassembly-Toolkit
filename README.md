@@ -20,6 +20,7 @@ The standalone toolkit now provides:
 - intraprocedural constant/address/register flow, stack-frame/slot recovery, argument evidence, return evidence, and function summaries;
 - versioned persistent `.ndsre` analysis projects with component fingerprints, stale-analysis detection, generated analysis replacement, annotations, and deterministic query APIs;
 - `nds-toolkit project` commands for persistent function/string/symbol/xref/CFG/data-flow/annotation inspection;
+- conservative evidence-backed ARM/Thumb pseudo-C generated from persisted CFG, data-flow, stack/ABI, symbol, and annotation evidence, with safe control-flow structuring and explicit uncertainty fallback;
 - melonDS GDB-RSP runtime inspection for ARM9/ARM7, including snapshots, memory reads, temporary code conditions, and bounded stepping;
 - portable `.ndstrace` capture, BEFORE/AFTER memory differentials, read-only static-project correlation, behavioral trace comparison, and transparent dynamic function ranking;
 - reusable CLI parser/runner helpers so game projects can consume toolkit commands while enforcing stricter game-specific policy.
@@ -48,6 +49,7 @@ nds-toolkit patch work/game patch.json
 nds-toolkit disasm --help
 nds-toolkit analyze --help
 nds-toolkit project --help
+nds-toolkit project decompile game.ndsre arm9 0x02012340 --mode arm
 nds-toolkit runtime --help
 nds-toolkit assets inventory GAME.nds --output assets.json
 nds-toolkit source-patch build work/game source-patch.json

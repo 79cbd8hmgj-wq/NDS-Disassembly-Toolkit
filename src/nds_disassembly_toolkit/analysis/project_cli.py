@@ -6,6 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from nds_disassembly_toolkit.analysis.decompiler import (
+    DecompilationResult,
+    decompile_function,
+)
 from nds_disassembly_toolkit.analysis.model import (
     AbstractValue,
     ArgumentEvidence,
@@ -89,6 +93,18 @@ def _operand_access_json(access: OperandAccess) -> list[str]:
 
 def _write_json(payload: object, output: Path | None) -> None:
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if output is None:
+        sys.stdout.write(rendered)
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(rendered, encoding="utf-8")
+    temporary.replace(output)
+
+
+def _write_text(rendered: str, output: Path | None) -> None:
+    if not rendered.endswith("\n"):
+        rendered += "\n"
     if output is None:
         sys.stdout.write(rendered)
         return
@@ -431,6 +447,18 @@ def _annotation_json(
     }
 
 
+def _decompilation_json(result: DecompilationResult) -> dict[str, object]:
+    return {
+        "address": _hex(result.ir.address),
+        "component": result.ir.component,
+        "fallback_used": result.structured.fallback_used,
+        "instruction_set": result.ir.instruction_set.value,
+        "name": result.ir.name,
+        "pseudo_c": result.pseudo_c,
+        "warnings": list(result.ir.warnings),
+    }
+
+
 def _add_output_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", type=Path)
 
@@ -461,6 +489,20 @@ def add_project_parser(subparsers: Any) -> None:
     function_parser.add_argument("address", type=_auto_int)
     function_parser.add_argument("instruction_set", type=_instruction_set)
     _add_output_argument(function_parser)
+
+    decompile_parser = commands.add_parser(
+        "decompile", help="render conservative pseudo-C for one persisted function"
+    )
+    decompile_parser.add_argument("project", type=Path)
+    decompile_parser.add_argument("component")
+    decompile_parser.add_argument("address", type=_auto_int)
+    decompile_parser.add_argument("--mode", required=True, type=_instruction_set)
+    decompile_parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+    )
+    _add_output_argument(decompile_parser)
 
     strings_parser = commands.add_parser("strings", help="list persisted strings")
     strings_parser.add_argument("project", type=Path)
@@ -603,6 +645,21 @@ def _run_function(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _run_decompile(arguments: argparse.Namespace) -> int:
+    with AnalysisProject.open(arguments.project, read_only=True) as project:
+        result = decompile_function(
+            project,
+            arguments.component,
+            arguments.address,
+            arguments.mode,
+        )
+    if arguments.format == "text":
+        _write_text(result.pseudo_c, arguments.output)
+        return 0
+    _write_json(_decompilation_json(result), arguments.output)
+    return 0
+
+
 def _run_strings(arguments: argparse.Namespace) -> int:
     with AnalysisProject.open(arguments.project, read_only=True) as project:
         records = project.strings(component=arguments.component)
@@ -742,6 +799,8 @@ def run_project_command(arguments: argparse.Namespace) -> int:
         return _run_functions(arguments)
     if arguments.project_command == "function":
         return _run_function(arguments)
+    if arguments.project_command == "decompile":
+        return _run_decompile(arguments)
     if arguments.project_command == "strings":
         return _run_strings(arguments)
     if arguments.project_command == "symbols":

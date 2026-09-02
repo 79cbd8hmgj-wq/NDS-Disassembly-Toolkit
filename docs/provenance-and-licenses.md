@@ -31,7 +31,7 @@ This is an engineering provenance record, not a substitute for legal advice.
 | ndstool | https://github.com/devkitPro/ndstool | GNU GPL v3 (`COPYING`) | Comparison/reference for conventional NDS extraction/repacking behavior | No source vendored or copied; parser/rebuilder remains toolkit-owned |
 | pret DS disassembly tools | https://github.com/pret/ds_disassembly_tools | **No explicit license found** during audit | Workflow concepts such as module parameters, overlay layout, labelled regions, and disassembly comparison | Implementation source is treated as unavailable for copying |
 | Capstone | https://github.com/capstone-engine/capstone | BSD 3-Clause-style license (`LICENSES/LICENSE.TXT` in supplied archive) | ARM/Thumb decoding and semantic instruction metadata | `capstone>=5,<7` is a runtime dependency; no Capstone source is vendored |
-| angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied archive) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, and persistence | Reference only through Phase 7H; no angr runtime dependency or source incorporation |
+| angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied archive) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, persistence, and decompiler-stage separation | Reference only through Phase 7I; no angr runtime dependency or source incorporation |
 | melonDS | https://github.com/melonDS-emu/melonDS | GNU GPL v3 | Nintendo DS runtime behavior and GDB-RSP interoperability | External GPL process/build only; no melonDS implementation is copied, linked, translated, or vendored into the MIT toolkit |
 
 ### Archive-origin caveats
@@ -80,7 +80,7 @@ Capstone remains confined to the decoder boundary. Downstream analysis does not 
 
 ### angr
 
-angr is architecture/reference material only. The toolkit does not import or copy angr's function-recovery, CFG, abstract-state, calling-convention, symbolic-execution, or persistence implementations.
+angr is architecture/reference material only. The toolkit does not import or copy angr's function-recovery, CFG, abstract-state, calling-convention, symbolic-execution, persistence, or decompiler implementations.
 
 The current static pipeline uses toolkit-owned deterministic CFG/worklist models and immutable analysis records. Targeted angr integration, if added later, must be separately designed and audited rather than becoming an implicit dependency.
 
@@ -123,12 +123,23 @@ The verification boundary is instead:
 
 If a future stock melonDS release wires watchpoint checks into execution, it can be added to the live gate without changing the toolkit's public watchpoint or `.ndstrace` model.
 
+## Phase 7I conservative pseudo-C boundary
+
+Phase 7I is independently authored toolkit code over toolkit-owned persisted analysis models. It consumes exact `FunctionCandidate`, CFG, typed instruction semantics, data-flow, stack/ABI summaries, symbols, xrefs, and annotations through the public analysis/project APIs, then derives a conservative decompiler IR, safe control-flow structure, and deterministic pseudo-C presentation.
+
+Capstone remains confined to the existing decoder boundary. Phase 7I does not import Capstone directly, introduce a second decoder, or parse Capstone objects. The decompiler does not import angr, Ghidra, RetDec, or another decompiler implementation, and no source from those projects is copied, translated, vendored, or linked into the toolkit.
+
+The pseudo-C is a read-only derived view. It is not stored in `.ndsre`, does not change schema version 1, and introduces no new runtime dependency. Project annotations and symbols therefore improve subsequent decompilation output immediately without cached source becoming stale.
+
+Phase 7I deliberately preserves uncertainty rather than inventing source semantics: unsupported instructions remain visible, ambiguous overlay targets are not assigned to a guessed component, unproven control flow falls back to labels/gotos, and memory typing is limited to decoder-proven access widths. It does not claim source-level type recovery or recompilable-C equivalence.
+
 ## Repository audit observations
 
-- no upstream NDSFactory, Tinke, NitroPacker, ndstool, pret, angr, or melonDS source tree is vendored beneath toolkit source;
+- no upstream NDSFactory, Tinke, NitroPacker, ndstool, pret, angr, melonDS, Ghidra, or RetDec source tree is vendored beneath toolkit source;
 - Capstone is the only Phase 7 external runtime analysis dependency and remains behind the decoder boundary;
-- Phase 7F/7G/7H add toolkit-owned persistence, CLI, RSP, trace, differential, and ranking code without changing that boundary;
+- Phase 7F/7G/7H/7I add toolkit-owned persistence, CLI, RSP, trace, differential, ranking, and conservative pseudo-C code without changing that dependency boundary;
 - Phase 7H uses an external stock melonDS build only in interoperability CI;
+- Phase 7I changes neither `.ndsre` schema nor runtime-analysis behavior and persists no generated pseudo-C;
 - the repository contains source, tests, documentation, schemas, and synthetic/headless test harness material, not commercial ROMs or extracted copyrighted game assets;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems.
 
