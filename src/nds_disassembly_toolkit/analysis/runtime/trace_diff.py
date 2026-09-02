@@ -381,6 +381,7 @@ def _rank_evidence(
     delta: TraceFunctionDelta,
     dynamic_neighbor: bool,
 ) -> FunctionRankEvidence:
+    reasons: tuple[str, ...]
     if name == "target_exclusive":
         reasons = (
             "target trace only" if value else "not target-exclusive",
