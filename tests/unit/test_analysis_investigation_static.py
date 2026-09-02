@@ -253,7 +253,15 @@ def test_constant_matching_uses_typed_immediate_not_display_operands(tmp_path: P
     )
     arm_cfg = FunctionControlFlowGraph(
         function=arm,
-        blocks=(BasicBlock("arm9", arm.address, arm.offset, InstructionSet.ARM, (misleading,)),),
+        blocks=(
+            BasicBlock(
+                "arm9",
+                arm.address,
+                arm.offset,
+                InstructionSet.ARM,
+                (misleading,),
+            ),
+        ),
         edges=(),
         unresolved_transfers=(),
         decode_failures=(),
@@ -271,9 +279,11 @@ def test_constant_matching_uses_typed_immediate_not_display_operands(tmp_path: P
     with AnalysisProject.open(project_root, read_only=True) as project:
         report = investigate_project(project, InvestigationRequest(constants=(500,)))
 
-    assert [(item.function.address, item.function.instruction_set) for item in report.candidates] == [
-        (thumb.address, InstructionSet.THUMB)
+    identities = [
+        (item.function.address, item.function.instruction_set)
+        for item in report.candidates
     ]
+    assert identities == [(thumb.address, InstructionSet.THUMB)]
 
 
 def test_component_filter_preserves_overlapping_overlay_identity(tmp_path: Path) -> None:
@@ -312,9 +322,11 @@ def test_unknown_component_is_rejected_without_guessing(tmp_path: Path) -> None:
     root = tmp_path / "game.ndsre"
     with AnalysisProject.create(root):
         pass
-    with AnalysisProject.open(root, read_only=True) as project:
-        with pytest.raises(InvestigationError, match="component.*missing"):
-            investigate_project(
-                project,
-                InvestigationRequest(text="x", component="missing"),
-            )
+    with (
+        AnalysisProject.open(root, read_only=True) as project,
+        pytest.raises(InvestigationError, match=r"component.*missing"),
+    ):
+        investigate_project(
+            project,
+            InvestigationRequest(text="x", component="missing"),
+        )
