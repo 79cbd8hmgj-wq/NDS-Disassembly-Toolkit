@@ -100,12 +100,14 @@ def _inspect_open_store(
         )
 
     memory_regions: list[TraceMemoryRegionInspection] = []
+    memory_changes: list[MemoryChange] = []
     for region in config.memory_regions:
         before = store.memory_snapshot(region.ordinal, MemorySnapshotPhase.BEFORE)
         after = store.memory_snapshot(region.ordinal, MemorySnapshotPhase.AFTER)
         if before is None or after is None:
             raise RuntimeTraceFormatError("runtime trace memory snapshots are incomplete")
         changes = diff_memory_snapshots(before, after)
+        memory_changes.extend(changes)
         memory_regions.append(
             TraceMemoryRegionInspection(
                 region=region,
@@ -126,6 +128,7 @@ def _inspect_open_store(
         addresses=tuple(addresses),
         memory_regions=tuple(memory_regions),
         integrity_ok=True,
+        memory_changes=tuple(memory_changes),
     )
 
 
