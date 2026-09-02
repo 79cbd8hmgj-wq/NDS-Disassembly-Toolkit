@@ -103,11 +103,14 @@ jobs:
           timeout 10s nds-toolkit runtime step --cpu arm9 --count 1 > /tmp/step.json
           stop_target
 
-          # Phase 7H2 bounded runtime traces, each from a clean target.
+          # Phase 7H2 bounded runtime traces, each from a clean target. Stock
+          # melonDS break-on-startup consumes an initial debugger step without
+          # executing ARM9 code, so eight bounded steps guarantee that the
+          # deterministic writer reaches its STR instruction.
           start_target
           timeout 15s nds-toolkit runtime trace capture \
             --cpu arm9 \
-            --steps 5 \
+            --steps 8 \
             --memory 0x02000100:4 \
             --output /tmp/step.ndstrace > /tmp/step-trace-summary.json
           stop_target
@@ -219,13 +222,13 @@ jobs:
 
           # 7H2 bounded step capture and real memory mutation.
           assert step_summary['capture_mode']=='step'
-          assert step_summary['evidence_events']==5
+          assert step_summary['evidence_events']==8
           assert step_summary['control_events']==0
           assert step_summary['memory_regions']==1
           assert step_summary['terminated_by']=='limit'
           assert inspect['integrity_ok'] is True
           assert inspect['capture_status']=='complete'
-          assert inspect['evidence_events']==5
+          assert inspect['evidence_events']==8
           assert inspect['control_events']==0
           assert inspect['memory_changes']
           assert inspect['memory_changes'][0]['address']=='0x02000100'
@@ -235,8 +238,11 @@ jobs:
           assert break_summary['capture_mode']=='breakpoint'
           assert break_summary['evidence_events']==2
           assert break_summary['control_events']==1
-          with TraceStore.open(Path('/tmp/break.ndstrace')) as store:
+          store=TraceStore.open(Path('/tmp/break.ndstrace'))
+          try:
               events=store.events()
+          finally:
+              store.close()
           assert [event.role for event in events] == [
               TraceEventRole.EVIDENCE,
               TraceEventRole.CONTROL_ADVANCE,
