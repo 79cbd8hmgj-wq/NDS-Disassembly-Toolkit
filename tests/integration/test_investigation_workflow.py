@@ -19,7 +19,11 @@ from nds_disassembly_toolkit.analysis import (
     investigate_project,
 )
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
-from nds_disassembly_toolkit.analysis.runtime.model import RegisterSnapshot, RuntimeStop, StopReasonKind
+from nds_disassembly_toolkit.analysis.runtime.model import (
+    RegisterSnapshot,
+    RuntimeStop,
+    StopReasonKind,
+)
 from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     TraceCaptureConfig,
     TraceCaptureMode,
