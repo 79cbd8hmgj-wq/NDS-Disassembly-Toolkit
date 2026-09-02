@@ -367,3 +367,37 @@ class TraceInspection:
             raise ValueError("trace inspection event counts must be non-negative")
         if self.evidence_events + self.control_events != self.events:
             raise ValueError("trace inspection event role counts must equal event count")
+
+
+@dataclass(frozen=True, slots=True)
+class TraceAddressDelta:
+    cpu: RuntimeCpu
+    pc: int
+    instruction_set: InstructionSet
+    baseline_hits: int
+    target_hits: int
+    baseline_frequency: float
+    target_frequency: float
+    frequency_delta: float
+    classification: str
+
+    def __post_init__(self) -> None:
+        _validate_u32(self.pc, name="trace address delta pc")
+        if self.baseline_hits < 0 or self.target_hits < 0:
+            raise ValueError("trace address delta hit counts must be non-negative")
+        if self.baseline_hits == 0 and self.target_hits == 0:
+            raise ValueError("trace address delta requires at least one hit")
+        if not 0.0 <= self.baseline_frequency <= 1.0:
+            raise ValueError("baseline trace frequency must be between zero and one")
+        if not 0.0 <= self.target_frequency <= 1.0:
+            raise ValueError("target trace frequency must be between zero and one")
+        if self.classification not in {"baseline_only", "target_only", "shared"}:
+            raise ValueError("trace address delta classification is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class TraceDiffReport:
+    baseline_config: TraceCaptureConfig
+    target_config: TraceCaptureConfig
+    target_identity_verified: bool
+    address_deltas: tuple[TraceAddressDelta, ...]
