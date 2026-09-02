@@ -205,8 +205,14 @@ def compare_traces(
     project: AnalysisProject | None = None,
 ) -> TraceDiffReport:
     del project
-    baseline_store = baseline if isinstance(baseline, TraceStore) else TraceStore.open(Path(baseline))
-    target_store = target if isinstance(target, TraceStore) else TraceStore.open(Path(target))
+    baseline_store = (
+        baseline
+        if isinstance(baseline, TraceStore)
+        else TraceStore.open(Path(baseline))
+    )
+    target_store = (
+        target if isinstance(target, TraceStore) else TraceStore.open(Path(target))
+    )
     close_baseline = not isinstance(baseline, TraceStore)
     close_target = not isinstance(target, TraceStore)
     try:
