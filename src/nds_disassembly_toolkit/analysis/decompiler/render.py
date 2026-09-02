@@ -243,7 +243,7 @@ def render_pseudo_c(value: StructuredFunction | DecompilationResult) -> str:
     if not parameters:
         parameters = "void"
 
-    lines = [f"{return_type} {function.name}({parameters})", "{"]
+    lines = [f"{return_type} {function.name}({parameters}) {{"]
     if function.locals:
         lines.extend(f"    uint32_t {variable.name};" for variable in function.locals)
         if structured.body:
