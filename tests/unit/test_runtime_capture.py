@@ -15,6 +15,7 @@ from nds_disassembly_toolkit.analysis.runtime import (
     StopReasonKind,
 )
 from nds_disassembly_toolkit.analysis.runtime.trace_model import (
+    MemorySnapshotPhase,
     TraceCaptureConfig,
     TraceCaptureMode,
     TraceEventRole,
@@ -243,14 +244,8 @@ def test_capture_reads_memory_before_execution_and_after_final_stop(tmp_path: Pa
         ("read_memory", region.address, region.length),
     ]
     with TraceStore.open(destination) as store:
-        before = store.memory_snapshot(0, store.config.memory_regions and __import__(
-            "nds_disassembly_toolkit.analysis.runtime.trace_model",
-            fromlist=["MemorySnapshotPhase"],
-        ).MemorySnapshotPhase.BEFORE)
-        after = store.memory_snapshot(0, __import__(
-            "nds_disassembly_toolkit.analysis.runtime.trace_model",
-            fromlist=["MemorySnapshotPhase"],
-        ).MemorySnapshotPhase.AFTER)
+        before = store.memory_snapshot(0, MemorySnapshotPhase.BEFORE)
+        after = store.memory_snapshot(0, MemorySnapshotPhase.AFTER)
         assert before is not None and before.data == b"AAAA"
         assert after is not None and after.data == b"BBBB"
 
