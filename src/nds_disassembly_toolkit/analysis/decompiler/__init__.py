@@ -33,6 +33,8 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     UnknownStatement,
     VariableExpression,
 )
+from nds_disassembly_toolkit.analysis.decompiler.render import render_pseudo_c
+from nds_disassembly_toolkit.analysis.decompiler.service import decompile_function
 from nds_disassembly_toolkit.errors import DecompilerError
 
 __all__ = [
@@ -70,4 +72,6 @@ __all__ = [
     "UnknownExpression",
     "UnknownStatement",
     "VariableExpression",
+    "decompile_function",
+    "render_pseudo_c",
 ]
