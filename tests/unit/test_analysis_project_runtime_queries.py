@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import nds_disassembly_toolkit.analysis.runtime.correlation as runtime_correlation
 from nds_disassembly_toolkit.analysis import (
     BasicBlock,
     Component,
@@ -22,7 +23,6 @@ from nds_disassembly_toolkit.analysis.project import (
     ComponentAnalysisBundle,
     LocationAnnotation,
 )
-import nds_disassembly_toolkit.analysis.runtime.correlation as runtime_correlation
 
 BASE = 0x02000000
 
