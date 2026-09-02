@@ -358,6 +358,7 @@ class TraceInspection:
     addresses: tuple[TraceAddressInspection, ...]
     memory_regions: tuple[TraceMemoryRegionInspection, ...]
     integrity_ok: bool
+    memory_changes: tuple[MemoryChange, ...] = ()
 
     def __post_init__(self) -> None:
         if self.trace_schema_version <= 0:
