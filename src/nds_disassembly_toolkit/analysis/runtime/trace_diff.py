@@ -10,8 +10,10 @@ from nds_disassembly_toolkit.analysis.runtime.memory_diff import diff_memory_sna
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
 from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     MemorySnapshotPhase,
+    TraceAddressDelta,
     TraceAddressHit,
     TraceAddressInspection,
+    TraceDiffReport,
     TraceEvent,
     TraceEventCorrelation,
     TraceEventRole,
@@ -19,7 +21,10 @@ from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     TraceMemoryRegionInspection,
 )
 from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
-from nds_disassembly_toolkit.errors import RuntimeTraceFormatError
+from nds_disassembly_toolkit.errors import (
+    RuntimeTraceFormatError,
+    RuntimeTraceMismatchError,
+)
 
 _AddressKey = tuple[RuntimeCpu, int, InstructionSet]
 _CorrelationKey = tuple[int, InstructionSet]
@@ -113,3 +118,101 @@ def inspect_trace(
         return _inspect_open_store(store, project=project)
     finally:
         store.close()
+
+
+def _evidence_counts(store: TraceStore) -> tuple[Counter[_AddressKey], int]:
+    evidence = tuple(
+        event for event in store.events() if event.role is TraceEventRole.EVIDENCE
+    )
+    return (
+        Counter((event.cpu, event.pc, event.instruction_set) for event in evidence),
+        len(evidence),
+    )
+
+
+def _classification(baseline_hits: int, target_hits: int) -> str:
+    if baseline_hits and target_hits:
+        return "shared"
+    if baseline_hits:
+        return "baseline_only"
+    return "target_only"
+
+
+def _compare_open_stores(
+    baseline: TraceStore,
+    target: TraceStore,
+) -> TraceDiffReport:
+    baseline.validate_complete()
+    target.validate_complete()
+
+    baseline_fingerprint = baseline.config.project_fingerprint
+    target_fingerprint = target.config.project_fingerprint
+    if (
+        baseline_fingerprint is not None
+        and target_fingerprint is not None
+        and baseline_fingerprint != target_fingerprint
+    ):
+        raise RuntimeTraceMismatchError(
+            "runtime trace project fingerprints do not match"
+        )
+    target_identity_verified = (
+        baseline_fingerprint is not None
+        and target_fingerprint is not None
+        and baseline_fingerprint == target_fingerprint
+    )
+
+    baseline_counts, baseline_total = _evidence_counts(baseline)
+    target_counts, target_total = _evidence_counts(target)
+    keys = sorted(
+        set(baseline_counts) | set(target_counts),
+        key=lambda item: (item[0].value, item[1], item[2].value),
+    )
+    deltas: list[TraceAddressDelta] = []
+    for cpu, pc, instruction_set in keys:
+        key = (cpu, pc, instruction_set)
+        baseline_hits = baseline_counts[key]
+        target_hits = target_counts[key]
+        baseline_frequency = (
+            baseline_hits / baseline_total if baseline_total else 0.0
+        )
+        target_frequency = target_hits / target_total if target_total else 0.0
+        deltas.append(
+            TraceAddressDelta(
+                cpu=cpu,
+                pc=pc,
+                instruction_set=instruction_set,
+                baseline_hits=baseline_hits,
+                target_hits=target_hits,
+                baseline_frequency=baseline_frequency,
+                target_frequency=target_frequency,
+                frequency_delta=target_frequency - baseline_frequency,
+                classification=_classification(baseline_hits, target_hits),
+            )
+        )
+
+    return TraceDiffReport(
+        baseline_config=baseline.config,
+        target_config=target.config,
+        target_identity_verified=target_identity_verified,
+        address_deltas=tuple(deltas),
+    )
+
+
+def compare_traces(
+    baseline: Path | TraceStore,
+    target: Path | TraceStore,
+    *,
+    project: AnalysisProject | None = None,
+) -> TraceDiffReport:
+    del project
+    baseline_store = baseline if isinstance(baseline, TraceStore) else TraceStore.open(Path(baseline))
+    target_store = target if isinstance(target, TraceStore) else TraceStore.open(Path(target))
+    close_baseline = not isinstance(baseline, TraceStore)
+    close_target = not isinstance(target, TraceStore)
+    try:
+        return _compare_open_stores(baseline_store, target_store)
+    finally:
+        if close_target:
+            target_store.close()
+        if close_baseline:
+            baseline_store.close()
