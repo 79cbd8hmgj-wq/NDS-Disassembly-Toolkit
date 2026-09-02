@@ -1,158 +1,246 @@
-# Runtime debugging with melonDS
+# Runtime debugging and trace analysis with melonDS
 
-Phase 7H1 adds a game-neutral runtime-analysis bridge for a running Nintendo DS target exposed through melonDS's GDB Remote Serial Protocol (RSP) debugger interface. The toolkit attaches to an already configured debugger stub; it does not launch melonDS, reset the emulated system, load a ROM, or guess game-specific meaning.
+Phase 7H provides a game-neutral runtime-analysis bridge for Nintendo DS targets exposed through melonDS's GDB Remote Serial Protocol (RSP) debugger interface.
 
-The runtime layer is intentionally separate from static analysis. Live state is represented with toolkit-owned immutable records, and optional `.ndsre` correlation uses only the existing public, read-only `AnalysisProject` API.
+- **Phase 7H1** provides bounded interactive inspection: probe, snapshots, memory reads, temporary break/watch conditions, and single-step.
+- **Phase 7H2** adds bounded persisted `.ndstrace` capture, BEFORE/AFTER memory evidence, read-only `.ndsre` correlation, trace inspection, behavioral differentials, and transparent function ranking.
+
+The toolkit attaches to an already configured debugger stub. It does not launch melonDS, reset the emulated system, load a ROM, or guess game-specific meaning.
 
 ## melonDS setup
 
 Before using `nds-toolkit runtime`:
 
-1. launch the stock melonDS build you intend to debug;
+1. launch the melonDS build you intend to debug;
 2. enable its GDB debugger stub for the CPU you want to inspect;
 3. configure the stub port to match the toolkit connection;
-4. for reproducible stepping and breakpoint behavior, disable JIT while debugging;
-5. start or pause the emulated title at the state you want to inspect.
+4. disable JIT for reproducible debugger behavior;
+5. start or pause the title at the state you want to inspect.
 
-The toolkit defaults are:
+Toolkit defaults:
 
-| CPU | Toolkit default port |
+| CPU | Default port |
 | --- | ---: |
 | ARM9 | `3333` |
 | ARM7 | `3334` |
 
-Use `--port` when your melonDS configuration differs.
+The default host is `127.0.0.1`. Classic GDB RSP has no authentication or transport encryption, so do not expose a debugger stub directly to an untrusted network.
 
-The default host is `127.0.0.1`. Keep the debugger bound to loopback unless you deliberately need remote access. Classic GDB RSP does not provide authentication or transport encryption, so exposing a debugger stub directly to an untrusted network is unsafe. Prefer local connections or a separately secured tunnel.
+All online runtime commands accept `--timeout`; the default is five seconds. JSON-producing commands support atomic `--output` writes.
 
-## Probe the debugger
+## Interactive Phase 7H1 commands
 
-Probe establishes an RSP connection, negotiates capabilities, reports them as deterministic JSON, and detaches. It does not continue, step, or reset the target.
+Probe the debugger without advancing the target:
 
 ```bash
 nds-toolkit runtime probe --cpu arm9
 ```
 
-ARM7 or an explicit endpoint:
-
-```bash
-nds-toolkit runtime probe \
-  --cpu arm7 \
-  --host 127.0.0.1 \
-  --port 3334
-```
-
-All runtime commands accept `--timeout`; the default is five seconds. Commands that produce JSON also accept `--output`, which writes by atomic temporary-file replacement.
-
-## Capture a register snapshot
+Capture the current registers/PC/CPSR:
 
 ```bash
 nds-toolkit runtime snapshot --cpu arm9
 ```
 
-A snapshot reports:
-
-- CPU identity;
-- canonical register names and values;
-- PC and CPSR;
-- ARM versus Thumb state derived from CPSR;
-- the current toolkit stop record;
-- optional static-project correlation.
-
-Runtime addresses and extents are emitted as lowercase canonical hexadecimal strings such as `0x02012340`.
-
-### Correlate with a persistent analysis project
+Read bounded memory:
 
 ```bash
-nds-toolkit runtime snapshot \
-  --cpu arm9 \
-  --project game.ndsre
+nds-toolkit runtime read-memory --cpu arm9 0x02000000 0x100
 ```
 
-The project is opened read-only. Correlation checks every persisted component whose runtime range contains the live PC, then queries each component independently for:
-
-- an exact function with matching ARM/Thumb identity;
-- symbols at the exact address;
-- a location annotation at the exact address.
-
-Overlapping Nintendo DS overlays are never collapsed into one guessed owner. If multiple persisted components cover the same PC, all candidates remain in deterministic component-name order.
-
-Runtime commands do not write observations back into `.ndsre` in Phase 7H1.
-
-## Read runtime memory
+Continue to a temporary code breakpoint:
 
 ```bash
-nds-toolkit runtime read-memory \
-  --cpu arm9 \
-  0x02000000 \
-  0x100
+nds-toolkit runtime run-until --cpu arm9 --break 0x02012340
 ```
 
-The command performs bounded RSP memory reads and returns the requested address, length, CPU, and lowercase hexadecimal bytes. A zero-length request is rejected.
-
-Large requests are internally split into smaller RSP reads so correctness does not depend on one unusually large debugger packet.
-
-## Continue to a temporary breakpoint
-
-```bash
-nds-toolkit runtime run-until \
-  --cpu arm9 \
-  --break 0x02012340
-```
-
-The bridge installs a temporary RSP breakpoint, continues execution, captures the stop plus registers, removes the temporary breakpoint in a `finally` path, and returns the resulting snapshot.
-
-Use `--project game.ndsre` to correlate the resulting PC with static analysis.
-
-## Continue to a temporary watchpoint
-
-Write watchpoint:
-
-```bash
-nds-toolkit runtime run-until \
-  --cpu arm9 \
-  --watch-write 0x02100000 \
-  --length 4
-```
-
-Read and access watchpoints are also available:
-
-```bash
-nds-toolkit runtime run-until --cpu arm9 --watch-read 0x02100000 --length 4
-nds-toolkit runtime run-until --cpu arm9 --watch-access 0x02100000 --length 4
-```
-
-Exactly one of `--break`, `--watch-read`, `--watch-write`, or `--watch-access` is required. Length must be positive. The adapter maps the semantic toolkit kind to the corresponding standard GDB RSP `Z`/`z` packet type and removes the temporary condition even when the continue operation fails.
-
-## Bounded single-step
+Single-step one or more instructions:
 
 ```bash
 nds-toolkit runtime step --cpu arm9 --count 4
 ```
 
-`--count` defaults to one and is limited to `1..256`. Output contains the final full snapshot plus the ordered PC observed after every step. Optional project correlation applies to the final snapshot.
+Interactive `runtime step --count` is deliberately limited to `1..256`.
 
-The bound is deliberate: Phase 7H1 is an interactive inspection bridge, not an unbounded tracing engine.
+### Optional static-project correlation
 
-## Connection and protocol behavior
+Commands that support `--project` open the `.ndsre` project read-only:
 
-The runtime transport is an independently implemented standard-library TCP RSP client. It handles:
+```bash
+nds-toolkit runtime snapshot --cpu arm9 --project game.ndsre
+```
 
-- `$payload#checksum` framing and checksum validation;
-- fragmented TCP receives without assuming one packet per `recv()`;
-- normal ACK mode and negotiated `QStartNoAckMode`;
-- `qSupported` capability negotiation;
-- complete register reads with `g`;
-- chunked memory reads with `m`;
-- temporary breakpoint/watchpoint insertion and removal with `Z`/`z`;
-- continue, single-step, interrupt, detach, signal-stop, metadata-stop, and target-exit replies;
-- explicit connection, timeout, protocol, and target-state error boundaries.
+Correlation preserves component identity. If several overlays cover the same numerical runtime address, the toolkit reports all matching candidates in deterministic order rather than guessing which overlay is resident.
 
-melonDS-specific knowledge is confined to the adapter. The generic RSP layer does not contain the melonDS register-bank ordering.
+## Persisted Phase 7H2 traces
 
-## Register mapping
+A `.ndstrace` is an independent SQLite trace file. It is not stored inside `.ndsre` and does not change the static-project schema.
 
-The supplied melonDS source archive was used only to verify the debugger interoperability layout. The adapter decodes the observed 39-word register dump as:
+### Step trace
+
+```bash
+nds-toolkit runtime trace capture \
+  --cpu arm9 \
+  --steps 2000 \
+  --output attack.ndstrace
+```
+
+Trace-only step captures allow `1..100000` steps. This larger bound does not change the interactive 7H1 `step --count` limit.
+
+### Repeated breakpoint trace
+
+```bash
+nds-toolkit runtime trace capture \
+  --cpu arm9 \
+  --break 0x02012340 \
+  --events 100 \
+  --output attack-breaks.ndstrace
+```
+
+Repeated break/watch captures persist two event roles:
+
+- `EVIDENCE`: the requested breakpoint/watchpoint stop;
+- `CONTROL_ADVANCE`: one debugger single-step performed with the temporary condition removed before re-arming it.
+
+`CONTROL_ADVANCE` is inspectable but excluded from default hit frequencies and function ranking.
+
+### Watchpoint trace selectors
+
+The toolkit implements standard RSP read/write/access watchpoint packet mapping and the same bounded repeated-capture orchestration:
+
+```bash
+nds-toolkit runtime trace capture \
+  --cpu arm9 \
+  --watch-write 0x02100000 \
+  --length 4 \
+  --events 20 \
+  --output writes.ndstrace
+```
+
+`--watch-read` and `--watch-access` are also accepted.
+
+#### Stock melonDS watchpoint limitation
+
+The stock melonDS commit used by the repository live gate, `906e9ebb27da8c6a715cd7abab4abfe8a8d29427`, accepts the standard `Z2`/`Z3`/`Z4` watchpoint packets and stores watchpoint definitions, but its CPU execution path does not invoke the GDB stub's `CheckWatchpt` hook. Consequently that stock build does **not** emit real watchpoint stops even though insertion returns `OK`.
+
+This is an external emulator limitation, not synthesized away by the toolkit. Phase 7H therefore verifies:
+
+- watchpoint packet mapping, removal, cleanup, and stop normalization in the runtime/RSP tests;
+- repeated read/write/access watchpoint `EVIDENCE → CONTROL_ADVANCE → EVIDENCE` orchestration with deterministic session fixtures;
+- real stock-melonDS execution for probe, snapshot, memory, stepping, repeated code breakpoints, persisted traces, memory mutation, static correlation, and trace differential/ranking.
+
+If a future melonDS build wires watchpoint checks into execution, the existing online watchpoint commands can use those real stops without changing the `.ndstrace` model.
+
+## Memory BEFORE/AFTER evidence
+
+Configure up to 32 regions with repeatable `--memory ADDRESS:LENGTH` arguments:
+
+```bash
+nds-toolkit runtime trace capture \
+  --cpu arm9 \
+  --steps 500 \
+  --memory 0x02100000:0x1000 \
+  --memory 0x02200000:0x400 \
+  --output attack.ndstrace
+```
+
+For each region the collector reads BEFORE bytes, performs the bounded capture, then reads AFTER bytes. A trace with configured memory regions is finalized only when both snapshots exist.
+
+Inspection reports authoritative contiguous changed byte spans plus aligned little-endian 16-bit and 32-bit convenience values where valid. Phase 7H2 does not infer structures or datatypes from those bytes.
+
+Safety bounds:
+
+- step trace limit: `1..100000`;
+- breakpoint/watchpoint evidence limit: `1..10000`;
+- memory regions: `0..32`;
+- one region: `1..0x01000000` bytes;
+- total configured memory: at most `0x02000000` bytes;
+- timeout: positive.
+
+Exactly one capture selector is accepted: `--steps`, `--break`, `--watch-read`, `--watch-write`, or `--watch-access`. Break/watch modes require `--events`; step mode rejects `--events`.
+
+## Atomic trace creation
+
+Capture writes a sibling temporary SQLite database first. A complete destination is replaced only after event/snapshot validation, SQLite integrity checking, final metadata commit, and clean close.
+
+If capture fails because of timeout, connection loss, protocol error, incomplete memory evidence, or validation failure:
+
+- the temporary trace is removed;
+- an existing destination remains untouched;
+- no incomplete trace is presented as valid.
+
+## Static-project fingerprint
+
+Supplying `--project` during capture stores a deterministic SHA-256 identity derived from public `.ndsre` metadata and component identities:
+
+```bash
+nds-toolkit runtime trace capture \
+  --cpu arm9 \
+  --steps 500 \
+  --project game.ndsre \
+  --output attack.ndstrace
+```
+
+The fingerprint identifies the static target components, not generated analysis state. It excludes timestamps, annotations, symbols, functions, and toolkit version.
+
+When comparing traces:
+
+- two present but different fingerprints are rejected as a target mismatch;
+- equal fingerprints verify target identity;
+- if either fingerprint is absent, raw-address comparison is allowed but reported as unverified.
+
+## Inspect a trace
+
+Inspection is offline; it does not connect to melonDS:
+
+```bash
+nds-toolkit runtime trace inspect attack.ndstrace
+```
+
+With static correlation:
+
+```bash
+nds-toolkit runtime trace inspect attack.ndstrace --project game.ndsre
+```
+
+Inspection reports capture metadata, evidence/control counts, event records, memory changes, static function/symbol/annotation correlation, and ambiguity where overlapping components cannot be resolved.
+
+## Behavioral trace differential and ranking
+
+Compare a baseline behavior with a target behavior:
+
+```bash
+nds-toolkit runtime diff \
+  idle.ndstrace \
+  attack.ndstrace \
+  --project game.ndsre
+```
+
+The report identifies baseline-only, target-only, and shared runtime addresses/functions, memory-change differences, and a deterministic ranking of target-associated functions.
+
+Ranking is a transparent weighted evidence score, **not** a probability or machine-learning confidence. Each ranked candidate exposes the feature values that contributed to its score.
+
+This supports workflows such as:
+
+```text
+idle trace
+   versus
+attack trace
+   ↓
+unique runtime PCs/functions
+   +
+memory-change evidence
+   +
+static xrefs/symbols
+   ↓
+ranked investigation candidates
+```
+
+## RSP and register behavior
+
+The runtime transport is a toolkit-owned standard-library TCP RSP client. It handles framing/checksums, fragmented receives, ACK/no-ACK mode, `qSupported`, register reads, chunked memory reads, `Z`/`z` temporary conditions, continue, single-step, interrupt, detach, stop replies, target exits, and explicit runtime error boundaries.
+
+melonDS-specific register ordering remains confined to `MelonDSSession`. The observed 39-word register dump is decoded as:
 
 ```text
 r0-r12, sp, lr, pc, cpsr,
@@ -165,36 +253,35 @@ sp_und, lr_und,
 spsr_fiq, spsr_irq, spsr_svc, spsr_abt, spsr_und
 ```
 
-Each word is decoded as a little-endian 32-bit value. A truncated or non-word-aligned register payload is rejected rather than silently assigning shifted register names.
+Each word is little-endian 32-bit. Truncated or non-word-aligned register payloads are rejected.
 
-## Error and output contract
+## Error/output contract
 
-Runtime commands use the toolkit's existing top-level exit-code boundary:
+Runtime commands use the toolkit's established top-level exit codes:
 
 - invalid user input: `2`;
 - expected toolkit/runtime failure: `4`;
 - filesystem failure: `5`.
 
-Successful output is deterministic JSON with sorted object keys. `--output` uses atomic replacement so a complete previous result is not partially overwritten by a failed write.
-
-## Phase 7H1 scope
-
-Phase 7H1 deliberately does **not** add:
-
-- a melonDS runtime or build dependency;
-- vendored or linked melonDS implementation code;
-- a new `.ndsre` table or schema version;
-- persistent runtime trace storage;
-- game-specific addresses, symbols, or heuristics;
-- automatic overlay residency detection;
-- an unbounded trace collector;
-- a stateful debugger REPL/TUI;
-- decompiled or pseudo-C output.
-
-Those boundaries keep the runtime bridge reusable across game projects without moving consumer-specific evidence into the generic toolkit.
+Successful report JSON is deterministic and canonical hexadecimal addresses use lowercase forms such as `0x02012340`.
 
 ## Verification status
 
-The unit/integration suite covers RSP framing, fragmentation, checksums, capability negotiation, register decoding, memory chunking, stop parsing, temporary break/watch cleanup, ARM9/ARM7 endpoint selection, static-project correlation, overlapping overlay candidates, deterministic CLI JSON, parser bounds, and top-level error mapping.
+The consolidated CI workflow builds the pinned stock melonDS core headlessly with GDB enabled and JIT disabled, then executes the real toolkit CLI against a deterministic ARM9 writer target. The live gate covers:
 
-A live stock-melonDS smoke test is a separate manual gate because the repository CI environment does not run an interactive emulator instance. Before treating a specific melonDS release/configuration as manually validated, run `probe`, `snapshot`, a small `read-memory`, a temporary breakpoint, a temporary watchpoint, and bounded stepping against that live instance and record the tested melonDS build/configuration.
+- probe;
+- snapshot/register state;
+- memory reads;
+- temporary code breakpoint;
+- single-step;
+- bounded persisted step traces;
+- actual BEFORE/AFTER memory mutation;
+- repeated breakpoint capture with `CONTROL_ADVANCE`;
+- `.ndstrace` inspection;
+- static-project fingerprints;
+- trace-vs-trace differential classification;
+- deterministic function ranking.
+
+Python verification additionally covers `.ndstrace` schema/atomicity, read/write/access watchpoint orchestration, RSP watchpoint packets and cleanup, correlation/overlay ambiguity, memory differentials, CLI parsing/JSON, mismatch handling, and end-to-end offline workflows.
+
+No melonDS implementation source is copied, linked, translated, or vendored into the MIT toolkit; melonDS remains an external GPL process/build used for interoperability verification.

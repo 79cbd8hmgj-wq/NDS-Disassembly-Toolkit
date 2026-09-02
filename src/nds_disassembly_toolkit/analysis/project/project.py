@@ -477,6 +477,52 @@ class AnalysisProject:
             raise AnalysisProjectError("cannot query analysis function") from exc
         return None if row is None else function_from_row(row)
 
+    def functions_containing(
+        self,
+        component: str,
+        address: int,
+        instruction_set: InstructionSet,
+    ) -> tuple[FunctionCandidate, ...]:
+        connection = self._require_connection()
+        try:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT
+                    components.name AS component,
+                    functions.address,
+                    functions.offset,
+                    functions.instruction_set,
+                    functions.confidence,
+                    functions.evidence_json
+                FROM functions
+                JOIN components ON components.id = functions.component_id
+                LEFT JOIN instructions
+                  ON instructions.component_id = functions.component_id
+                 AND instructions.function_address = functions.address
+                 AND instructions.function_instruction_set = functions.instruction_set
+                WHERE components.name = ?
+                  AND functions.instruction_set = ?
+                  AND (
+                    functions.address = ?
+                    OR (
+                        instructions.address = ?
+                        AND instructions.instruction_set = ?
+                    )
+                  )
+                ORDER BY functions.address, functions.instruction_set
+                """,
+                (
+                    component,
+                    instruction_set.value,
+                    address,
+                    address,
+                    instruction_set.value,
+                ),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query containing analysis functions") from exc
+        return tuple(function_from_row(row) for row in rows)
+
     def cfg(
         self,
         component: str,
@@ -663,6 +709,71 @@ class AnalysisProject:
             rows = connection.execute(query, parameters).fetchall()
         except sqlite3.Error as exc:
             raise AnalysisProjectError("cannot query analysis xrefs") from exc
+        return tuple(xref_from_row(row) for row in rows)
+
+    def xrefs_to_range(
+        self,
+        start_address: int,
+        end_address: int,
+        *,
+        source_component: str | None = None,
+    ) -> tuple[CrossReference, ...]:
+        if end_address <= start_address:
+            raise ValueError("end address must be greater than start address")
+        connection = self._require_connection()
+        query = """
+            SELECT
+                components.name AS component,
+                xrefs.kind,
+                xrefs.source_address,
+                xrefs.source_function_address,
+                xrefs.source_instruction_set,
+                xrefs.target_address,
+                xrefs.target_instruction_set
+            FROM xrefs
+            JOIN components ON components.id = xrefs.source_component_id
+            WHERE xrefs.target_address >= ? AND xrefs.target_address < ?
+        """
+        parameters: tuple[object, ...] = (start_address, end_address)
+        if source_component is not None:
+            query += " AND components.name = ?"
+            parameters = (start_address, end_address, source_component)
+        query += " ORDER BY xrefs.target_address, components.name, xrefs.source_address, xrefs.kind"
+        try:
+            rows = connection.execute(query, parameters).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis xref range") from exc
+        return tuple(xref_from_row(row) for row in rows)
+
+    def xrefs_from_function(
+        self,
+        component: str,
+        function_address: int,
+        instruction_set: InstructionSet,
+    ) -> tuple[CrossReference, ...]:
+        connection = self._require_connection()
+        try:
+            rows = connection.execute(
+                """
+                SELECT
+                    components.name AS component,
+                    xrefs.kind,
+                    xrefs.source_address,
+                    xrefs.source_function_address,
+                    xrefs.source_instruction_set,
+                    xrefs.target_address,
+                    xrefs.target_instruction_set
+                FROM xrefs
+                JOIN components ON components.id = xrefs.source_component_id
+                WHERE components.name = ?
+                  AND xrefs.source_function_address = ?
+                  AND xrefs.source_instruction_set = ?
+                ORDER BY xrefs.source_address, xrefs.target_address, xrefs.kind
+                """,
+                (component, function_address, instruction_set.value),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise AnalysisProjectError("cannot query analysis function xrefs") from exc
         return tuple(xref_from_row(row) for row in rows)
 
     def set_annotation(self, annotation: LocationAnnotation) -> None:

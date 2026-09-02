@@ -1,6 +1,6 @@
 # NDS Disassembly Toolkit
 
-Reusable Nintendo DS reverse-engineering infrastructure for inspecting, extracting, rebuilding, disassembling, analyzing, and patching NDS ROMs without tying the core implementation to one game.
+Reusable Nintendo DS reverse-engineering infrastructure for inspecting, extracting, rebuilding, disassembling, analyzing, tracing, and patching NDS ROMs without tying the core implementation to one game.
 
 ## Current capabilities
 
@@ -16,6 +16,12 @@ The standalone toolkit now provides:
 - generic string, numeric, pointer-reference, and report helpers for static analysis;
 - Nitro asset inventory/classification;
 - ARMv5TE C/assembly compilation and guarded ARM/Thumb source-patch application;
+- ARM/Thumb function discovery, basic blocks/CFGs, cross-references, direct call graphs, component-aware symbol recovery, and typed instruction semantics;
+- intraprocedural constant/address/register flow, stack-frame/slot recovery, argument evidence, return evidence, and function summaries;
+- versioned persistent `.ndsre` analysis projects with component fingerprints, stale-analysis detection, generated analysis replacement, annotations, and deterministic query APIs;
+- `nds-toolkit project` commands for persistent function/string/symbol/xref/CFG/data-flow/annotation inspection;
+- melonDS GDB-RSP runtime inspection for ARM9/ARM7, including snapshots, memory reads, temporary code conditions, and bounded stepping;
+- portable `.ndstrace` capture, BEFORE/AFTER memory differentials, read-only static-project correlation, behavioral trace comparison, and transparent dynamic function ranking;
 - reusable CLI parser/runner helpers so game projects can consume toolkit commands while enforcing stricter game-specific policy.
 
 The primary CLI entry point is `nds-toolkit` (or `python -m nds_disassembly_toolkit`).
@@ -41,6 +47,8 @@ nds-toolkit rebuild GAME.nds work/game output.nds
 nds-toolkit patch work/game patch.json
 nds-toolkit disasm --help
 nds-toolkit analyze --help
+nds-toolkit project --help
+nds-toolkit runtime --help
 nds-toolkit assets inventory GAME.nds --output assets.json
 nds-toolkit source-patch build work/game source-patch.json
 ```
@@ -56,7 +64,8 @@ The toolkit itself contains no canonical commercial-game profile.
 ## Workflow documentation
 
 - [Workspace extraction and rebuild](docs/workspace-and-rebuild.md)
-- [Disassembly and static-analysis helpers](docs/disassembly-and-analysis.md)
+- [Disassembly, static analysis, and persistent projects](docs/disassembly-and-analysis.md)
+- [Runtime debugging, `.ndstrace`, and behavioral differentials](docs/runtime-debugging.md)
 - [Nitro asset inventory](docs/assets.md)
 - [Guarded binary patching](docs/binary-patching.md)
 - [Guarded ARM/Thumb source patching](docs/source-patching.md)
@@ -82,8 +91,8 @@ Thin compatibility adapters are acceptable when they preserve an existing consum
 
 The toolkit is distributed under the [MIT License](LICENSE).
 
-External Nintendo DS projects used during research are treated as reference material unless a separately reviewed incorporation decision says otherwise. The [provenance audit](docs/provenance-and-licenses.md) records the GPL/unlicensed upstream boundaries and the project's clean-room policy. Commercial ROMs, extracted copyrighted assets, and rebuilt ROMs are not part of this repository.
+External Nintendo DS projects used during research are treated as reference material or external interoperability targets unless a separately reviewed incorporation decision says otherwise. The [provenance audit](docs/provenance-and-licenses.md) records the GPL/unlicensed upstream boundaries and the project's clean-room policy. Commercial ROMs, extracted copyrighted assets, and rebuilt ROMs are not part of this repository.
 
 ## Legal boundary
 
-This repository contains source code, documentation, schemas, and synthetic tests. It does not contain commercial ROM images, extracted copyrighted game assets, or rebuilt ROM images. Users are responsible for supplying any legally obtained ROMs used with the toolkit.
+This repository contains source code, documentation, schemas, synthetic tests, and headless interoperability harness code. It does not contain commercial ROM images, extracted copyrighted game assets, or rebuilt ROM images. Users are responsible for supplying any legally obtained ROMs used with the toolkit.

@@ -82,6 +82,7 @@ jobs:
           }
           trap stop_target EXIT
 
+          # Phase 7H1 interoperability remains a release gate.
           start_target
           timeout 10s nds-toolkit runtime probe --cpu arm9 > /tmp/probe.json
           stop_target
@@ -102,32 +103,169 @@ jobs:
           timeout 10s nds-toolkit runtime step --cpu arm9 --count 1 > /tmp/step.json
           stop_target
 
+          # Phase 7H2 bounded runtime traces, each from a clean target. Stock
+          # melonDS break-on-startup consumes an initial debugger step without
+          # executing ARM9 code, so eight bounded steps guarantee that the
+          # deterministic writer reaches its STR instruction.
+          start_target
+          timeout 15s nds-toolkit runtime trace capture \
+            --cpu arm9 \
+            --steps 8 \
+            --memory 0x02000100:4 \
+            --output /tmp/step.ndstrace > /tmp/step-trace-summary.json
+          stop_target
+
+          start_target
+          timeout 15s nds-toolkit runtime trace capture \
+            --cpu arm9 \
+            --break 0x02000008 \
+            --events 2 \
+            --output /tmp/break.ndstrace > /tmp/break-trace-summary.json
+          stop_target
+
+          # The pinned stock melonDS stub accepts Z2/Z3/Z4 packets but does not
+          # call CheckWatchpt from CPU execution. Real watchpoint stops therefore
+          # cannot be a stock-melonDS live gate. Toolkit watchpoint orchestration,
+          # packet mapping, cleanup, and repeated CONTROL_ADVANCE behavior remain
+          # covered by the Python verification suite.
+
+          nds-toolkit runtime trace inspect /tmp/step.ndstrace > /tmp/inspect.json
+
+          # Build a synthetic static project through public APIs for live differential correlation.
+          python - <<'PY'
+          from pathlib import Path
+          from nds_disassembly_toolkit.analysis import Component, FunctionCandidate, InstructionSet
+          from nds_disassembly_toolkit.analysis.project import AnalysisProject, ComponentAnalysisBundle
+
+          base=0x02000000
+          component=Component('arm9', Path('/tmp/live-arm9.bin'), base, bytes(0x200))
+          functions=(
+              FunctionCandidate(
+                  component='arm9', address=base+0x08, offset=0x08,
+                  instruction_set=InstructionSet.ARM,
+                  confidence='high', evidence=('live-smoke',),
+              ),
+              FunctionCandidate(
+                  component='arm9', address=base+0x0c, offset=0x0c,
+                  instruction_set=InstructionSet.ARM,
+                  confidence='high', evidence=('live-smoke',),
+              ),
+          )
+          with AnalysisProject.create(Path('/tmp/live.ndsre')) as project:
+              project.store_component_analysis(
+                  ComponentAnalysisBundle(component=component, functions=functions)
+              )
+          PY
+
+          start_target
+          timeout 15s nds-toolkit runtime trace capture \
+            --cpu arm9 \
+            --break 0x0200000c \
+            --events 2 \
+            --project /tmp/live.ndsre \
+            --output /tmp/baseline.ndstrace > /tmp/baseline-summary.json
+          stop_target
+
+          start_target
+          timeout 15s nds-toolkit runtime trace capture \
+            --cpu arm9 \
+            --break 0x02000008 \
+            --events 2 \
+            --project /tmp/live.ndsre \
+            --output /tmp/target.ndstrace > /tmp/target-summary.json
+          stop_target
+
+          nds-toolkit runtime diff \
+            /tmp/baseline.ndstrace \
+            /tmp/target.ndstrace \
+            --project /tmp/live.ndsre > /tmp/diff.json
+
           python - <<'PY'
           import json
           from pathlib import Path
-          probe=json.loads(Path('/tmp/probe.json').read_text())
-          snapshot=json.loads(Path('/tmp/snapshot.json').read_text())
-          memory=json.loads(Path('/tmp/memory.json').read_text())
-          run_until=json.loads(Path('/tmp/run-until.json').read_text())
-          step=json.loads(Path('/tmp/step.json').read_text())
-          print(Path('/tmp/probe.json').read_text())
-          print(Path('/tmp/run-until.json').read_text())
-          print(Path('/tmp/step.json').read_text())
+          from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
+          from nds_disassembly_toolkit.analysis.runtime.trace_model import TraceEventRole
+
+          load=lambda name: json.loads(Path(name).read_text())
+          probe=load('/tmp/probe.json')
+          snapshot=load('/tmp/snapshot.json')
+          memory=load('/tmp/memory.json')
+          run_until=load('/tmp/run-until.json')
+          step=load('/tmp/step.json')
+          step_summary=load('/tmp/step-trace-summary.json')
+          break_summary=load('/tmp/break-trace-summary.json')
+          inspect=load('/tmp/inspect.json')
+          baseline_summary=load('/tmp/baseline-summary.json')
+          target_summary=load('/tmp/target-summary.json')
+          diff=load('/tmp/diff.json')
+
+          # 7H1 behavior against the deterministic writer target.
           assert probe['cpu']=='arm9'
           assert snapshot['pc']=='0x02000000'
           assert snapshot['instruction_set']=='arm'
           assert memory['length']=='0x00000040'
-          assert memory['data'].startswith('0100a0e3010080e2010080e2feffffea')
+          assert memory['data'].startswith(
+              '0100a0e308109fe5010080e2000081e5fcffffea00010002'
+          )
           assert run_until['condition']['address']=='0x02000008'
           assert run_until['snapshot']['pc']=='0x02000008'
           assert run_until['snapshot']['stop']['kind']=='breakpoint'
           regs={entry['name']:entry['value'] for entry in run_until['snapshot']['registers']}
-          assert regs['r0']=='0x00000002'
+          assert regs['r0']=='0x00000001'
+          assert regs['r1']=='0x02000100'
           assert step['count']==1
           assert step['final_snapshot']['pc']=='0x02000000'
           assert step['final_snapshot']['stop']['kind']=='step'
           assert step['final_snapshot']['stop']['signal']==5
           regs={entry['name']:entry['value'] for entry in step['final_snapshot']['registers']}
           assert regs['r0']=='0x00000000'
-          print('Phase 7H live smoke passed')
+
+          # 7H2 bounded step capture and real memory mutation.
+          assert step_summary['capture_mode']=='step'
+          assert step_summary['evidence_events']==8
+          assert step_summary['control_events']==0
+          assert step_summary['memory_regions']==1
+          assert step_summary['terminated_by']=='limit'
+          assert inspect['integrity_ok'] is True
+          assert inspect['capture_status']=='complete'
+          assert inspect['evidence_events']==8
+          assert inspect['control_events']==0
+          assert inspect['memory_changes']
+          assert inspect['memory_changes'][0]['address']=='0x02000100'
+          assert inspect['memory_changes'][0]['before'] != inspect['memory_changes'][0]['after']
+
+          # Repeated breakpoint capture proves one explicit advance between evidence stops.
+          assert break_summary['capture_mode']=='breakpoint'
+          assert break_summary['evidence_events']==2
+          assert break_summary['control_events']==1
+          store=TraceStore.open(Path('/tmp/break.ndstrace'))
+          try:
+              events=store.events()
+          finally:
+              store.close()
+          assert [event.role for event in events] == [
+              TraceEventRole.EVIDENCE,
+              TraceEventRole.CONTROL_ADVANCE,
+              TraceEventRole.EVIDENCE,
+          ]
+          assert events[0].pc==0x02000008
+          assert events[2].pc==0x02000008
+
+          # Both project-bound traces carry the same exact static identity.
+          assert baseline_summary['project_fingerprint']
+          assert baseline_summary['project_fingerprint']==target_summary['project_fingerprint']
+          assert diff['target_identity_verified'] is True
+          address={(item['pc'], item['classification']):item for item in diff['address_deltas']}
+          assert ('0x0200000c','baseline_only') in address
+          assert ('0x02000008','target_only') in address
+          functions={(item['address'], item['classification']):item for item in diff['function_deltas']}
+          assert ('0x0200000c','baseline_only') in functions
+          assert ('0x02000008','target_only') in functions
+          assert diff['rankings'][0]['address']=='0x02000008'
+          ranked={item['name']:item for item in diff['rankings'][0]['evidence']}
+          assert ranked['target_exclusive']['value']==1.0
+          assert ranked['condition_hit']['value']==1.0
+          assert 'probability' not in json.dumps(diff, sort_keys=True).lower()
+
+          print('Phase 7H1/7H2 live stock-melonDS smoke passed')
           PY
