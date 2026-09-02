@@ -98,7 +98,10 @@ def _instruction(
     )
 
 
-def _cfg(function: FunctionCandidate, *instructions: DecodedInstruction) -> FunctionControlFlowGraph:
+def _cfg(
+    function: FunctionCandidate,
+    *instructions: DecodedInstruction,
+) -> FunctionControlFlowGraph:
     block = BasicBlock(
         function.component,
         function.address,
@@ -206,12 +209,23 @@ def test_stack_local_load_store_uses_recovered_local_name(tmp_path: Path) -> Non
     )
     local = DecompilerVariable("local_04", DecompilerVariableKind.LOCAL, stack_offset=-4)
     names = NameContext("entry", (), (local,), (), (), ((-4, local),))
-    summary = FunctionSummary((), (), StackFrame(4, None, True), (StackSlot(-4, StackSlotKind.LOCAL),))
+    summary = FunctionSummary(
+        (),
+        (),
+        StackFrame(4, None, True),
+        (StackSlot(-4, StackSlotKind.LOCAL),),
+    )
     flow = FunctionDataFlow(
         function,
         (),
         (
-            InstructionFlowState(load, RegisterState(), RegisterState(), StackState(0), StackState(0)),
+            InstructionFlowState(
+                load,
+                RegisterState(),
+                RegisterState(),
+                StackState(0),
+                StackState(0),
+            ),
             InstructionFlowState(
                 store,
                 RegisterState(((Register.R0, _value(7)),)),
@@ -265,7 +279,12 @@ def test_direct_call_uses_unique_target_symbol_and_proven_register_args(tmp_path
     assert isinstance(statement, CallStatement)
     assert statement.call.name == "callee_func"
     assert statement.call.target_component == "arm9"
-    assert [argument.value for argument in statement.call.arguments if isinstance(argument, ConstantExpression)] == [7, 8]
+    argument_values = [
+        argument.value
+        for argument in statement.call.arguments
+        if isinstance(argument, ConstantExpression)
+    ]
+    assert argument_values == [7, 8]
 
 
 def test_ambiguous_overlay_call_keeps_structural_fallback_name(tmp_path: Path) -> None:
@@ -278,7 +297,11 @@ def test_ambiguous_overlay_call_keeps_structural_fallback_name(tmp_path: Path) -
         direct_target=OVERLAY_BASE,
         target_instruction_set=InstructionSet.THUMB,
     )
-    flow = FunctionDataFlow(function, (), (InstructionFlowState(call, RegisterState(), RegisterState()),))
+    flow = FunctionDataFlow(
+        function,
+        (),
+        (InstructionFlowState(call, RegisterState(), RegisterState()),),
+    )
     with AnalysisProject.create(tmp_path / "overlay.ndsre") as project:
         for component_name in ("overlay_3", "overlay_7"):
             target = _function(
@@ -288,7 +311,12 @@ def test_ambiguous_overlay_call_keeps_structural_fallback_name(tmp_path: Path) -
             )
             project.store_component_analysis(
                 ComponentAnalysisBundle(
-                    Component(component_name, Path(f"{component_name}.bin"), OVERLAY_BASE, bytes(0x20)),
+                    Component(
+                        component_name,
+                        Path(f"{component_name}.bin"),
+                        OVERLAY_BASE,
+                        bytes(0x20),
+                    ),
                     functions=(target,),
                 )
             )
