@@ -12,6 +12,8 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     BranchStatement,
     CompareExpression,
     ConstantExpression,
+    DecompilerVariable,
+    DecompilerVariableKind,
     UnknownExpression,
     VariableExpression,
 )
@@ -42,10 +44,6 @@ from nds_disassembly_toolkit.analysis.model import (
     StackFrame,
 )
 from nds_disassembly_toolkit.analysis.project import AnalysisProject
-from nds_disassembly_toolkit.analysis.decompiler.model import (
-    DecompilerVariable,
-    DecompilerVariableKind,
-)
 
 BASE = 0x02000000
 
