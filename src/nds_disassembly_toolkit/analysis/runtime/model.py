@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping
 
 from nds_disassembly_toolkit.analysis.model import (
     FunctionCandidate,
@@ -11,7 +11,8 @@ from nds_disassembly_toolkit.analysis.model import (
 )
 from nds_disassembly_toolkit.analysis.project.model import LocationAnnotation
 
-_CANONICAL_REGISTERS = tuple(f"r{index}" for index in range(13)) + (
+_CANONICAL_REGISTERS = (
+    *(f"r{index}" for index in range(13)),
     "sp",
     "lr",
     "pc",
