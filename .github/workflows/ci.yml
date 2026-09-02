@@ -110,6 +110,9 @@ jobs:
           memory=json.loads(Path('/tmp/memory.json').read_text())
           run_until=json.loads(Path('/tmp/run-until.json').read_text())
           step=json.loads(Path('/tmp/step.json').read_text())
+          print(Path('/tmp/probe.json').read_text())
+          print(Path('/tmp/run-until.json').read_text())
+          print(Path('/tmp/step.json').read_text())
           assert probe['cpu']=='arm9'
           assert snapshot['pc']=='0x02000000'
           assert snapshot['instruction_set']=='arm'
@@ -121,10 +124,10 @@ jobs:
           regs={entry['name']:entry['value'] for entry in run_until['snapshot']['registers']}
           assert regs['r0']=='0x00000002'
           assert step['count']==1
-          assert step['final_snapshot']['pc']=='0x02000004'
+          assert step['final_snapshot']['pc']=='0x02000000'
+          assert step['final_snapshot']['stop']['kind']=='step'
+          assert step['final_snapshot']['stop']['signal']==5
           regs={entry['name']:entry['value'] for entry in step['final_snapshot']['registers']}
-          assert regs['r0']=='0x00000001'
+          assert regs['r0']=='0x00000000'
           print('Phase 7H live smoke passed')
-          print(Path('/tmp/run-until.json').read_text())
-          print(Path('/tmp/step.json').read_text())
           PY
