@@ -106,7 +106,15 @@ def test_compare_traces_uses_evidence_only_for_counts_and_frequencies(tmp_path: 
         )
         for item in report.address_deltas
     ] == [
-        (A, 2, 1, pytest.approx(2 / 3), pytest.approx(1 / 4), pytest.approx(1 / 4 - 2 / 3), "shared"),
+        (
+            A,
+            2,
+            1,
+            pytest.approx(2 / 3),
+            pytest.approx(1 / 4),
+            pytest.approx(1 / 4 - 2 / 3),
+            "shared",
+        ),
         (B, 1, 0, pytest.approx(1 / 3), 0.0, pytest.approx(-1 / 3), "baseline_only"),
         (C, 0, 3, 0.0, pytest.approx(3 / 4), pytest.approx(3 / 4), "target_only"),
     ]
