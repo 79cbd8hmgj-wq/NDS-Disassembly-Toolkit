@@ -56,9 +56,9 @@ The IR is deliberately separate from the existing instruction/data-flow models. 
 
 ### 7I1 — Decompiler IR and lifting
 
-7I1 introduces immutable public/internal models sufficient to represent conservative source-like statements and expressions.
+7I1 introduces immutable toolkit-owned models sufficient to represent conservative source-like statements and expressions.
 
-Initial expression categories should cover:
+Initial expression categories cover:
 
 - integer constants;
 - proven component-owned addresses;
@@ -70,7 +70,7 @@ Initial expression categories should cover:
 - direct call expressions;
 - unknown expressions carrying source-instruction provenance.
 
-Initial statement categories should cover:
+Initial statement categories cover:
 
 - assignments;
 - memory writes;
@@ -81,9 +81,9 @@ Initial statement categories should cover:
 - labels;
 - explicit unknown/fallback statements.
 
-Every lifted IR node that originates from machine code must retain deterministic source provenance, at minimum the instruction address and instruction set where applicable.
+Every lifted IR node that originates from machine code retains deterministic source provenance, at minimum the instruction address and instruction set where applicable.
 
-The lifter must use existing `FunctionDataFlow`/`FunctionSummary` evidence rather than attempting independent register propagation, stack recovery, or calling-convention inference.
+The lifter uses existing `FunctionDataFlow`/`FunctionSummary` evidence rather than attempting independent register propagation, stack recovery, or calling-convention inference.
 
 #### Initial lifting coverage
 
@@ -99,7 +99,7 @@ The first implementation targets common ARM/Thumb operations that can be represe
 - direct returns;
 - conditional/unconditional control transfers.
 
-Unsupported, indirect, or semantically ambiguous instructions remain explicit unknown/fallback IR. They must not be silently dropped.
+Unsupported, indirect, or semantically ambiguous instructions remain explicit unknown/fallback IR. They are never silently dropped.
 
 ### 7I2 — Variable and control-flow recovery
 
@@ -116,9 +116,9 @@ Preferred naming order:
 5. deterministic temporary (`tmp_0`, `tmp_1`, ...);
 6. raw register fallback (`r4`, `r7`, ...).
 
-Names must be sanitized into deterministic C-like identifiers. Collisions are resolved deterministically.
+Names are sanitized into deterministic C-like identifiers. Collisions are resolved deterministically.
 
-Phase 7I does not infer C types beyond a minimal presentation-level scalar/pointer distinction that is already proven by existing address evidence. Unknown values should use a neutral fixed-width scalar representation rather than invented structures or classes.
+Phase 7I does not infer C types beyond a minimal presentation-level scalar/pointer distinction already proven by existing address evidence. Unknown values use a neutral fixed-width scalar representation rather than invented structures or classes.
 
 #### Control-flow structuring
 
@@ -147,21 +147,32 @@ nds-toolkit project decompile GAME.ndsre COMPONENT ADDRESS --mode thumb
 
 The command opens the `.ndsre` project read-only and performs exact lookup by `(component, address, instruction_set)`.
 
-Human-readable pseudo-C is the default output. A deterministic JSON form should also be available for tooling/tests, either through an explicit `--json` flag or the CLI's established structured-output convention.
+Output format is explicit:
 
-The renderer should use stable formatting so identical input projects produce byte-for-byte identical output.
+```bash
+nds-toolkit project decompile GAME.ndsre COMPONENT ADDRESS --mode arm --format text
+nds-toolkit project decompile GAME.ndsre COMPONENT ADDRESS --mode arm --format json
+```
+
+`--format` accepts exactly `text` or `json` and defaults to `text`.
+
+`--format text` emits human-readable pseudo-C. `--format json` emits a deterministic structured representation of the decompilation result using the existing project CLI conventions: sorted JSON keys, stable ordering, lowercase canonical hexadecimal strings, and a trailing newline.
+
+The command also supports the existing `--output PATH` convention. With `--output`, the selected format is written atomically to the requested file; without it, output is written to stdout.
+
+The renderer uses stable formatting so identical input projects produce byte-for-byte identical output.
 
 ## Output policy
 
 Pseudo-C is an evidence-backed representation, not claimed recompilable source.
 
-The output must make uncertainty visible. Examples include:
+The output makes uncertainty visible. Examples include:
 
 ```c
 /* unresolved instruction at 0x02012374: ... */
 ```
 
-or a deterministic unknown intrinsic-like expression if needed by the IR.
+or a deterministic unknown intrinsic-like expression if required by the IR.
 
 The renderer must not fabricate:
 
@@ -178,7 +189,7 @@ When a function cannot be safely rendered beyond labels/gotos and low-level expr
 
 Component identity remains mandatory. Runtime address alone never identifies a symbol or function because NDS overlays may overlap.
 
-All symbol/annotation resolution must stay component-aware. Ambiguous overlay ownership must remain ambiguous rather than being guessed.
+All symbol/annotation resolution remains component-aware. Ambiguous overlay ownership remains ambiguous rather than being guessed.
 
 User-authored project annotations may improve names in generated pseudo-C, but Phase 7I does not persist generated pseudo-C or decompiler-specific inferred names back into `.ndsre`.
 
@@ -192,7 +203,7 @@ A later phase may add optional runtime annotations to pseudo-C if separately des
 
 ## Error handling
 
-Decompiler errors should follow existing toolkit error/CLI conventions.
+Decompiler errors follow existing toolkit error/CLI conventions.
 
 Expected explicit failures include:
 
@@ -206,13 +217,13 @@ Unsupported individual instructions are not fatal by default: they produce fallb
 
 ## Determinism
 
-All output must be deterministic for identical persisted analysis:
+All output is deterministic for identical persisted analysis:
 
 - IR node ordering follows CFG/instruction order under explicit stable rules;
 - symbol/name tie-breaking is deterministic;
 - temporary numbering is deterministic;
 - labels are deterministic from addresses;
-- JSON key/order conventions match existing CLI behavior;
+- JSON key/order conventions match the existing project CLI;
 - renderer whitespace is stable.
 
 No timestamps, randomized identifiers, hash iteration order, or database row insertion order may affect semantic/output ordering.
@@ -232,25 +243,18 @@ The implementation remains independently authored against toolkit-owned models a
 
 ## Public API direction
 
-The exact names may be refined in the implementation plan, but the intended boundary is approximately:
-
-```python
-ir = lift_function(project, component, address, instruction_set)
-structured = structure_function(ir)
-text = render_pseudo_c(structured)
-```
-
-or a convenience facade:
+The intended public boundary is a small read-only facade plus toolkit-owned immutable result models:
 
 ```python
 result = decompile_function(project, component, address, instruction_set)
+text = render_pseudo_c(result)
 ```
 
-Public return values must be toolkit-owned immutable models/strings, not SQLite rows or Capstone objects.
+Lower-level lifting/structuring helpers may remain module-level/internal unless tests or consumers need a stable public boundary. Public return values are never SQLite rows or Capstone objects.
 
 ## Testing strategy
 
-Phase 7I follows RED→GREEN TDD and must add synthetic fixtures rather than commercial ROM content.
+Phase 7I follows RED→GREEN TDD and adds synthetic fixtures rather than commercial ROM content.
 
 Required coverage includes:
 
@@ -282,7 +286,7 @@ Ruff
 strict mypy
 ```
 
-The existing stock-melonDS live CI must remain green, although Phase 7I itself is static/read-only and adds no new live-emulator requirement.
+The existing stock-melonDS live CI remains green, although Phase 7I itself is static/read-only and adds no new live-emulator requirement.
 
 ## Explicitly deferred
 
@@ -294,7 +298,7 @@ Phase 7I does not include:
 - aggressive pointer/type inference;
 - switch/jump-table recovery beyond existing proven CFG information;
 - interprocedural symbolic propagation;
-- whole-program SSA framework unless required by a separately approved design;
+- whole-program SSA framework;
 - targeted angr symbolic execution;
 - function signature/similarity databases;
 - semantic ROM differential analysis;
@@ -312,7 +316,7 @@ Phase 7I is complete when:
 2. recovered arguments, stack locals, direct calls, returns, and common expressions render deterministically;
 3. safe CFG patterns render as `if`/`if-else`/simple loops while uncertain graphs retain labels/gotos;
 4. unsupported instructions remain visible with deterministic provenance;
-5. `nds-toolkit project decompile` reads `.ndsre` projects without mutation and produces deterministic output;
+5. `nds-toolkit project decompile` reads `.ndsre` projects without mutation and produces deterministic `text` and `json` output;
 6. no `.ndsre` schema change or new runtime dependency is introduced;
 7. all new and existing tests pass, Ruff passes, and strict mypy passes;
 8. the existing stock-melonDS CI remains green;
