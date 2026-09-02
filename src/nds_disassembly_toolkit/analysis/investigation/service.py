@@ -125,8 +125,14 @@ def _collect_text_evidence(
     if request.text is None or not request.text.strip():
         return
     needle = request.text.casefold()
+    string_address_counts: dict[int, int] = defaultdict(int)
+    for persisted_string in project.strings():
+        string_address_counts[persisted_string.address] += 1
+
     for record in project.strings(component=request.component):
         if needle not in record.text.casefold():
+            continue
+        if string_address_counts[record.address] != 1:
             continue
         for reference in project.xrefs_to(
             record.address,
