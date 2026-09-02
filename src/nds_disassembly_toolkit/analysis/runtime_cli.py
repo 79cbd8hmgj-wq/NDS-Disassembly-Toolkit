@@ -20,6 +20,8 @@ from nds_disassembly_toolkit.analysis.runtime import (
 from nds_disassembly_toolkit.analysis.runtime.rsp import RSPCapabilities
 
 _MAX_STEP_COUNT = 256
+_MAX_TRACE_STEPS = 100000
+_MAX_TRACE_EVENTS = 10000
 
 
 def _auto_int(value: str) -> int:
@@ -39,13 +41,40 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _step_count(value: str) -> int:
+def _bounded_positive_int(value: str, *, maximum: int, name: str) -> int:
     parsed = _positive_int(value)
-    if parsed > _MAX_STEP_COUNT:
+    if parsed > maximum:
         raise argparse.ArgumentTypeError(
-            f"step count must be between 1 and {_MAX_STEP_COUNT}: {value}"
+            f"{name} must be between 1 and {maximum}: {value}"
         )
     return parsed
+
+
+def _step_count(value: str) -> int:
+    return _bounded_positive_int(value, maximum=_MAX_STEP_COUNT, name="step count")
+
+
+def _trace_steps(value: str) -> int:
+    return _bounded_positive_int(value, maximum=_MAX_TRACE_STEPS, name="trace steps")
+
+
+def _trace_events(value: str) -> int:
+    return _bounded_positive_int(value, maximum=_MAX_TRACE_EVENTS, name="trace events")
+
+
+def _memory_region_spec(value: str) -> str:
+    address_text, separator, length_text = value.partition(":")
+    if not separator or not address_text or not length_text:
+        raise argparse.ArgumentTypeError(
+            "memory region must use ADDRESS:LENGTH syntax"
+        )
+    address = _auto_int(address_text)
+    length = _positive_int(length_text)
+    if address > 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("memory region address exceeds 32-bit range")
+    if address + length > 0x100000000:
+        raise argparse.ArgumentTypeError("memory region exceeds 32-bit address space")
+    return value
 
 
 def _port(value: str) -> int:
@@ -85,6 +114,34 @@ def _add_project_argument(parser: argparse.ArgumentParser) -> None:
 
 def _add_output_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", type=Path)
+
+
+def _add_trace_capture_parser(commands: Any) -> None:
+    capture = commands.add_parser("capture", help="capture a bounded runtime trace")
+    _add_connection_arguments(capture)
+    selectors = capture.add_mutually_exclusive_group(required=True)
+    selectors.add_argument("--steps", type=_trace_steps)
+    selectors.add_argument("--break", dest="break_address", type=_auto_int)
+    selectors.add_argument("--watch-read", type=_auto_int)
+    selectors.add_argument("--watch-write", type=_auto_int)
+    selectors.add_argument("--watch-access", type=_auto_int)
+    capture.add_argument("--events", type=_trace_events)
+    capture.add_argument("--length", type=_positive_int, default=4)
+    capture.add_argument("--memory", action="append", type=_memory_region_spec, default=[])
+    _add_project_argument(capture)
+    capture.add_argument("--label")
+    capture.add_argument("--output", type=Path, required=True)
+
+
+def _add_trace_parsers(commands: Any) -> None:
+    trace = commands.add_parser("trace", help="capture or inspect portable runtime traces")
+    trace_commands = trace.add_subparsers(dest="runtime_trace_command")
+    _add_trace_capture_parser(trace_commands)
+
+    inspect = trace_commands.add_parser("inspect", help="inspect a completed runtime trace")
+    inspect.add_argument("trace", type=Path)
+    _add_project_argument(inspect)
+    _add_output_argument(inspect)
 
 
 def add_runtime_parser(subparsers: Any) -> None:
@@ -128,6 +185,14 @@ def add_runtime_parser(subparsers: Any) -> None:
     step.add_argument("--count", type=_step_count, default=1)
     _add_project_argument(step)
     _add_output_argument(step)
+
+    _add_trace_parsers(commands)
+
+    diff = commands.add_parser("diff", help="compare two completed runtime traces")
+    diff.add_argument("baseline", type=Path)
+    diff.add_argument("target", type=Path)
+    _add_project_argument(diff)
+    _add_output_argument(diff)
 
 
 def _hex(value: int) -> str:
