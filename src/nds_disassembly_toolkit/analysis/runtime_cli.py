@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +18,17 @@ from nds_disassembly_toolkit.analysis.runtime import (
     RuntimeSnapshot,
     correlate_snapshot,
 )
+from nds_disassembly_toolkit.analysis.runtime.capture import capture_trace
+from nds_disassembly_toolkit.analysis.runtime.correlation import analysis_project_fingerprint
 from nds_disassembly_toolkit.analysis.runtime.rsp import RSPCapabilities
 from nds_disassembly_toolkit.analysis.runtime.trace_diff import compare_traces, inspect_trace
 from nds_disassembly_toolkit.analysis.runtime.trace_model import (
+    TraceCaptureConfig,
+    TraceCaptureMode,
     TraceDiffReport,
     TraceInspection,
+    TraceMemoryRegion,
+    TraceSummary,
 )
 
 _MAX_STEP_COUNT = 256
@@ -131,7 +138,7 @@ def _add_trace_capture_parser(commands: Any) -> None:
     selectors.add_argument("--watch-write", type=_auto_int)
     selectors.add_argument("--watch-access", type=_auto_int)
     capture.add_argument("--events", type=_trace_events)
-    capture.add_argument("--length", type=_positive_int, default=4)
+    capture.add_argument("--length", type=_positive_int)
     capture.add_argument("--memory", action="append", type=_memory_region_spec, default=[])
     _add_project_argument(capture)
     capture.add_argument("--label")
@@ -373,6 +380,19 @@ def _trace_diff_json(report: TraceDiffReport) -> dict[str, object]:
     }
 
 
+def _trace_summary_json(summary: TraceSummary) -> dict[str, object]:
+    return {
+        "trace": str(summary.trace),
+        "cpu": summary.cpu.value,
+        "capture_mode": summary.capture_mode.value,
+        "evidence_events": summary.evidence_events,
+        "control_events": summary.control_events,
+        "memory_regions": summary.memory_regions,
+        "terminated_by": summary.terminated_by.value,
+        "project_fingerprint": summary.project_fingerprint,
+    }
+
+
 def _correlate_if_requested(
     project_path: Path | None,
     snapshot: RuntimeSnapshot,
@@ -406,6 +426,100 @@ def _diff_trace_command(arguments: argparse.Namespace) -> int:
                 project=project,
             )
     _write_json(_trace_diff_json(report), arguments.output)
+    return 0
+
+
+def _toolkit_version() -> str | None:
+    try:
+        return version("nds-disassembly-toolkit")
+    except PackageNotFoundError:
+        return None
+
+
+def _trace_memory_regions(specs: list[str]) -> tuple[TraceMemoryRegion, ...]:
+    regions: list[TraceMemoryRegion] = []
+    for ordinal, spec in enumerate(specs):
+        address_text, _, length_text = spec.partition(":")
+        regions.append(
+            TraceMemoryRegion(
+                ordinal=ordinal,
+                address=int(address_text, 0),
+                length=int(length_text, 0),
+            )
+        )
+    return tuple(regions)
+
+
+def _capture_project_fingerprint(project_path: Path | None) -> str | None:
+    if project_path is None:
+        return None
+    with AnalysisProject.open(project_path, read_only=True) as project:
+        return analysis_project_fingerprint(project)
+
+
+def _trace_capture_config(arguments: argparse.Namespace) -> TraceCaptureConfig:
+    project_fingerprint = _capture_project_fingerprint(arguments.project)
+    memory_regions = _trace_memory_regions(arguments.memory)
+
+    if arguments.steps is not None:
+        if arguments.events is not None:
+            raise ValueError("step trace cannot define --events")
+        if arguments.length is not None:
+            raise ValueError("step trace cannot define --length")
+        return TraceCaptureConfig(
+            cpu=arguments.cpu,
+            mode=TraceCaptureMode.STEP,
+            limit=arguments.steps,
+            timeout=arguments.timeout,
+            memory_regions=memory_regions,
+            label=arguments.label,
+            project_fingerprint=project_fingerprint,
+            toolkit_version=_toolkit_version(),
+        )
+
+    if arguments.events is None:
+        raise ValueError("breakpoint/watchpoint trace requires --events")
+    condition_length = 4 if arguments.length is None else arguments.length
+
+    if arguments.break_address is not None:
+        mode = TraceCaptureMode.BREAKPOINT
+        condition_kind = BreakpointKind.CODE
+        condition_address = arguments.break_address
+    elif arguments.watch_read is not None:
+        mode = TraceCaptureMode.WATCHPOINT
+        condition_kind = BreakpointKind.READ
+        condition_address = arguments.watch_read
+    elif arguments.watch_write is not None:
+        mode = TraceCaptureMode.WATCHPOINT
+        condition_kind = BreakpointKind.WRITE
+        condition_address = arguments.watch_write
+    elif arguments.watch_access is not None:
+        mode = TraceCaptureMode.WATCHPOINT
+        condition_kind = BreakpointKind.ACCESS
+        condition_address = arguments.watch_access
+    else:
+        raise ValueError("runtime trace capture requires one selector")
+
+    return TraceCaptureConfig(
+        cpu=arguments.cpu,
+        mode=mode,
+        limit=arguments.events,
+        timeout=arguments.timeout,
+        condition_kind=condition_kind,
+        condition_address=condition_address,
+        condition_length=condition_length,
+        memory_regions=memory_regions,
+        label=arguments.label,
+        project_fingerprint=project_fingerprint,
+        toolkit_version=_toolkit_version(),
+    )
+
+
+def _capture_trace_command(arguments: argparse.Namespace) -> int:
+    config = _trace_capture_config(arguments)
+    with _connect(arguments) as session:
+        summary = capture_trace(session, config, arguments.output)
+    _write_json(_trace_summary_json(summary), None)
     return 0
 
 
@@ -465,8 +579,13 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
     if command is None:
         raise ValueError("a runtime subcommand is required")
 
-    if command == "trace" and arguments.runtime_trace_command == "inspect":
-        return _inspect_trace_command(arguments)
+    if command == "trace":
+        trace_command = arguments.runtime_trace_command
+        if trace_command == "inspect":
+            return _inspect_trace_command(arguments)
+        if trace_command == "capture":
+            return _capture_trace_command(arguments)
+        raise ValueError("runtime trace requires capture or inspect")
     if command == "diff":
         return _diff_trace_command(arguments)
 
@@ -527,8 +646,5 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 arguments.output,
             )
             return 0
-
-        if command == "trace" and arguments.runtime_trace_command == "capture":
-            raise ValueError("runtime trace capture is not implemented yet")
 
     raise ValueError(f"unknown runtime subcommand: {command}")
