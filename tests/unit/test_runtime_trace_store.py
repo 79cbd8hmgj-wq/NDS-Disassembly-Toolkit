@@ -131,10 +131,12 @@ def test_failed_atomic_trace_preserves_existing_destination(tmp_path: Path) -> N
     destination = tmp_path / "capture.ndstrace"
     destination.write_bytes(b"known-good")
 
-    with pytest.raises(RuntimeError, match="capture failed"):
-        with TraceStore.create_atomic(destination, _step_config()) as store:
-            store.append_event(_event(0))
-            raise RuntimeError("capture failed")
+    with (
+        pytest.raises(RuntimeError, match="capture failed"),
+        TraceStore.create_atomic(destination, _step_config()) as store,
+    ):
+        store.append_event(_event(0))
+        raise RuntimeError("capture failed")
 
     assert destination.read_bytes() == b"known-good"
     assert not destination.with_suffix(".ndstrace.tmp").exists()
@@ -145,9 +147,11 @@ def test_trace_store_open_rejects_incomplete_trace(tmp_path: Path) -> None:
     destination = tmp_path / "capture.ndstrace"
     temporary = destination.with_suffix(".ndstrace.tmp")
 
-    with TraceStore.create_atomic(destination, _step_config()):
-        with pytest.raises(RuntimeTraceFormatError, match="incomplete"):
-            TraceStore.open(temporary)
+    with (
+        TraceStore.create_atomic(destination, _step_config()),
+        pytest.raises(RuntimeTraceFormatError, match="incomplete"),
+    ):
+        TraceStore.open(temporary)
 
 
 def test_trace_store_open_rejects_future_schema(tmp_path: Path) -> None:
