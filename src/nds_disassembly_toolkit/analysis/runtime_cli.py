@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from nds_disassembly_toolkit.analysis.model import FunctionCandidate, Symbol
+from nds_disassembly_toolkit.analysis.model import CrossReference, FunctionCandidate, Symbol
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, LocationAnnotation
 from nds_disassembly_toolkit.analysis.runtime import (
     BreakpointKind,
@@ -20,16 +21,22 @@ from nds_disassembly_toolkit.analysis.runtime import (
 )
 from nds_disassembly_toolkit.analysis.runtime.capture import capture_trace
 from nds_disassembly_toolkit.analysis.runtime.correlation import analysis_project_fingerprint
+from nds_disassembly_toolkit.analysis.runtime.memory_diff import diff_trace_memory
 from nds_disassembly_toolkit.analysis.runtime.rsp import RSPCapabilities
 from nds_disassembly_toolkit.analysis.runtime.trace_diff import compare_traces, inspect_trace
 from nds_disassembly_toolkit.analysis.runtime.trace_model import (
+    MemoryChange,
+    RankedFunctionCandidate,
     TraceCaptureConfig,
     TraceCaptureMode,
     TraceDiffReport,
+    TraceEventCorrelation,
+    TraceFunctionDelta,
     TraceInspection,
     TraceMemoryRegion,
     TraceSummary,
 )
+from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
 
 _MAX_STEP_COUNT = 256
 _MAX_TRACE_STEPS = 100000
@@ -213,6 +220,12 @@ def _hex(value: int) -> str:
     return f"0x{value:08x}"
 
 
+def _width_hex(value: int, width: int) -> str:
+    if value < 0:
+        raise ValueError("unsigned hexadecimal value cannot be negative")
+    return f"0x{value:0{width * 2}x}"
+
+
 def _write_json(payload: object, output: Path | None) -> None:
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if output is None:
@@ -327,10 +340,155 @@ def _snapshot_json(
     }
 
 
+def _trace_config_json(config: TraceCaptureConfig) -> dict[str, object]:
+    condition: dict[str, object] | None = None
+    if config.condition_kind is not None:
+        condition = {
+            "address": (
+                None if config.condition_address is None else _hex(config.condition_address)
+            ),
+            "kind": config.condition_kind.value,
+            "length": (
+                None if config.condition_length is None else _hex(config.condition_length)
+            ),
+        }
+    return {
+        "capture_mode": config.mode.value,
+        "condition": condition,
+        "cpu": config.cpu.value,
+        "label": config.label,
+        "limit": config.limit,
+        "memory_regions": [
+            {
+                "address": _hex(region.address),
+                "label": region.label,
+                "length": _hex(region.length),
+                "ordinal": region.ordinal,
+            }
+            for region in config.memory_regions
+        ],
+        "project_fingerprint": config.project_fingerprint,
+        "timeout": config.timeout,
+        "toolkit_version": config.toolkit_version,
+        "trace_schema_version": config.trace_schema_version,
+    }
+
+
+def _trace_event_correlation_json(
+    correlation: TraceEventCorrelation | None,
+) -> dict[str, object] | None:
+    if correlation is None:
+        return None
+    return {
+        "ambiguous": correlation.ambiguous,
+        "candidates": [
+            {
+                "annotation": _annotation_json(candidate.annotation),
+                "component": candidate.component,
+                "functions": [
+                    _function_json(function) for function in candidate.functions
+                ],
+                "symbols": [_symbol_json(symbol) for symbol in candidate.symbols],
+            }
+            for candidate in correlation.candidates
+        ],
+        "instruction_set": correlation.instruction_set.value,
+        "pc": _hex(correlation.pc),
+        "resolved_function": _function_json(correlation.resolved_function),
+    }
+
+
+def _memory_change_json(change: MemoryChange) -> dict[str, object]:
+    def aligned(values: tuple[Any, ...]) -> list[dict[str, object]]:
+        return [
+            {
+                "address": _hex(value.address),
+                "after": _width_hex(value.after, value.width),
+                "before": _width_hex(value.before, value.width),
+                "width": value.width,
+            }
+            for value in values
+        ]
+
+    return {
+        "address": _hex(change.address),
+        "after": change.after.hex(),
+        "before": change.before.hex(),
+        "region_ordinal": change.region_ordinal,
+        "values16": aligned(change.values16),
+        "values32": aligned(change.values32),
+    }
+
+
+def _xref_json(reference: CrossReference) -> dict[str, object]:
+    return {
+        "kind": reference.kind.value,
+        "source_address": _hex(reference.source_address),
+        "source_component": reference.source_component,
+        "source_function_address": (
+            None
+            if reference.source_function_address is None
+            else _hex(reference.source_function_address)
+        ),
+        "source_instruction_set": (
+            None
+            if reference.source_instruction_set is None
+            else reference.source_instruction_set.value
+        ),
+        "target_address": _hex(reference.target_address),
+        "target_instruction_set": (
+            None
+            if reference.target_instruction_set is None
+            else reference.target_instruction_set.value
+        ),
+    }
+
+
+def _trace_function_delta_json(delta: TraceFunctionDelta) -> dict[str, object]:
+    return {
+        "address": _hex(delta.address),
+        "annotation": _annotation_json(delta.annotation),
+        "baseline_frequency": delta.baseline_frequency,
+        "baseline_hits": delta.baseline_hits,
+        "changed_memory_references": [
+            _xref_json(reference) for reference in delta.changed_memory_references
+        ],
+        "classification": delta.classification,
+        "component": delta.component,
+        "condition_hit": delta.condition_hit,
+        "condition_stop_pcs": [_hex(pc) for pc in delta.condition_stop_pcs],
+        "dynamic_pcs": [_hex(pc) for pc in delta.dynamic_pcs],
+        "instruction_set": delta.instruction_set.value,
+        "symbols": [_symbol_json(symbol) for symbol in delta.symbols],
+        "target_frequency": delta.target_frequency,
+        "target_hits": delta.target_hits,
+    }
+
+
+def _ranked_function_json(candidate: RankedFunctionCandidate) -> dict[str, object]:
+    return {
+        "address": _hex(candidate.address),
+        "component": candidate.component,
+        "evidence": [
+            {
+                "contribution": evidence.contribution,
+                "name": evidence.name,
+                "reasons": list(evidence.reasons),
+                "value": evidence.value,
+                "weight": evidence.weight,
+            }
+            for evidence in candidate.evidence
+        ],
+        "instruction_set": candidate.instruction_set.value,
+        "score": candidate.score,
+    }
+
+
 def _trace_inspection_json(inspection: TraceInspection) -> dict[str, object]:
     return {
         "addresses": [
             {
+                "correlation": _trace_event_correlation_json(item.correlation),
                 "count": item.hit.count,
                 "cpu": item.hit.cpu.value,
                 "frequency": item.hit.frequency,
@@ -340,10 +498,14 @@ def _trace_inspection_json(inspection: TraceInspection) -> dict[str, object]:
             for item in inspection.addresses
         ],
         "capture_status": inspection.capture_status,
+        "config": _trace_config_json(inspection.config),
         "control_events": inspection.control_events,
         "evidence_events": inspection.evidence_events,
         "events": inspection.events,
         "integrity_ok": inspection.integrity_ok,
+        "memory_changes": [
+            _memory_change_json(change) for change in inspection.memory_changes
+        ],
         "memory_regions": [
             {
                 "address": _hex(item.region.address),
@@ -351,6 +513,7 @@ def _trace_inspection_json(inspection: TraceInspection) -> dict[str, object]:
                 "before_sha256": item.before_sha256,
                 "changed_bytes": item.changed_bytes,
                 "changed_ranges": item.changed_ranges,
+                "label": item.region.label,
                 "length": _hex(item.region.length),
                 "ordinal": item.region.ordinal,
             }
@@ -376,7 +539,23 @@ def _trace_diff_json(report: TraceDiffReport) -> dict[str, object]:
             }
             for item in report.address_deltas
         ],
+        "ambiguous_correlations": [
+            _trace_event_correlation_json(correlation)
+            for correlation in report.ambiguous_correlations
+        ],
+        "baseline_config": _trace_config_json(report.baseline_config),
+        "baseline_memory_changes": [
+            _memory_change_json(change) for change in report.baseline_memory_changes
+        ],
+        "function_deltas": [
+            _trace_function_delta_json(delta) for delta in report.function_deltas
+        ],
+        "rankings": [_ranked_function_json(candidate) for candidate in report.rankings],
+        "target_config": _trace_config_json(report.target_config),
         "target_identity_verified": report.target_identity_verified,
+        "target_memory_changes": [
+            _memory_change_json(change) for change in report.target_memory_changes
+        ],
     }
 
 
@@ -403,6 +582,18 @@ def _correlate_if_requested(
         return correlate_snapshot(project, snapshot)
 
 
+def _inspection_with_memory_changes(
+    trace: Path,
+    inspection: TraceInspection,
+) -> TraceInspection:
+    store = TraceStore.open(trace)
+    try:
+        memory_changes = diff_trace_memory(store)
+    finally:
+        store.close()
+    return replace(inspection, memory_changes=memory_changes)
+
+
 def _inspect_trace_command(arguments: argparse.Namespace) -> int:
     if arguments.runtime_trace_command != "inspect":
         raise ValueError("runtime trace requires capture or inspect")
@@ -411,6 +602,7 @@ def _inspect_trace_command(arguments: argparse.Namespace) -> int:
     else:
         with AnalysisProject.open(arguments.project, read_only=True) as project:
             inspection = inspect_trace(arguments.trace, project=project)
+    inspection = _inspection_with_memory_changes(arguments.trace, inspection)
     _write_json(_trace_inspection_json(inspection), arguments.output)
     return 0
 
