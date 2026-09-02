@@ -132,5 +132,6 @@ def test_investigate_json_output_is_atomic(
     )
 
     assert capsys.readouterr().out == ""
-    assert json.loads(output.read_text(encoding="utf-8"))["candidates"][0]["name"] == "ScoreFunction"
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["candidates"][0]["name"] == "ScoreFunction"
     assert not output.with_suffix(output.suffix + ".tmp").exists()
