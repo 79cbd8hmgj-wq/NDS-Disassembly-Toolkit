@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import nds_disassembly_toolkit.analysis.runtime as runtime
 from nds_disassembly_toolkit.analysis.runtime import (
     BreakpointKind,
     RegisterSnapshot,
@@ -29,6 +30,22 @@ def test_runtime_public_exports_are_available() -> None:
     assert RuntimeSnapshot is not None
     assert RuntimeComponentLocation is not None
     assert RuntimeLocation is not None
+
+
+def test_phase_7h2_trace_exports_are_available() -> None:
+    for name in (
+        "TRACE_SCHEMA_VERSION",
+        "TraceCaptureMode",
+        "TraceEventRole",
+        "MemorySnapshotPhase",
+        "TraceTermination",
+        "TraceMemoryRegion",
+        "TraceCaptureConfig",
+        "TraceEvent",
+        "MemorySnapshot",
+        "TraceSummary",
+    ):
+        assert hasattr(runtime, name), name
 
 
 def test_runtime_errors_share_toolkit_error_boundary() -> None:
