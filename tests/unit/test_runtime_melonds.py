@@ -110,6 +110,34 @@ def test_connect_uses_arm7_default_and_honors_override(monkeypatch: pytest.Monke
     ]
 
 
+def test_connect_cleanup_does_not_mask_negotiation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingClient(FakeRSPClient):
+        def negotiate(self) -> RSPCapabilities:
+            self.calls.append(("negotiate",))
+            raise RuntimeProtocolError("negotiation failed")
+
+        def close(self) -> None:
+            self.calls.append(("close",))
+            raise RuntimeConnectionError("cleanup failed")
+
+    client = FailingClient()
+
+    def fake_connect(host: str, port: int, *, timeout: float = 5.0) -> FailingClient:
+        return client
+
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.runtime.melonds.RSPClient.connect",
+        fake_connect,
+    )
+
+    with pytest.raises(RuntimeProtocolError, match="negotiation failed"):
+        MelonDSSession.connect(cpu=RuntimeCpu.ARM9)
+
+    assert client.calls == [("negotiate",), ("close",)]
+
+
 def test_snapshot_maps_melonds_register_blob_and_thumb_state() -> None:
     client = FakeRSPClient(registers=_register_blob(pc=0x02000102, cpsr=0x33))
     session = MelonDSSession(RuntimeCpu.ARM9, client, client.capabilities)
