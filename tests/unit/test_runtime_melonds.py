@@ -33,6 +33,9 @@ class FakeRSPClient:
         self.calls: list[tuple[object, ...]] = []
         self.closed = False
 
+    def initial_ack_handshake(self) -> None:
+        self.calls.append(("initial_ack_handshake",))
+
     def negotiate(self) -> RSPCapabilities:
         self.calls.append(("negotiate",))
         return self.capabilities
@@ -87,7 +90,7 @@ def test_connect_uses_cpu_default_ports_and_negotiates(monkeypatch: pytest.Monke
     arm9 = MelonDSSession.connect(cpu=RuntimeCpu.ARM9)
     assert calls == [("127.0.0.1", 3333, 5.0)]
     assert arm9.capabilities.packet_size == 0x47B
-    assert client.calls == [("negotiate",)]
+    assert client.calls == [("initial_ack_handshake",), ("negotiate",)]
 
 
 def test_connect_uses_arm7_default_and_honors_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,7 +138,11 @@ def test_connect_cleanup_does_not_mask_negotiation_failure(
     with pytest.raises(RuntimeProtocolError, match="negotiation failed"):
         MelonDSSession.connect(cpu=RuntimeCpu.ARM9)
 
-    assert client.calls == [("negotiate",), ("close",)]
+    assert client.calls == [
+        ("initial_ack_handshake",),
+        ("negotiate",),
+        ("close",),
+    ]
 
 
 def test_snapshot_maps_melonds_register_blob_and_thumb_state() -> None:
