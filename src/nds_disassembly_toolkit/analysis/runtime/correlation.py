@@ -9,6 +9,11 @@ from nds_disassembly_toolkit.analysis.runtime.model import (
     RuntimeLocation,
     RuntimeSnapshot,
 )
+from nds_disassembly_toolkit.analysis.runtime.trace_model import (
+    TraceEvent,
+    TraceEventComponentCorrelation,
+    TraceEventCorrelation,
+)
 
 
 def analysis_project_fingerprint(project: AnalysisProject) -> str:
@@ -66,4 +71,43 @@ def correlate_snapshot(
         pc=snapshot.pc,
         instruction_set=snapshot.instruction_set,
         candidates=tuple(candidates),
+    )
+
+
+def correlate_trace_event(
+    project: AnalysisProject,
+    event: TraceEvent,
+) -> TraceEventCorrelation:
+    candidates: list[TraceEventComponentCorrelation] = []
+    functions = []
+    for identity in sorted(
+        project.component_identities(),
+        key=lambda candidate: candidate.name,
+    ):
+        if not (
+            identity.base_address <= event.pc < identity.base_address + identity.size
+        ):
+            continue
+        component_functions = project.functions_containing(
+            identity.name,
+            event.pc,
+            event.instruction_set,
+        )
+        candidates.append(
+            TraceEventComponentCorrelation(
+                component=identity.name,
+                functions=component_functions,
+                symbols=project.symbols_at(identity.name, event.pc),
+                annotation=project.annotation(identity.name, event.pc),
+            )
+        )
+        functions.extend(component_functions)
+
+    resolved_function = functions[0] if len(functions) == 1 else None
+    return TraceEventCorrelation(
+        pc=event.pc,
+        instruction_set=event.instruction_set,
+        candidates=tuple(candidates),
+        ambiguous=len(candidates) > 1 or len(functions) > 1,
+        resolved_function=resolved_function,
     )
