@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -889,6 +890,29 @@ def _conditions_for_step(
     return None, None, 5.0
 
 
+def _collect_failure_if_managed(
+    context: object,
+    *,
+    error: BaseException,
+    step_id: str,
+    journal: ScenarioJournal,
+) -> None:
+    session_root = getattr(context, "session_root", None)
+    if not isinstance(session_root, Path):
+        return
+    with suppress(Exception):
+        from nds_disassembly_toolkit.analysis.orchestration.evidence import (
+            collect_failure_bundle,
+        )
+
+        collect_failure_bundle(
+            context,  # type: ignore[arg-type]
+            error=error,
+            step_id=step_id,
+            journal=journal,
+        )
+
+
 def _run_journaled_steps(
     context: object,
     definition: ScenarioDefinition,
@@ -936,6 +960,12 @@ def _run_journaled_steps(
                 error=str(exc),
             )
             store_journal(journal_path, journal)
+            _collect_failure_if_managed(
+                context,
+                error=exc,
+                step_id=step.id,
+                journal=journal,
+            )
             if isinstance(exc, RuntimeScenarioError):
                 raise
             raise RuntimeScenarioError(
