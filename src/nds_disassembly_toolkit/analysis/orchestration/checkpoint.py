@@ -13,7 +13,6 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
 )
 from nds_disassembly_toolkit.errors import RuntimeCheckpointError
 
-
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
 
