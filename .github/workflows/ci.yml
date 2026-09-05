@@ -415,6 +415,7 @@ jobs:
             >/tmp/desmume-smoke.out 2>/tmp/desmume-smoke.err &
           PID=$!
           trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true' EXIT
+          set +e
           python - <<'PY'
           import time
 
@@ -444,3 +445,14 @@ jobs:
               session.close()
           print('Phase 7H3A DeSmuME direct-RSP smoke passed')
           PY
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "---- DeSmuME stdout ----"
+            cat /tmp/desmume-smoke.out || true
+            echo "---- DeSmuME stderr ----"
+            cat /tmp/desmume-smoke.err || true
+            echo "---- process state ----"
+            ps -ef | grep -E '[d]esmume|[X]vfb' || true
+            exit "$STATUS"
+          fi
