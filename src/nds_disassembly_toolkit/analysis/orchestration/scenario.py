@@ -23,6 +23,7 @@ from nds_disassembly_toolkit.analysis.orchestration.predicates import (
     ProcessAlive,
     RegisterEquals,
     RuntimeMemoryWrite,
+    RuntimePredicate,
     WindowReady,
     apply_guarded_write,
     wait_for_predicate,
@@ -705,7 +706,7 @@ class ScenarioResult:
     status: str
 
 
-def _runtime_predicate(definition: PredicateDefinition):
+def _runtime_predicate(definition: PredicateDefinition) -> RuntimePredicate:
     kind = definition.type
     if kind == "process_alive":
         return ProcessAlive()
