@@ -10,6 +10,7 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
 )
 from nds_disassembly_toolkit.analysis.runtime.melonds import MelonDSSession
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
+from nds_disassembly_toolkit.errors import RuntimeCheckpointError
 
 
 class MelonDSBackend:
@@ -58,3 +59,12 @@ class MelonDSBackend:
         timeout: float = 5.0,
     ) -> MelonDSSession:
         return MelonDSSession.connect(cpu=cpu, host=host, port=port, timeout=timeout)
+
+
+    def save_state(self, destination: Path) -> None:
+        del destination
+        raise RuntimeCheckpointError("melonDS managed save-state support is not available yet")
+
+    def load_state(self, source: Path) -> None:
+        del source
+        raise RuntimeCheckpointError("melonDS managed save-state support is not available yet")
