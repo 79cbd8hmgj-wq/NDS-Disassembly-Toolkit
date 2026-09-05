@@ -1,5 +1,5 @@
-from nds_disassembly_toolkit.analysis.runtime.desmume import DeSmuMESession
 from nds_disassembly_toolkit.analysis.runtime.correlation import correlate_snapshot
+from nds_disassembly_toolkit.analysis.runtime.desmume import DeSmuMESession
 from nds_disassembly_toolkit.analysis.runtime.melonds import MelonDSSession
 from nds_disassembly_toolkit.analysis.runtime.model import (
     BreakpointKind,
