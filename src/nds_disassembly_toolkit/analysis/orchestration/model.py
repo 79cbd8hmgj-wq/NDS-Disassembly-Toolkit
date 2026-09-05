@@ -143,3 +143,13 @@ class DoctorCheckResult:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("doctor check name must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class DoctorReport:
+    emulator: EmulatorKind
+    checks: tuple[DoctorCheckResult, ...]
+
+    @property
+    def passed(self) -> bool:
+        return bool(self.checks) and all(check.passed for check in self.checks)
