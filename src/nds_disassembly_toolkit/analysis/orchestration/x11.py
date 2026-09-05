@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+
 from nds_disassembly_toolkit.analysis.orchestration.process import (
     _linux_process_executable,
     _linux_process_start_identity,
