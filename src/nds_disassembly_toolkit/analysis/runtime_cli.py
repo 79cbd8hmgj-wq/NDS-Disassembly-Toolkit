@@ -10,6 +10,13 @@ from typing import Any
 
 from nds_disassembly_toolkit.analysis.model import CrossReference, FunctionCandidate, Symbol
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind, RuntimeSessionRecord
+from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
+    CheckpointContext,
+    CheckpointMetadata,
+    create_checkpoint,
+    restore_checkpoint,
+    validate_checkpoint,
+)
 from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmuMEBackend
 from nds_disassembly_toolkit.analysis.orchestration.doctor import (
     discover_emulator_executable,
@@ -244,6 +251,26 @@ def add_runtime_parser(subparsers: Any) -> None:
     stop.add_argument("session", type=Path)
     _add_output_argument(stop)
 
+    checkpoint = commands.add_parser(
+        "checkpoint",
+        help="save or restore a managed runtime checkpoint",
+    )
+    checkpoint_commands = checkpoint.add_subparsers(dest="runtime_checkpoint_command")
+    checkpoint_save = checkpoint_commands.add_parser(
+        "save",
+        help="save a managed runtime checkpoint",
+    )
+    checkpoint_save.add_argument("session", type=Path)
+    checkpoint_save.add_argument("name")
+    _add_output_argument(checkpoint_save)
+    checkpoint_restore = checkpoint_commands.add_parser(
+        "restore",
+        help="restore a managed runtime checkpoint",
+    )
+    checkpoint_restore.add_argument("session", type=Path)
+    checkpoint_restore.add_argument("name")
+    _add_output_argument(checkpoint_restore)
+
     diff = commands.add_parser("diff", help="compare two completed runtime traces")
     diff.add_argument("baseline", type=Path)
     diff.add_argument("target", type=Path)
@@ -302,6 +329,20 @@ def _session_json(record: RuntimeSessionRecord) -> dict[str, object]:
         "session_root": str(record.session_root),
         "last_completed_step": record.last_completed_step,
         "last_completed_case": record.last_completed_case,
+    }
+
+
+def _checkpoint_metadata_json(metadata: CheckpointMetadata, path: Path) -> dict[str, object]:
+    return {
+        "schema_version": metadata.schema_version,
+        "name": metadata.name,
+        "emulator": metadata.emulator.value,
+        "rom_sha256": metadata.rom_sha256,
+        "state_filename": metadata.state_filename,
+        "state_sha256": metadata.state_sha256,
+        "battery_save_filename": metadata.battery_save_filename,
+        "battery_save_sha256": metadata.battery_save_sha256,
+        "path": str(path),
     }
 
 
@@ -905,6 +946,36 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             _write_json(_session_json(stopped), arguments.output)
             return 0
         raise ValueError("runtime session requires info or stop")
+
+    if command == "checkpoint":
+        if arguments.runtime_checkpoint_command is None:
+            raise ValueError("runtime checkpoint requires save or restore")
+        record = load_session(arguments.session)
+        backend = _managed_backend(record.emulator)
+        context = CheckpointContext(
+            checkpoint_root=record.session_root / "checkpoints",
+            emulator=record.emulator,
+            rom_sha256=record.rom_sha256,
+            backend=backend,
+        )
+        checkpoint_path = context.checkpoint_root / arguments.name
+        if arguments.runtime_checkpoint_command == "save":
+            checkpoint_path = create_checkpoint(context, arguments.name)
+            metadata = validate_checkpoint(checkpoint_path, context)
+            _write_json(
+                _checkpoint_metadata_json(metadata, checkpoint_path),
+                arguments.output,
+            )
+            return 0
+        if arguments.runtime_checkpoint_command == "restore":
+            restore_checkpoint(context, checkpoint_path)
+            metadata = validate_checkpoint(checkpoint_path, context)
+            _write_json(
+                _checkpoint_metadata_json(metadata, checkpoint_path),
+                arguments.output,
+            )
+            return 0
+        raise ValueError("runtime checkpoint requires save or restore")
 
     if command == "trace":
         trace_command = arguments.runtime_trace_command
