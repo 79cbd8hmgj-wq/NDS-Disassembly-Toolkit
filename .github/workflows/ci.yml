@@ -62,6 +62,71 @@ jobs:
             .github/smoke/headless_nds.cpp .github/smoke/headless_platform.cpp \
             "$BUILD/libcore.a" "$BUILD/teakra/src/libteakra.a" \
             -lm -lpthread -ldl -o /tmp/headless-nds
+      - name: Exercise managed runtime session
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import time
+          from pathlib import Path
+
+          from nds_disassembly_toolkit.analysis.orchestration import (
+              EmulatorKind,
+              LaunchSpec,
+              RuntimeLifecycleState,
+          )
+          from nds_disassembly_toolkit.analysis.orchestration.process import (
+              create_session,
+              process_is_owned,
+              spawn_owned_process,
+              stop_owned_process,
+          )
+          from nds_disassembly_toolkit.analysis.runtime import MelonDSSession, RuntimeCpu
+
+          root = Path('/tmp/managed-runtime')
+          rom = Path('/tmp/managed-fixture.nds')
+          rom.write_bytes(b'NDS managed smoke')
+          session = create_session(
+              root,
+              emulator=EmulatorKind.MELONDS,
+              executable=Path('/tmp/headless-nds'),
+              rom=rom,
+              cpu=RuntimeCpu.ARM9,
+          )
+          running = spawn_owned_process(
+              session,
+              LaunchSpec(argv=('/tmp/headless-nds', str(session.debugger_port))),
+          )
+          assert running.lifecycle is RuntimeLifecycleState.LAUNCHING
+          assert process_is_owned(running)
+          assert running.debugger_port != 3333
+
+          debugger = None
+          last_error = None
+          for _ in range(100):
+              try:
+                  debugger = MelonDSSession.connect(
+                      cpu=RuntimeCpu.ARM9,
+                      port=running.debugger_port,
+                      timeout=1.0,
+                  )
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  time.sleep(0.05)
+          if debugger is None:
+              raise AssertionError(f'managed debugger never became ready: {last_error}')
+          try:
+              snapshot = debugger.snapshot()
+              assert snapshot.pc == 0x02000000
+          finally:
+              debugger.close()
+
+          closed = stop_owned_process(running, grace_seconds=1.0)
+          assert closed.lifecycle is RuntimeLifecycleState.CLOSED
+          assert not process_is_owned(closed)
+          print('Phase 7H3A managed stock-melonDS session smoke passed')
+          PY
       - name: Exercise exact runtime CLI
         shell: bash
         run: |
