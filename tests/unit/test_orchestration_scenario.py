@@ -95,3 +95,34 @@ def test_failed_postcondition_stops_later_steps(tmp_path: Path) -> None:
     journal = load_journal(journal_path)
     assert journal.steps[0].state is JournalStepState.FAILED
     assert journal.steps[1].state is JournalStepState.PENDING
+
+
+
+def test_failed_step_collects_managed_failure_bundle(tmp_path: Path) -> None:
+    @dataclass
+    class ManagedFailureContext(FakeScenarioContext):
+        session_root: Path = tmp_path
+
+    context = ManagedFailureContext()
+    definition = _definition(
+        ButtonStep(
+            id="first",
+            button=DSButton.A,
+            postcondition=PredicateDefinition("pc_equals", address=0xDEADBEEF),
+            timeout=0.001,
+        )
+    )
+
+    with pytest.raises(RuntimeScenarioError):
+        run_scenario(
+            context,
+            definition,
+            journal_path=tmp_path / "journal.json",
+        )
+
+    failure = tmp_path / "failure" / "first" / "failure.json"
+    assert failure.is_file()
+    payload = __import__("json").loads(failure.read_text(encoding="utf-8"))
+    assert payload["step_id"] == "first"
+    assert payload["scenario_name"] == "state-aware-actions"
+    assert payload["error_type"] == "RuntimeScenarioError"
