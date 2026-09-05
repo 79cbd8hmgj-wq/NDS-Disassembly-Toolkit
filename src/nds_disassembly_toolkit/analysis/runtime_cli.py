@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from nds_disassembly_toolkit.analysis.model import CrossReference, FunctionCandidate, Symbol
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind, RuntimeSessionRecord
@@ -959,10 +960,10 @@ class _ManagedScenarioContext:
         self.session_root = record.session_root
 
     def snapshot(self) -> RuntimeSnapshot:
-        return self.debugger.snapshot()
+        return cast(RuntimeSnapshot, self.debugger.snapshot())
 
     def read_memory(self, address: int, length: int) -> bytes:
-        return self.debugger.read_memory(address, length)
+        return cast(bytes, self.debugger.read_memory(address, length))
 
     def write_memory(self, address: int, data: bytes) -> None:
         self.debugger.write_memory(address, data)
@@ -1064,7 +1065,7 @@ class _ManagedScenarioContext:
 def _scenario_context(
     record: RuntimeSessionRecord,
     definition: ScenarioDefinition,
-):
+) -> Iterator[_ManagedScenarioContext]:
     if record.emulator is not definition.backend:
         raise RuntimeScenarioError("scenario backend does not match managed session")
     if record.cpu is not definition.cpu:
