@@ -441,3 +441,35 @@ def test_runtime_errors_use_existing_top_level_toolkit_mapping(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "runtime peer unavailable\n"
+
+
+def test_runtime_orchestration_parsers_accept_managed_commands() -> None:
+    parser = build_parser()
+
+    doctor = parser.parse_args(["runtime", "doctor", "--emulator", "melonds"])
+    assert doctor.runtime_command == "doctor"
+    assert doctor.emulator == "melonds"
+
+    launch = parser.parse_args(
+        [
+            "runtime",
+            "launch",
+            "game.nds",
+            "--emulator",
+            "desmume",
+            "--cpu",
+            "arm9",
+            "--session-root",
+            "runtime",
+        ]
+    )
+    assert launch.runtime_command == "launch"
+    assert launch.rom == Path("game.nds")
+    assert launch.emulator == "desmume"
+
+    info = parser.parse_args(["runtime", "session", "info", "runtime/session-a"])
+    assert info.runtime_command == "session"
+    assert info.runtime_session_command == "info"
+
+    stop = parser.parse_args(["runtime", "session", "stop", "runtime/session-a"])
+    assert stop.runtime_session_command == "stop"
