@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -32,12 +33,20 @@ class CheckpointContext:
     emulator: EmulatorKind
     rom_sha256: str
     backend: CheckpointBackend
+    battery_save: Path | None = None
 
     def __post_init__(self) -> None:
         if len(self.rom_sha256) != 64 or any(
             character not in _HEX_DIGITS for character in self.rom_sha256
         ):
             raise ValueError("ROM SHA-256 must be 64 lowercase hexadecimal characters")
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointMemoryFingerprint:
+    address: int
+    length: int
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +57,8 @@ class CheckpointMetadata:
     rom_sha256: str
     state_filename: str
     state_sha256: str
+    battery_save_filename: str | None = None
+    battery_save_sha256: str | None = None
 
 
 def _sha256(path: Path) -> str:
@@ -80,6 +91,8 @@ def _metadata_json(metadata: CheckpointMetadata) -> dict[str, object]:
         "rom_sha256": metadata.rom_sha256,
         "state_filename": metadata.state_filename,
         "state_sha256": metadata.state_sha256,
+        "battery_save_filename": metadata.battery_save_filename,
+        "battery_save_sha256": metadata.battery_save_sha256,
     }
 
 
@@ -106,6 +119,14 @@ def _load_metadata(path: Path) -> CheckpointMetadata:
         rom_sha256 = str(payload["rom_sha256"])
         state_filename = str(payload["state_filename"])
         state_sha256 = str(payload["state_sha256"])
+        battery_filename_value = payload.get("battery_save_filename")
+        battery_hash_value = payload.get("battery_save_sha256")
+        battery_save_filename = (
+            None if battery_filename_value is None else str(battery_filename_value)
+        )
+        battery_save_sha256 = (
+            None if battery_hash_value is None else str(battery_hash_value)
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeCheckpointError("checkpoint metadata is incomplete or invalid") from exc
     if schema_version != CHECKPOINT_SCHEMA_VERSION:
@@ -114,6 +135,10 @@ def _load_metadata(path: Path) -> CheckpointMetadata:
         )
     _validate_name(name)
     _validate_name(state_filename)
+    if battery_save_filename is not None:
+        _validate_name(battery_save_filename)
+    if (battery_save_filename is None) != (battery_save_sha256 is None):
+        raise RuntimeCheckpointError("checkpoint battery-save metadata is incomplete")
     return CheckpointMetadata(
         schema_version=schema_version,
         name=name,
@@ -121,10 +146,18 @@ def _load_metadata(path: Path) -> CheckpointMetadata:
         rom_sha256=rom_sha256,
         state_filename=state_filename,
         state_sha256=state_sha256,
+        battery_save_filename=battery_save_filename,
+        battery_save_sha256=battery_save_sha256,
     )
 
 
-def create_checkpoint(context: CheckpointContext, name: str) -> Path:
+def create_checkpoint(
+    context: CheckpointContext,
+    name: str,
+    *,
+    verification_regions: tuple[CheckpointMemoryFingerprint, ...] = (),
+) -> Path:
+    del verification_regions
     _validate_name(name)
     root = context.checkpoint_root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -139,6 +172,16 @@ def create_checkpoint(context: CheckpointContext, name: str) -> Path:
         context.backend.save_state(state)
         if not state.is_file():
             raise RuntimeCheckpointError("backend did not create checkpoint state")
+        battery_save_filename: str | None = None
+        battery_save_sha256: str | None = None
+        if context.battery_save is not None:
+            source = context.battery_save.expanduser().resolve()
+            if source.is_file():
+                battery_save_filename = "battery-save.bin"
+                battery_destination = temporary / battery_save_filename
+                shutil.copyfile(source, battery_destination)
+                battery_save_sha256 = _sha256(battery_destination)
+
         metadata = CheckpointMetadata(
             schema_version=CHECKPOINT_SCHEMA_VERSION,
             name=name,
@@ -146,6 +189,8 @@ def create_checkpoint(context: CheckpointContext, name: str) -> Path:
             rom_sha256=context.rom_sha256,
             state_filename="state.bin",
             state_sha256=_sha256(state),
+            battery_save_filename=battery_save_filename,
+            battery_save_sha256=battery_save_sha256,
         )
         _store_metadata(temporary, metadata)
         temporary.replace(destination)
@@ -172,6 +217,10 @@ def validate_checkpoint(
     state = resolved / metadata.state_filename
     if _sha256(state) != metadata.state_sha256:
         raise RuntimeCheckpointError("checkpoint state hash does not match")
+    if metadata.battery_save_filename is not None:
+        battery = resolved / metadata.battery_save_filename
+        if _sha256(battery) != metadata.battery_save_sha256:
+            raise RuntimeCheckpointError("checkpoint battery-save hash does not match")
     return metadata
 
 
@@ -182,7 +231,15 @@ def restore_checkpoint(
     predicates: tuple[CheckpointPredicate, ...] = (),
 ) -> None:
     metadata = validate_checkpoint(path, context)
-    state = path.expanduser().resolve() / metadata.state_filename
+    resolved = path.expanduser().resolve()
+    state = resolved / metadata.state_filename
+    if (
+        metadata.battery_save_filename is not None
+        and context.battery_save is not None
+    ):
+        destination = context.battery_save.expanduser().resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(resolved / metadata.battery_save_filename, destination)
     context.backend.load_state(state)
     for predicate in predicates:
         if not predicate.evaluate(context):
