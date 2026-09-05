@@ -410,7 +410,7 @@ jobs:
           PORT=39491
           xvfb-run -a \
             /tmp/desmume/desmume/src/frontend/posix/build/cli/desmume-cli \
-            --arm9gdb "$PORT" --disable-sound --3d-engine=0 \
+            --arm9gdb "$PORT" --disable-sound --nojoy \
             /tmp/rsp-smoke.nds \
             >/tmp/desmume-smoke.out 2>/tmp/desmume-smoke.err &
           PID=$!
