@@ -143,3 +143,21 @@ def test_write_memory_delegates_to_rsp_client() -> None:
     session.write_memory(0x02000100, b"\x01\xab")
 
     assert client.calls[-1] == ("write_memory", 0x02000100, b"\x01\xab")
+
+
+
+def test_desmume_close_skips_unsupported_detach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeRSPClient()
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.runtime.desmume.RSPClient.connect",
+        lambda host, port, *, timeout=5.0: client,
+    )
+
+    session = DeSmuMESession.connect(cpu=RuntimeCpu.ARM9, port=39004)
+    session.close()
+
+    assert ("detach",) not in client.calls
+    assert ("close",) in client.calls
+    assert client.closed is True
