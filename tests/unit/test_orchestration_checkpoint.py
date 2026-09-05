@@ -91,3 +91,30 @@ def test_restore_requires_post_restore_predicates(tmp_path: Path) -> None:
     backend = context.backend
     assert isinstance(backend, FakeBackend)
     assert backend.loaded == b"state-v1"
+
+
+
+def test_checkpoint_hashes_and_restores_battery_save(tmp_path: Path) -> None:
+    battery = tmp_path / "runtime.sav"
+    battery.write_bytes(b"battery-v1")
+    context = CheckpointContext(
+        checkpoint_root=tmp_path / "checkpoints",
+        emulator=EmulatorKind.MELONDS,
+        rom_sha256="1" * 64,
+        backend=FakeBackend(),
+        battery_save=battery,
+    )
+
+    path = create_checkpoint(context, "baseline")
+    metadata = validate_checkpoint(path, context)
+
+    assert metadata.battery_save_sha256 is not None
+    assert (path / "battery-save.bin").read_bytes() == b"battery-v1"
+
+    battery.write_bytes(b"changed-runtime-save")
+    restore_checkpoint(context, path)
+    assert battery.read_bytes() == b"battery-v1"
+
+    (path / "battery-save.bin").write_bytes(b"tampered")
+    with pytest.raises(RuntimeCheckpointError, match="battery"):
+        validate_checkpoint(path, context)
