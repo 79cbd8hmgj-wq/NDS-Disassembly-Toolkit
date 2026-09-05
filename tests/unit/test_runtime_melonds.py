@@ -48,6 +48,9 @@ class FakeRSPClient:
         self.calls.append(("read_memory", address, length))
         return bytes(range(length))
 
+    def write_memory(self, address: int, data: bytes) -> None:
+        self.calls.append(("write_memory", address, data))
+
     def insert_breakpoint(self, kind: int, address: int, length: int) -> None:
         self.calls.append(("insert", kind, address, length))
 
@@ -305,3 +308,17 @@ def test_context_manager_detaches_session() -> None:
         pass
     assert client.calls == [("detach",)]
     assert client.closed
+
+
+
+def test_write_memory_delegates_to_rsp_client() -> None:
+    client = FakeRSPClient()
+    session = MelonDSSession(
+        RuntimeCpu.ARM9,
+        client,
+        client.capabilities,
+    )
+
+    session.write_memory(0x02000100, b"\x01\xab")
+
+    assert client.calls[-1] == ("write_memory", 0x02000100, b"\x01\xab")
