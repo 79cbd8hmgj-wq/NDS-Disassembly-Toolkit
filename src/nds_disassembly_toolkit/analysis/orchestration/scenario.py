@@ -32,7 +32,7 @@ class PredicateDefinition:
     register: str | None = None
     start: int | None = None
     end: int | None = None
-    children: tuple["PredicateDefinition", ...] = ()
+    children: tuple[PredicateDefinition, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
