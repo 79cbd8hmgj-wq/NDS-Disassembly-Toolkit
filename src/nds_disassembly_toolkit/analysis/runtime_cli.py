@@ -250,6 +250,26 @@ def add_runtime_parser(subparsers: Any) -> None:
     stop = session_commands.add_parser("stop", help="stop an owned managed runtime session")
     stop.add_argument("session", type=Path)
     _add_output_argument(stop)
+    resume = session_commands.add_parser(
+        "resume",
+        help="resume a guarded runtime scenario from a safe boundary",
+    )
+    resume.add_argument("session", type=Path)
+    resume.add_argument("scenario", type=Path)
+    _add_output_argument(resume)
+
+    scenario = commands.add_parser(
+        "scenario",
+        help="run a guarded runtime scenario",
+    )
+    scenario_commands = scenario.add_subparsers(dest="runtime_scenario_command")
+    scenario_run = scenario_commands.add_parser(
+        "run",
+        help="run a guarded runtime scenario",
+    )
+    scenario_run.add_argument("session", type=Path)
+    scenario_run.add_argument("scenario", type=Path)
+    _add_output_argument(scenario_run)
 
     checkpoint = commands.add_parser(
         "checkpoint",
