@@ -334,3 +334,113 @@ jobs:
 
           print('Phase 7H1/7H2 live stock-melonDS smoke passed')
           PY
+
+
+  phase-7h3-desmume-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install toolkit and DeSmuME build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install -e .
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build xvfb \
+            libglib2.0-dev libsdl2-dev libpcap-dev zlib1g-dev \
+            libx11-dev libgl1-mesa-dev
+      - name: Build pinned DeSmuME CLI with GDB stub
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/TASEmulators/desmume.git /tmp/desmume
+          git -C /tmp/desmume checkout 08b6fade0bc95749acc9820cb9688aaf39d00c87
+          meson setup /tmp/desmume/desmume/src/frontend/posix/build \
+            /tmp/desmume/desmume/src/frontend/posix \
+            --buildtype=release \
+            -Dfrontend-gtk=false \
+            -Dfrontend-cli=true \
+            -Dgdb-stub=true
+          ninja -C /tmp/desmume/desmume/src/frontend/posix/build
+      - name: Build disposable minimal NDS ROM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          import struct
+          from pathlib import Path
+
+          rom = bytearray(0x20000)
+          rom[0x00:0x0C] = b'RSP SMOKE\0\0\0'
+          rom[0x0C:0x10] = b'RSP0'
+          rom[0x10:0x12] = b'00'
+          rom[0x12] = 0
+          rom[0x14] = 0
+          struct.pack_into('<IIII', rom, 0x20, 0x4000, 0x02000000, 0x02000000, 4)
+          struct.pack_into('<IIII', rom, 0x30, 0x8000, 0x03800000, 0x03800000, 4)
+          struct.pack_into('<II', rom, 0x40, 0, 0)
+          struct.pack_into('<II', rom, 0x48, 0, 0)
+          struct.pack_into('<I', rom, 0x80, len(rom))
+          struct.pack_into('<I', rom, 0x84, 0x4000)
+          rom[0x4000:0x4004] = bytes.fromhex('feffffea')
+          rom[0x8000:0x8004] = bytes.fromhex('feffffea')
+
+          def crc16(data: bytes) -> int:
+              value = 0xFFFF
+              for byte in data:
+                  value ^= byte
+                  for _ in range(8):
+                      value = (value >> 1) ^ (0xA001 if value & 1 else 0)
+              return value & 0xFFFF
+
+          struct.pack_into('<H', rom, 0x15C, crc16(bytes(rom[0xC0:0x15C])))
+          struct.pack_into('<H', rom, 0x15E, crc16(bytes(rom[:0x15E])))
+          Path('/tmp/rsp-smoke.nds').write_bytes(rom)
+          PY
+      - name: Verify DeSmuME direct-RSP dialect under Xvfb
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PORT=39491
+          xvfb-run -a \
+            /tmp/desmume/desmume/src/frontend/posix/build/cli/desmume-cli \
+            --arm9gdb "$PORT" --disable-sound --3d-engine=0 \
+            /tmp/rsp-smoke.nds \
+            >/tmp/desmume-smoke.out 2>/tmp/desmume-smoke.err &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import time
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          session = None
+          last_error = None
+          for _ in range(100):
+              try:
+                  session = DeSmuMESession.connect(
+                      cpu=RuntimeCpu.ARM9,
+                      port=39491,
+                      timeout=1.0,
+                  )
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  time.sleep(0.1)
+          if session is None:
+              raise AssertionError(f'DeSmuME GDB stub never became ready: {last_error}')
+          try:
+              snapshot = session.snapshot()
+              assert snapshot.registers.value('pc') is not None
+              assert snapshot.registers.value('cpsr') is not None
+              assert session.capabilities is not None
+          finally:
+              session.close()
+          print('Phase 7H3A DeSmuME direct-RSP smoke passed')
+          PY
