@@ -14,7 +14,7 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
     _linux_process_executable,
     _linux_process_start_identity,
 )
-from nds_disassembly_toolkit.errors import RuntimeDisplayError
+from nds_disassembly_toolkit.errors import RuntimeDisplayError, RuntimeInputError
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,3 +147,43 @@ def stop_x11_display(
         time.sleep(0.01)
     if _lease_is_owned(lease):
         os.killpg(lease.process_group, signal.SIGKILL)
+
+
+
+class X11HostDriver:
+    """Argument-array X11 input bound to one verified emulator window."""
+
+    def __init__(self, *, xdotool: Path) -> None:
+        self.xdotool = xdotool
+
+    def _window_pid(self, window_id: str) -> int | None:
+        completed = subprocess.run(
+            [str(self.xdotool), "getwindowpid", window_id],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            return None
+        try:
+            return int(completed.stdout.strip())
+        except ValueError:
+            return None
+
+    def _require_owned_window(self, session: object) -> str:
+        pid = getattr(session, "pid", None)
+        window_id = getattr(session, "window_id", None)
+        if pid is None or window_id is None:
+            raise RuntimeInputError("managed session has no owned emulator window")
+        if self._window_pid(window_id) != pid:
+            raise RuntimeInputError("window is not owned by the managed emulator process")
+        return window_id
+
+    def send_key(self, session: object, host_key: str) -> None:
+        if not host_key:
+            raise RuntimeInputError("host key must not be empty")
+        window_id = self._require_owned_window(session)
+        subprocess.run(
+            [str(self.xdotool), "key", "--window", window_id, host_key],
+            check=True,
+        )
