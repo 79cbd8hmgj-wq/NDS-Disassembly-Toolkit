@@ -11,7 +11,6 @@ from nds_disassembly_toolkit.analysis.orchestration.predicates import (
     MemoryMaskedEquals,
     PcEquals,
     PcInRange,
-    PredicateObservation,
     RegisterEquals,
     RuntimeMemoryWrite,
     apply_guarded_write,
