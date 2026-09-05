@@ -9,6 +9,19 @@ from pathlib import Path
 from typing import Any
 
 from nds_disassembly_toolkit.analysis.model import CrossReference, FunctionCandidate, Symbol
+from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind, RuntimeSessionRecord
+from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmuMEBackend
+from nds_disassembly_toolkit.analysis.orchestration.doctor import (
+    discover_emulator_executable,
+    run_doctor,
+)
+from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import MelonDSBackend
+from nds_disassembly_toolkit.analysis.orchestration.process import (
+    create_session,
+    load_session,
+    spawn_owned_process,
+    stop_owned_process,
+)
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, LocationAnnotation
 from nds_disassembly_toolkit.analysis.runtime import (
     BreakpointKind,
@@ -207,6 +220,30 @@ def add_runtime_parser(subparsers: Any) -> None:
 
     _add_trace_parsers(commands)
 
+    doctor = commands.add_parser("doctor", help="diagnose managed runtime capabilities")
+    doctor.add_argument("--emulator", choices=[kind.value for kind in EmulatorKind], required=True)
+    doctor.add_argument("--rom", type=Path)
+    doctor.add_argument("--require", action="append", default=[])
+    _add_output_argument(doctor)
+
+    launch = commands.add_parser("launch", help="launch an isolated managed emulator")
+    launch.add_argument("rom", type=Path)
+    launch.add_argument("--emulator", choices=[kind.value for kind in EmulatorKind], required=True)
+    launch.add_argument("--cpu", type=_cpu, required=True)
+    launch.add_argument("--session-root", type=Path, required=True)
+    launch.add_argument("--executable", type=Path)
+    launch.add_argument("--display")
+    _add_output_argument(launch)
+
+    session = commands.add_parser("session", help="inspect or stop a managed runtime session")
+    session_commands = session.add_subparsers(dest="runtime_session_command")
+    info = session_commands.add_parser("info", help="inspect a managed runtime session")
+    info.add_argument("session", type=Path)
+    _add_output_argument(info)
+    stop = session_commands.add_parser("stop", help="stop an owned managed runtime session")
+    stop.add_argument("session", type=Path)
+    _add_output_argument(stop)
+
     diff = commands.add_parser("diff", help="compare two completed runtime traces")
     diff.add_argument("baseline", type=Path)
     diff.add_argument("target", type=Path)
@@ -235,6 +272,52 @@ def _write_json(payload: object, output: Path | None) -> None:
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(rendered, encoding="utf-8")
     temporary.replace(output)
+
+
+def _managed_backend(kind: EmulatorKind) -> MelonDSBackend | DeSmuMEBackend:
+    if kind is EmulatorKind.MELONDS:
+        return MelonDSBackend()
+    return DeSmuMEBackend()
+
+
+def _session_json(record: RuntimeSessionRecord) -> dict[str, object]:
+    return {
+        "schema_version": record.schema_version,
+        "session_id": record.session_id,
+        "lifecycle": record.lifecycle.value,
+        "emulator": record.emulator.value,
+        "emulator_executable": str(record.emulator_executable),
+        "emulator_sha256": record.emulator_sha256,
+        "emulator_version": record.emulator_version,
+        "rom_path": str(record.rom_path),
+        "rom_sha256": record.rom_sha256,
+        "cpu": record.cpu.value,
+        "pid": record.pid,
+        "process_group": record.process_group,
+        "process_start_identity": record.process_start_identity,
+        "debugger_host": record.debugger_host,
+        "debugger_port": record.debugger_port,
+        "display": record.display,
+        "window_id": record.window_id,
+        "session_root": str(record.session_root),
+        "last_completed_step": record.last_completed_step,
+        "last_completed_case": record.last_completed_case,
+    }
+
+
+def _doctor_json(report: object) -> dict[str, object]:
+    from nds_disassembly_toolkit.analysis.orchestration.model import DoctorReport
+
+    if not isinstance(report, DoctorReport):
+        raise TypeError("doctor report has unexpected type")
+    return {
+        "emulator": report.emulator.value,
+        "passed": report.passed,
+        "checks": [
+            {"name": check.name, "passed": check.passed, "detail": check.detail}
+            for check in report.checks
+        ],
+    }
 
 
 def _capabilities_json(capabilities: RSPCapabilities) -> dict[str, object]:
@@ -770,6 +853,58 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
     command = arguments.runtime_command
     if command is None:
         raise ValueError("a runtime subcommand is required")
+
+    if command == "doctor":
+        kind = EmulatorKind(arguments.emulator)
+        backend = _managed_backend(kind)
+        report = run_doctor(
+            backend,
+            rom=arguments.rom,
+            require=frozenset(arguments.require),
+        )
+        _write_json(_doctor_json(report), arguments.output)
+        return 0
+
+    if command == "launch":
+        kind = EmulatorKind(arguments.emulator)
+        backend = _managed_backend(kind)
+        executable = arguments.executable
+        if executable is None:
+            executable = discover_emulator_executable(kind)
+        if executable is None:
+            raise ValueError(f"{kind.value} executable was not found")
+        session_record = create_session(
+            arguments.session_root,
+            emulator=kind,
+            executable=executable,
+            rom=arguments.rom,
+            cpu=arguments.cpu,
+        )
+        launch = backend.build_launch_spec(
+            executable=session_record.emulator_executable,
+            rom=session_record.rom_path,
+            cpu=session_record.cpu,
+            debugger_host=session_record.debugger_host,
+            debugger_port=session_record.debugger_port,
+            session_root=session_record.session_root,
+            display=arguments.display,
+        )
+        running = spawn_owned_process(session_record, launch)
+        _write_json(_session_json(running), arguments.output)
+        return 0
+
+    if command == "session":
+        if arguments.runtime_session_command is None:
+            raise ValueError("runtime session requires info or stop")
+        record = load_session(arguments.session)
+        if arguments.runtime_session_command == "info":
+            _write_json(_session_json(record), arguments.output)
+            return 0
+        if arguments.runtime_session_command == "stop":
+            stopped = stop_owned_process(record)
+            _write_json(_session_json(stopped), arguments.output)
+            return 0
+        raise ValueError("runtime session requires info or stop")
 
     if command == "trace":
         trace_command = arguments.runtime_trace_command
