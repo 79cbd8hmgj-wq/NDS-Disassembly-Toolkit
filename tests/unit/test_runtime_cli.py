@@ -494,3 +494,36 @@ def test_runtime_checkpoint_parser_accepts_save_and_restore() -> None:
     assert restore.runtime_checkpoint_command == "restore"
     assert restore.session == Path("runtime/session-a")
     assert restore.name == "battle-ready"
+
+
+
+def test_runtime_scenario_and_resume_parsers_accept_paths() -> None:
+    parser = build_parser()
+
+    scenario = parser.parse_args(
+        [
+            "runtime",
+            "scenario",
+            "run",
+            "runtime/session-a",
+            "scenario.json",
+        ]
+    )
+    assert scenario.runtime_command == "scenario"
+    assert scenario.runtime_scenario_command == "run"
+    assert scenario.session == Path("runtime/session-a")
+    assert scenario.scenario == Path("scenario.json")
+
+    resume = parser.parse_args(
+        [
+            "runtime",
+            "session",
+            "resume",
+            "runtime/session-a",
+            "scenario.json",
+        ]
+    )
+    assert resume.runtime_command == "session"
+    assert resume.runtime_session_command == "resume"
+    assert resume.session == Path("runtime/session-a")
+    assert resume.scenario == Path("scenario.json")
