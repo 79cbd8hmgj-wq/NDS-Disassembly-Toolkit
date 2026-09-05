@@ -8,10 +8,9 @@ import signal
 import socket
 import subprocess
 import time
+from contextlib import suppress
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
-
 from nds_disassembly_toolkit.analysis.orchestration.model import (
     SESSION_SCHEMA_VERSION,
     EmulatorKind,
@@ -249,10 +248,8 @@ def spawn_owned_process(
         time.sleep(0.001)
 
     if start_identity is None or process_group is None:
-        try:
+        with suppress(OSError):
             process.terminate()
-        except OSError:
-            pass
         raise RuntimeLaunchError("managed emulator exited before process identity was established")
 
     running = replace(
@@ -263,10 +260,8 @@ def spawn_owned_process(
         process_start_identity=start_identity,
     )
     if not process_is_owned(running):
-        try:
+        with suppress(OSError):
             os.killpg(process_group, signal.SIGTERM)
-        except OSError:
-            pass
         raise RuntimeOwnershipError("managed emulator ownership could not be proven after launch")
     store_session(running)
     return running
@@ -304,14 +299,13 @@ def stop_owned_process(
             break
         time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
 
-    if _group_alive(record.process_group):
-        # Re-prove ownership before escalation. If the original process has already
-        # disappeared, never risk signalling a reused group id.
-        if process_is_owned(record):
-            os.killpg(record.process_group, signal.SIGKILL)
-            kill_deadline = time.monotonic() + 1.0
-            while time.monotonic() < kill_deadline and _group_alive(record.process_group):
-                time.sleep(0.01)
+    # Re-prove ownership before escalation. If the original process has already
+    # disappeared, never risk signalling a reused group id.
+    if _group_alive(record.process_group) and process_is_owned(record):
+        os.killpg(record.process_group, signal.SIGKILL)
+        kill_deadline = time.monotonic() + 1.0
+        while time.monotonic() < kill_deadline and _group_alive(record.process_group):
+            time.sleep(0.01)
 
     closed = replace(stopping, lifecycle=RuntimeLifecycleState.CLOSED)
     store_session(closed)
