@@ -10,6 +10,7 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
 )
 from nds_disassembly_toolkit.analysis.runtime.desmume import DeSmuMESession
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
+from nds_disassembly_toolkit.errors import RuntimeCheckpointError
 
 
 class DeSmuMEBackend:
@@ -58,3 +59,12 @@ class DeSmuMEBackend:
         timeout: float = 5.0,
     ) -> DeSmuMESession:
         return DeSmuMESession.connect(cpu=cpu, host=host, port=port, timeout=timeout)
+
+
+    def save_state(self, destination: Path) -> None:
+        del destination
+        raise RuntimeCheckpointError("DeSmuME managed save-state support is not available yet")
+
+    def load_state(self, source: Path) -> None:
+        del source
+        raise RuntimeCheckpointError("DeSmuME managed save-state support is not available yet")
