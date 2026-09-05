@@ -282,6 +282,22 @@ class RSPClient:
             consumed += chunk_length
         return b"".join(chunks)
 
+    def write_memory(self, address: int, data: bytes) -> None:
+        if address < 0:
+            raise ValueError("memory address must be non-negative")
+        if not data:
+            return
+        consumed = 0
+        while consumed < len(data):
+            chunk = data[consumed : consumed + _MEMORY_CHUNK_SIZE]
+            chunk_address = address + consumed
+            response = self.command(
+                f"M{chunk_address:x},{len(chunk):x}:{chunk.hex()}"
+            )
+            if response != "OK":
+                raise RuntimeProtocolError("runtime debugger rejected memory write")
+            consumed += len(chunk)
+
     @staticmethod
     def _validate_breakpoint(kind: int, address: int, length: int) -> None:
         if kind not in range(5):
