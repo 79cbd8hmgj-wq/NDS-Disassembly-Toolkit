@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import contextmanager
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -26,8 +27,17 @@ from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import Melon
 from nds_disassembly_toolkit.analysis.orchestration.process import (
     create_session,
     load_session,
+    process_is_owned,
     spawn_owned_process,
     stop_owned_process,
+)
+from nds_disassembly_toolkit.analysis.orchestration.scenario import (
+    CaptureTraceStep,
+    ScenarioDefinition,
+    ScenarioResult,
+    load_scenario,
+    resume_scenario,
+    run_scenario,
 )
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, LocationAnnotation
 from nds_disassembly_toolkit.analysis.runtime import (
@@ -57,6 +67,7 @@ from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     TraceSummary,
 )
 from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
+from nds_disassembly_toolkit.errors import RuntimeScenarioError
 
 _MAX_STEP_COUNT = 256
 _MAX_TRACE_STEPS = 100000
@@ -910,6 +921,179 @@ def _run_until(
     }
 
 
+
+
+def _scenario_result_json(result: ScenarioResult) -> dict[str, object]:
+    return {
+        "completed_steps": list(result.completed_steps),
+        "scenario_name": result.scenario_name,
+        "status": result.status,
+    }
+
+
+def _scenario_capabilities(definition: ScenarioDefinition) -> frozenset[str]:
+    required = set(definition.required_capabilities)
+    if definition.checkpoint is not None:
+        required.add("save_state")
+    for step in definition.steps:
+        kind = step.type
+        if kind in {"button", "button_sequence"}:
+            required.add("window_input")
+        elif kind in {"touch_tap", "touch_drag", "touch_flick"}:
+            required.add("touchscreen_input")
+        elif kind in {"checkpoint_save", "checkpoint_restore"}:
+            required.add("save_state")
+    return frozenset(required)
+
+
+class _ManagedScenarioContext:
+    def __init__(
+        self,
+        record: RuntimeSessionRecord,
+        backend: Any,
+        debugger: Any,
+    ) -> None:
+        self.record = record
+        self.backend = backend
+        self.debugger = debugger
+        self.session_root = record.session_root
+
+    def snapshot(self) -> RuntimeSnapshot:
+        return self.debugger.snapshot()
+
+    def read_memory(self, address: int, length: int) -> bytes:
+        return self.debugger.read_memory(address, length)
+
+    def write_memory(self, address: int, data: bytes) -> None:
+        self.debugger.write_memory(address, data)
+
+    def process_alive(self) -> bool:
+        return process_is_owned(self.record)
+
+    def debugger_reachable(self) -> bool:
+        return True
+
+    def window_ready(self) -> bool:
+        return self.record.window_id is not None and self.record.display is not None
+
+    def press_button(self, button: object) -> None:
+        del button
+        raise RuntimeScenarioError(
+            "managed button input is unavailable for this backend/session"
+        )
+
+    def touch_tap(self, point: object) -> None:
+        del point
+        raise RuntimeScenarioError(
+            "managed touchscreen input is unavailable for this backend/session"
+        )
+
+    def touch_drag(self, start: object, end: object, duration: float) -> None:
+        del start, end, duration
+        raise RuntimeScenarioError(
+            "managed touchscreen input is unavailable for this backend/session"
+        )
+
+    def touch_flick(self, start: object, end: object, duration: float) -> None:
+        del start, end, duration
+        raise RuntimeScenarioError(
+            "managed touchscreen input is unavailable for this backend/session"
+        )
+
+    def _checkpoint_context(self) -> CheckpointContext:
+        return CheckpointContext(
+            checkpoint_root=self.session_root / "checkpoints",
+            emulator=self.record.emulator,
+            rom_sha256=self.record.rom_sha256,
+            backend=self.backend,
+        )
+
+    def save_checkpoint(self, name: str) -> None:
+        create_checkpoint(self._checkpoint_context(), name)
+
+    def restore_checkpoint(self, name: str) -> None:
+        context = self._checkpoint_context()
+        restore_checkpoint(context, context.checkpoint_root / name)
+
+    def capture_snapshot(self, label: str | None) -> None:
+        resolved = "snapshot" if label is None else label
+        if Path(resolved).name != resolved or resolved in {"", ".", ".."}:
+            raise RuntimeScenarioError("snapshot label must be one safe path component")
+        snapshot = self.snapshot()
+        _write_json(
+            _snapshot_json(snapshot, None),
+            self.session_root / "traces" / f"{resolved}.json",
+        )
+
+    def capture_trace(self, step: CaptureTraceStep) -> None:
+        output = Path(step.output)
+        if output.is_absolute() or output.name != step.output or step.output in {"", ".", ".."}:
+            raise RuntimeScenarioError("trace output must be one safe path component")
+        regions = tuple(
+            TraceMemoryRegion(index, address, length)
+            for index, (address, length) in enumerate(step.memory)
+        )
+        if step.break_address is not None:
+            config = TraceCaptureConfig(
+                cpu=self.record.cpu,
+                mode=TraceCaptureMode.BREAKPOINT,
+                limit=1,
+                timeout=5.0,
+                condition_kind=BreakpointKind.CODE,
+                condition_address=step.break_address,
+                condition_length=4,
+                memory_regions=regions,
+                label=step.id,
+            )
+        else:
+            limit = step.steps if step.steps is not None else step.events
+            if limit is None:
+                raise RuntimeScenarioError("trace step is missing a bounded limit")
+            config = TraceCaptureConfig(
+                cpu=self.record.cpu,
+                mode=TraceCaptureMode.STEP,
+                limit=limit,
+                timeout=5.0,
+                memory_regions=regions,
+                label=step.id,
+            )
+        capture_trace(self.debugger, config, self.session_root / "traces" / step.output)
+
+
+@contextmanager
+def _scenario_context(
+    record: RuntimeSessionRecord,
+    definition: ScenarioDefinition,
+):
+    if record.emulator is not definition.backend:
+        raise RuntimeScenarioError("scenario backend does not match managed session")
+    if record.cpu is not definition.cpu:
+        raise RuntimeScenarioError("scenario CPU does not match managed session")
+    if not process_is_owned(record):
+        raise RuntimeScenarioError("managed emulator process ownership could not be proven")
+    backend = _managed_backend(record.emulator)
+    capabilities = backend.capabilities
+    for capability in sorted(_scenario_capabilities(definition)):
+        if not hasattr(capabilities, capability):
+            raise RuntimeScenarioError(f"unknown required capability: {capability}")
+        if not bool(getattr(capabilities, capability)):
+            raise RuntimeScenarioError(
+                f"managed backend does not provide required capability: {capability}"
+            )
+    debugger = backend.connect_debugger(
+        cpu=record.cpu,
+        host=record.debugger_host,
+        port=record.debugger_port,
+        timeout=5.0,
+    )
+    try:
+        yield _ManagedScenarioContext(record, backend, debugger)
+    finally:
+        close = getattr(debugger, "close", None)
+        if callable(close):
+            close()
+
+
 def run_runtime_command(arguments: argparse.Namespace) -> int:
     command = arguments.runtime_command
     if command is None:
@@ -965,7 +1149,17 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             stopped = stop_owned_process(record)
             _write_json(_session_json(stopped), arguments.output)
             return 0
-        raise ValueError("runtime session requires info or stop")
+        if arguments.runtime_session_command == "resume":
+            definition = load_scenario(arguments.scenario)
+            with _scenario_context(record, definition) as context:
+                result = resume_scenario(
+                    context,
+                    definition,
+                    journal_path=record.session_root / "journal.json",
+                )
+            _write_json(_scenario_result_json(result), arguments.output)
+            return 0
+        raise ValueError("runtime session requires info, stop, or resume")
 
     if command == "checkpoint":
         if arguments.runtime_checkpoint_command is None:
@@ -996,6 +1190,21 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             )
             return 0
         raise ValueError("runtime checkpoint requires save or restore")
+
+
+    if command == "scenario":
+        if arguments.runtime_scenario_command != "run":
+            raise ValueError("runtime scenario requires run")
+        record = load_session(arguments.session)
+        definition = load_scenario(arguments.scenario)
+        with _scenario_context(record, definition) as context:
+            result = run_scenario(
+                context,
+                definition,
+                journal_path=record.session_root / "journal.json",
+            )
+        _write_json(_scenario_result_json(result), arguments.output)
+        return 0
 
     if command == "trace":
         trace_command = arguments.runtime_trace_command
