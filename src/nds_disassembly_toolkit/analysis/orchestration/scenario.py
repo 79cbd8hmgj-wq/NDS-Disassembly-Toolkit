@@ -29,7 +29,7 @@ from nds_disassembly_toolkit.analysis.orchestration.predicates import (
     wait_for_predicate,
 )
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
-from nds_disassembly_toolkit.errors import RuntimeScenarioError
+from nds_disassembly_toolkit.errors import RuntimeRecoveryError, RuntimeScenarioError
 
 
 class JournalStepState(StrEnum):
@@ -889,17 +889,21 @@ def _conditions_for_step(
     return None, None, 5.0
 
 
-def run_scenario(
+def _run_journaled_steps(
     context: object,
     definition: ScenarioDefinition,
     *,
     journal_path: Path,
+    journal: ScenarioJournal,
+    start_index: int,
 ) -> ScenarioResult:
-    journal = _initial_journal(definition)
-    store_journal(journal_path, journal)
-    completed: list[str] = []
+    completed = [
+        entry.id
+        for entry in journal.steps[:start_index]
+        if entry.state is JournalStepState.COMPLETED
+    ]
 
-    for step in definition.steps:
+    for step in definition.steps[start_index:]:
         precondition, postcondition, timeout = _conditions_for_step(step)
         try:
             if precondition is not None:
@@ -942,4 +946,106 @@ def run_scenario(
         scenario_name=definition.name,
         completed_steps=tuple(completed),
         status="passed",
+    )
+
+
+def run_scenario(
+    context: object,
+    definition: ScenarioDefinition,
+    *,
+    journal_path: Path,
+) -> ScenarioResult:
+    journal = _initial_journal(definition)
+    store_journal(journal_path, journal)
+    return _run_journaled_steps(
+        context,
+        definition,
+        journal_path=journal_path,
+        journal=journal,
+        start_index=0,
+    )
+
+
+def _validate_resume_journal(
+    definition: ScenarioDefinition,
+    journal: ScenarioJournal,
+) -> None:
+    if journal.scenario_name != definition.name:
+        raise RuntimeRecoveryError("scenario journal identity does not match scenario")
+    expected_ids = tuple(step.id for step in definition.steps)
+    actual_ids = tuple(step.id for step in journal.steps)
+    if actual_ids != expected_ids:
+        raise RuntimeRecoveryError("scenario journal step identity does not match scenario")
+
+
+def _resume_anchor(
+    definition: ScenarioDefinition,
+    journal: ScenarioJournal,
+) -> tuple[int, str | None]:
+    first_incomplete = next(
+        (
+            index
+            for index, entry in enumerate(journal.steps)
+            if entry.state is not JournalStepState.COMPLETED
+        ),
+        len(journal.steps),
+    )
+    if first_incomplete == len(journal.steps):
+        return first_incomplete, None
+
+    for index in range(first_incomplete - 1, -1, -1):
+        step = definition.steps[index]
+        entry = journal.steps[index]
+        if (
+            entry.state is JournalStepState.COMPLETED
+            and isinstance(step, CheckpointSaveStep)
+        ):
+            return index + 1, step.name
+
+    if definition.checkpoint is not None:
+        return 0, definition.checkpoint
+    raise RuntimeRecoveryError(
+        "interrupted scenario has no safe checkpoint anchor for recovery"
+    )
+
+
+def resume_scenario(
+    context: object,
+    definition: ScenarioDefinition,
+    *,
+    journal_path: Path,
+) -> ScenarioResult:
+    journal = load_journal(journal_path)
+    _validate_resume_journal(definition, journal)
+    start_index, checkpoint = _resume_anchor(definition, journal)
+    if start_index == len(definition.steps):
+        return ScenarioResult(
+            scenario_name=definition.name,
+            completed_steps=tuple(step.id for step in definition.steps),
+            status="passed",
+        )
+
+    if checkpoint is None:
+        raise RuntimeRecoveryError("recovery requires a checkpoint anchor")
+    try:
+        _invoke_context(context, "restore_checkpoint", checkpoint)
+    except RuntimeScenarioError as exc:
+        raise RuntimeRecoveryError(
+            f"failed to restore safe recovery checkpoint {checkpoint}"
+        ) from exc
+
+    reset_steps = tuple(
+        entry
+        if index < start_index
+        else ScenarioJournalStep(entry.id, JournalStepState.PENDING)
+        for index, entry in enumerate(journal.steps)
+    )
+    journal = replace(journal, steps=reset_steps)
+    store_journal(journal_path, journal)
+    return _run_journaled_steps(
+        context,
+        definition,
+        journal_path=journal_path,
+        journal=journal,
+        start_index=start_index,
     )
