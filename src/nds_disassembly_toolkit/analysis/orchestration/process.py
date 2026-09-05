@@ -11,6 +11,7 @@ import time
 from contextlib import suppress
 from dataclasses import asdict, replace
 from pathlib import Path
+
 from nds_disassembly_toolkit.analysis.orchestration.model import (
     SESSION_SCHEMA_VERSION,
     EmulatorKind,
