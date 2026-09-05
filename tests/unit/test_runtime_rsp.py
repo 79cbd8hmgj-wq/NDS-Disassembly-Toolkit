@@ -190,3 +190,52 @@ def test_detach_closes_socket_after_ok() -> None:
     client.detach()
     assert sock.closed
     assert sock.sent[0] == _packet("D")
+
+
+def test_write_memory_uses_standard_rsp_packet() -> None:
+    sock = FakeSocket([b"+", _packet("OK")])
+    client = RSPClient(sock)
+
+    client.write_memory(0x02000100, b"\x01\xab")
+
+    assert sock.sent[0] == _packet("M2000100,2:01ab")
+
+
+def test_write_memory_chunks_large_payloads() -> None:
+    data = bytes(range(256)) * 5
+    sock = FakeSocket(
+        [
+            b"+",
+            _packet("OK"),
+            b"+",
+            _packet("OK"),
+        ]
+    )
+    client = RSPClient(sock)
+
+    client.write_memory(0x02000000, data)
+
+    packets = [item for item in sock.sent if item.startswith(b"$")]
+    assert packets == [
+        _packet(f"M2000000,400:{data[:0x400].hex()}"),
+        _packet(f"M2000400,100:{data[0x400:].hex()}"),
+    ]
+
+
+def test_write_memory_validates_address_and_empty_payload() -> None:
+    sock = FakeSocket([])
+    client = RSPClient(sock)
+
+    with pytest.raises(ValueError, match="address"):
+        client.write_memory(-1, b"x")
+
+    client.write_memory(0x02000000, b"")
+    assert sock.sent == []
+
+
+def test_write_memory_rejects_non_ok_response() -> None:
+    sock = FakeSocket([b"+", _packet("unsupported")])
+    client = RSPClient(sock)
+
+    with pytest.raises(RuntimeProtocolError, match="write"):
+        client.write_memory(0x02000000, b"\x01")
