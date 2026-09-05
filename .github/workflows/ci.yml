@@ -408,13 +408,18 @@ jobs:
         run: |
           set -euxo pipefail
           PORT=39491
-          xvfb-run -a \
+          GDBSTUB_DEBUG=1 xvfb-run -a \
             /tmp/desmume/desmume/src/frontend/posix/build/cli/desmume-cli \
             --arm9gdb "$PORT" --disable-sound --nojoy \
             /tmp/rsp-smoke.nds \
             >/tmp/desmume-smoke.out 2>/tmp/desmume-smoke.err &
           PID=$!
           trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true' EXIT
+          sleep 1
+          echo "---- listener diagnostics before attach ----"
+          ss -ltnp || true
+          cat /tmp/desmume-smoke.out || true
+          cat /tmp/desmume-smoke.err || true
           set +e
           python - <<'PY'
           import time
