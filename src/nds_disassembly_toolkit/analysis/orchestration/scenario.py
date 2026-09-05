@@ -353,15 +353,15 @@ def _predicate(value: object, *, name: str = "condition") -> PredicateDefinition
 
     if kind == "memory_masked_equals":
         _only_keys(payload, {"type", "address", "bytes", "mask"}, name=name)
-        expected = _hex_bytes(payload.get("bytes"), name="bytes")
-        mask = _hex_bytes(payload.get("mask"), name="mask")
-        if len(expected) != len(mask):
+        expected_bytes = _hex_bytes(payload.get("bytes"), name="bytes")
+        mask_bytes = _hex_bytes(payload.get("mask"), name="mask")
+        if len(expected_bytes) != len(mask_bytes):
             raise RuntimeScenarioError("memory mask length must match expected bytes")
         return PredicateDefinition(
             kind,
             address=_address(payload.get("address")),
-            expected=expected,
-            mask=mask,
+            expected=expected_bytes,
+            mask=mask_bytes,
         )
 
     if kind in {"all_of", "any_of"}:
