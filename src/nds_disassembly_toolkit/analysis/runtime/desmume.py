@@ -29,3 +29,10 @@ class DeSmuMESession(MelonDSSession):
                 client.close()
             raise
         return cls(cpu, client, capabilities)
+
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._client.close()
