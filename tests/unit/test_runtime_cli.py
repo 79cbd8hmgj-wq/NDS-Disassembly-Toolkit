@@ -473,3 +473,24 @@ def test_runtime_orchestration_parsers_accept_managed_commands() -> None:
 
     stop = parser.parse_args(["runtime", "session", "stop", "runtime/session-a"])
     assert stop.runtime_session_command == "stop"
+
+
+
+def test_runtime_checkpoint_parser_accepts_save_and_restore() -> None:
+    parser = build_parser()
+
+    save = parser.parse_args(
+        ["runtime", "checkpoint", "save", "runtime/session-a", "battle-ready"]
+    )
+    assert save.runtime_command == "checkpoint"
+    assert save.runtime_checkpoint_command == "save"
+    assert save.session == Path("runtime/session-a")
+    assert save.name == "battle-ready"
+
+    restore = parser.parse_args(
+        ["runtime", "checkpoint", "restore", "runtime/session-a", "battle-ready"]
+    )
+    assert restore.runtime_command == "checkpoint"
+    assert restore.runtime_checkpoint_command == "restore"
+    assert restore.session == Path("runtime/session-a")
+    assert restore.name == "battle-ready"
