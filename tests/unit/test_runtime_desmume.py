@@ -42,6 +42,9 @@ class FakeRSPClient:
         self.calls.append(("read_memory", address, length))
         return bytes(range(length))
 
+    def write_memory(self, address: int, data: bytes) -> None:
+        self.calls.append(("write_memory", address, data))
+
     def insert_breakpoint(self, kind: int, address: int, length: int) -> None:
         self.calls.append(("insert", kind, address, length))
 
@@ -126,3 +129,17 @@ def test_desmume_connect_closes_client_when_negotiation_fails(
         DeSmuMESession.connect(cpu=RuntimeCpu.ARM9, port=39003)
 
     assert ("close",) in client.calls
+
+
+
+def test_write_memory_delegates_to_rsp_client() -> None:
+    client = FakeRSPClient()
+    session = DeSmuMESession(
+        RuntimeCpu.ARM9,
+        client,
+        client.capabilities,
+    )
+
+    session.write_memory(0x02000100, b"\x01\xab")
+
+    assert client.calls[-1] == ("write_memory", 0x02000100, b"\x01\xab")
