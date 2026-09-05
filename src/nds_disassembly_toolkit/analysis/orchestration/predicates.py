@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol
 
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeSnapshot
