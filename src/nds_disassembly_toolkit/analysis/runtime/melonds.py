@@ -73,6 +73,8 @@ class _RSPClientLike(Protocol):
 
     def read_memory(self, address: int, length: int) -> bytes: ...
 
+    def write_memory(self, address: int, data: bytes) -> None: ...
+
     def insert_breakpoint(self, kind: int, address: int, length: int) -> None: ...
 
     def remove_breakpoint(self, kind: int, address: int, length: int) -> None: ...
@@ -187,6 +189,9 @@ class MelonDSSession:
 
     def read_memory(self, address: int, length: int) -> bytes:
         return self._client.read_memory(address, length)
+
+    def write_memory(self, address: int, data: bytes) -> None:
+        self._client.write_memory(address, data)
 
     def add_breakpoint(
         self,
