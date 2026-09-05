@@ -527,3 +527,147 @@ def test_runtime_scenario_and_resume_parsers_accept_paths() -> None:
     assert resume.runtime_session_command == "resume"
     assert resume.session == Path("runtime/session-a")
     assert resume.scenario == Path("scenario.json")
+
+
+
+def test_runtime_scenario_dispatch_uses_managed_session_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    record = type("Record", (), {"session_root": session_root})()
+    definition = object()
+    context = object()
+    calls: list[tuple[object, ...]] = []
+
+    class ManagedContext:
+        def __enter__(self) -> object:
+            return context
+
+        def __exit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            return None
+
+    monkeypatch.setattr(runtime_cli, "load_session", lambda path: record)
+    monkeypatch.setattr(runtime_cli, "load_scenario", lambda path: definition, raising=False)
+    monkeypatch.setattr(
+        runtime_cli,
+        "_scenario_context",
+        lambda loaded_record, loaded_definition: ManagedContext(),
+        raising=False,
+    )
+
+    def fake_run(
+        loaded_context: object,
+        loaded_definition: object,
+        *,
+        journal_path: Path,
+    ) -> object:
+        calls.append((loaded_context, loaded_definition, journal_path))
+        return type(
+            "Result",
+            (),
+            {
+                "scenario_name": "fixture",
+                "completed_steps": ("step-0000",),
+                "status": "passed",
+            },
+        )()
+
+    monkeypatch.setattr(runtime_cli, "run_scenario", fake_run, raising=False)
+
+    assert (
+        main(
+            [
+                "runtime",
+                "scenario",
+                "run",
+                str(session_root),
+                "scenario.json",
+            ]
+        )
+        == 0
+    )
+    assert calls == [(context, definition, session_root / "journal.json")]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "completed_steps": ["step-0000"],
+        "scenario_name": "fixture",
+        "status": "passed",
+    }
+
+
+def test_runtime_resume_dispatch_reuses_session_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    record = type("Record", (), {"session_root": session_root})()
+    definition = object()
+    context = object()
+    calls: list[tuple[object, ...]] = []
+
+    class ManagedContext:
+        def __enter__(self) -> object:
+            return context
+
+        def __exit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            return None
+
+    monkeypatch.setattr(runtime_cli, "load_session", lambda path: record)
+    monkeypatch.setattr(runtime_cli, "load_scenario", lambda path: definition, raising=False)
+    monkeypatch.setattr(
+        runtime_cli,
+        "_scenario_context",
+        lambda loaded_record, loaded_definition: ManagedContext(),
+        raising=False,
+    )
+
+    def fake_resume(
+        loaded_context: object,
+        loaded_definition: object,
+        *,
+        journal_path: Path,
+    ) -> object:
+        calls.append((loaded_context, loaded_definition, journal_path))
+        return type(
+            "Result",
+            (),
+            {
+                "scenario_name": "fixture",
+                "completed_steps": ("step-0000", "step-0001"),
+                "status": "passed",
+            },
+        )()
+
+    monkeypatch.setattr(runtime_cli, "resume_scenario", fake_resume, raising=False)
+
+    assert (
+        main(
+            [
+                "runtime",
+                "session",
+                "resume",
+                str(session_root),
+                "scenario.json",
+            ]
+        )
+        == 0
+    )
+    assert calls == [(context, definition, session_root / "journal.json")]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "passed"
+    assert payload["completed_steps"] == ["step-0000", "step-0001"]
