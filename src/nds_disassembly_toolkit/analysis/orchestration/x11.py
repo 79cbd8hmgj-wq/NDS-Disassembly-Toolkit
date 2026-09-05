@@ -10,6 +10,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from nds_disassembly_toolkit.analysis.orchestration.model import RuntimeSessionRecord
 from nds_disassembly_toolkit.analysis.orchestration.process import (
     _linux_process_executable,
     _linux_process_start_identity,
@@ -170,16 +171,16 @@ class X11HostDriver:
         except ValueError:
             return None
 
-    def _require_owned_window(self, session: object) -> str:
-        pid = getattr(session, "pid", None)
-        window_id = getattr(session, "window_id", None)
+    def _require_owned_window(self, session: RuntimeSessionRecord) -> str:
+        pid = session.pid
+        window_id = session.window_id
         if pid is None or window_id is None:
             raise RuntimeInputError("managed session has no owned emulator window")
         if self._window_pid(window_id) != pid:
             raise RuntimeInputError("window is not owned by the managed emulator process")
         return window_id
 
-    def send_key(self, session: object, host_key: str) -> None:
+    def send_key(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
         window_id = self._require_owned_window(session)
