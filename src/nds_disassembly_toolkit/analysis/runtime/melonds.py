@@ -193,6 +193,9 @@ class MelonDSSession:
     def write_memory(self, address: int, data: bytes) -> None:
         self._client.write_memory(address, data)
 
+    def write_memory(self, address: int, data: bytes) -> None:
+        self._client.write_memory(address, data)
+
     def add_breakpoint(
         self,
         kind: BreakpointKind,
