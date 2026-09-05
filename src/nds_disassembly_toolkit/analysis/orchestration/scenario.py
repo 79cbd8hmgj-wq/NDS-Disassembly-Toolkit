@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import TypeAlias
@@ -11,6 +11,21 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
     JOURNAL_SCHEMA_VERSION,
     SCENARIO_SCHEMA_VERSION,
     EmulatorKind,
+)
+from nds_disassembly_toolkit.analysis.orchestration.predicates import (
+    AllOf,
+    AnyOf,
+    DebuggerReachable,
+    MemoryEquals,
+    MemoryMaskedEquals,
+    PcEquals,
+    PcInRange,
+    ProcessAlive,
+    RegisterEquals,
+    RuntimeMemoryWrite,
+    WindowReady,
+    apply_guarded_write,
+    wait_for_predicate,
 )
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
 from nds_disassembly_toolkit.errors import RuntimeScenarioError
@@ -679,4 +694,251 @@ def load_journal(path: Path) -> ScenarioJournal:
         schema_version=JOURNAL_SCHEMA_VERSION,
         scenario_name=scenario_name,
         steps=tuple(steps),
+    )
+
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioResult:
+    scenario_name: str
+    completed_steps: tuple[str, ...]
+    status: str
+
+
+def _runtime_predicate(definition: PredicateDefinition):
+    kind = definition.type
+    if kind == "process_alive":
+        return ProcessAlive()
+    if kind == "debugger_reachable":
+        return DebuggerReachable()
+    if kind == "window_ready":
+        return WindowReady()
+    if kind == "pc_equals" and definition.address is not None:
+        return PcEquals(definition.address)
+    if (
+        kind == "pc_in_range"
+        and definition.start is not None
+        and definition.end is not None
+    ):
+        return PcInRange(definition.start, definition.end)
+    if (
+        kind == "register_equals"
+        and definition.register is not None
+        and isinstance(definition.expected, int)
+    ):
+        return RegisterEquals(definition.register, definition.expected)
+    if (
+        kind == "memory_equals"
+        and definition.address is not None
+        and isinstance(definition.expected, bytes)
+    ):
+        return MemoryEquals(definition.address, definition.expected)
+    if (
+        kind == "memory_masked_equals"
+        and definition.address is not None
+        and isinstance(definition.expected, bytes)
+        and definition.mask is not None
+    ):
+        return MemoryMaskedEquals(
+            definition.address,
+            expected=definition.expected,
+            mask=definition.mask,
+        )
+    if kind == "all_of":
+        return AllOf(tuple(_runtime_predicate(child) for child in definition.children))
+    if kind == "any_of":
+        return AnyOf(tuple(_runtime_predicate(child) for child in definition.children))
+    raise RuntimeScenarioError(f"invalid predicate definition for execution: {kind}")
+
+
+def _initial_journal(definition: ScenarioDefinition) -> ScenarioJournal:
+    return ScenarioJournal(
+        schema_version=JOURNAL_SCHEMA_VERSION,
+        scenario_name=definition.name,
+        steps=tuple(
+            ScenarioJournalStep(step.id, JournalStepState.PENDING)
+            for step in definition.steps
+        ),
+    )
+
+
+def _set_journal_step(
+    journal: ScenarioJournal,
+    step_id: str,
+    state: JournalStepState,
+    *,
+    error: str | None = None,
+) -> ScenarioJournal:
+    updated: list[ScenarioJournalStep] = []
+    found = False
+    for entry in journal.steps:
+        if entry.id == step_id:
+            updated.append(replace(entry, state=state, error=error))
+            found = True
+        else:
+            updated.append(entry)
+    if not found:
+        raise RuntimeScenarioError(f"scenario journal has no step {step_id}")
+    return replace(journal, steps=tuple(updated))
+
+
+def _invoke_context(context: object, name: str, *args: object) -> object:
+    method = getattr(context, name, None)
+    if not callable(method):
+        raise RuntimeScenarioError(f"scenario context does not provide {name}()")
+    return method(*args)
+
+
+def _wait_definition(
+    context: object,
+    definition: PredicateDefinition,
+    *,
+    timeout: float,
+    poll_interval: float = 0.05,
+) -> None:
+    wait_for_predicate(
+        _runtime_predicate(definition),
+        context,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
+
+
+def _execute_step(context: object, step: ScenarioStep) -> None:
+    if isinstance(step, WaitStep):
+        _wait_definition(
+            context,
+            step.condition,
+            timeout=step.timeout,
+            poll_interval=step.poll_interval,
+        )
+        return
+    if isinstance(step, ButtonStep):
+        _invoke_context(context, "press_button", step.button)
+        return
+    if isinstance(step, ButtonSequenceStep):
+        for button in step.buttons:
+            _invoke_context(context, "press_button", button)
+        return
+    if isinstance(step, TouchTapStep):
+        _invoke_context(context, "touch_tap", step.point)
+        return
+    if isinstance(step, TouchDragStep):
+        _invoke_context(
+            context,
+            "touch_drag",
+            step.start,
+            step.end,
+            step.duration_ms / 1000.0,
+        )
+        return
+    if isinstance(step, TouchFlickStep):
+        _invoke_context(
+            context,
+            "touch_flick",
+            step.start,
+            step.end,
+            step.duration_ms / 1000.0,
+        )
+        return
+    if isinstance(step, MemoryWriteStep):
+        apply_guarded_write(
+            context,  # type: ignore[arg-type]
+            RuntimeMemoryWrite(
+                address=step.address,
+                replacement=step.replacement,
+                expected_before=step.expected_before,
+                verify_after=step.verify_after,
+            ),
+        )
+        return
+    if isinstance(step, CaptureSnapshotStep):
+        _invoke_context(context, "capture_snapshot", step.label)
+        return
+    if isinstance(step, CaptureTraceStep):
+        _invoke_context(context, "capture_trace", step)
+        return
+    if isinstance(step, AssertStep):
+        _wait_definition(context, step.condition, timeout=step.timeout)
+        return
+    if isinstance(step, CheckpointSaveStep):
+        _invoke_context(context, "save_checkpoint", step.name)
+        return
+    if isinstance(step, CheckpointRestoreStep):
+        _invoke_context(context, "restore_checkpoint", step.name)
+        return
+    raise RuntimeScenarioError(f"unsupported scenario step at execution: {step!r}")
+
+
+def _conditions_for_step(
+    step: ScenarioStep,
+) -> tuple[PredicateDefinition | None, PredicateDefinition | None, float]:
+    if isinstance(
+        step,
+        (
+            ButtonStep,
+            ButtonSequenceStep,
+            TouchTapStep,
+            TouchDragStep,
+            TouchFlickStep,
+            MemoryWriteStep,
+        ),
+    ):
+        return step.precondition, step.postcondition, step.timeout
+    return None, None, 5.0
+
+
+def run_scenario(
+    context: object,
+    definition: ScenarioDefinition,
+    *,
+    journal_path: Path,
+) -> ScenarioResult:
+    journal = _initial_journal(definition)
+    store_journal(journal_path, journal)
+    completed: list[str] = []
+
+    for step in definition.steps:
+        precondition, postcondition, timeout = _conditions_for_step(step)
+        try:
+            if precondition is not None:
+                _wait_definition(context, precondition, timeout=timeout)
+
+            journal = _set_journal_step(
+                journal,
+                step.id,
+                JournalStepState.STARTED,
+            )
+            store_journal(journal_path, journal)
+
+            _execute_step(context, step)
+
+            if postcondition is not None:
+                _wait_definition(context, postcondition, timeout=timeout)
+
+            journal = _set_journal_step(
+                journal,
+                step.id,
+                JournalStepState.COMPLETED,
+            )
+            store_journal(journal_path, journal)
+            completed.append(step.id)
+        except BaseException as exc:
+            journal = _set_journal_step(
+                journal,
+                step.id,
+                JournalStepState.FAILED,
+                error=str(exc),
+            )
+            store_journal(journal_path, journal)
+            if isinstance(exc, RuntimeScenarioError):
+                raise
+            raise RuntimeScenarioError(
+                f"scenario step {step.id} failed: {exc}"
+            ) from exc
+
+    return ScenarioResult(
+        scenario_name=definition.name,
+        completed_steps=tuple(completed),
+        status="passed",
     )
