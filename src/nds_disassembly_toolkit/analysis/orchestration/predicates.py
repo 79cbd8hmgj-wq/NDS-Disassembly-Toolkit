@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass
-from typing import Protocol, cast
+from collections.abc import Callable
+from typing import Protocol
 
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeSnapshot
 from nds_disassembly_toolkit.errors import RuntimeScenarioError
@@ -222,21 +223,21 @@ def wait_for_predicate(
     *,
     timeout: float,
     poll_interval: float,
-    monotonic: callable = time.monotonic,
-    sleep: callable = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> PredicateObservation:
     if timeout <= 0:
         raise ValueError("predicate timeout must be positive")
     if poll_interval <= 0:
         raise ValueError("predicate poll interval must be positive")
 
-    start = cast(float, monotonic())
+    start = monotonic()
     last: PredicateObservation | None = None
     while True:
         last = predicate.evaluate(context)
         if last.satisfied:
             return last
-        now = cast(float, monotonic())
+        now = monotonic()
         elapsed = now - start
         if elapsed >= timeout:
             raise RuntimeScenarioError(
