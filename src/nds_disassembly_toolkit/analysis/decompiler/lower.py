@@ -133,7 +133,14 @@ def _reference_expression(
     context: _LoweringContext,
 ) -> DecompilerExpression:
     if reference.value is None:
-        return UnknownExpression("undefined SSA value", reference.source)
+        storage = reference.storage
+        if storage.kind is SSAStorageKind.REGISTER:
+            assert storage.register is not None
+            return RegisterExpression(storage.register, reference.source)
+        return VariableExpression(
+            _variable_for_storage(storage, context),
+            reference.source,
+        )
 
     entry_variable = context.entry_variables.get(reference.value)
     if entry_variable is not None:
