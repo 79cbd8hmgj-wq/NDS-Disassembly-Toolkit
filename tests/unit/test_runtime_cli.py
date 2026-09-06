@@ -1058,6 +1058,11 @@ def test_runtime_launch_desmume_owns_display_and_binds_window(
     monkeypatch.setattr(runtime_cli, "_managed_backend", lambda kind: Backend())
     monkeypatch.setattr(runtime_cli, "create_session", lambda *args, **kwargs: record)
     monkeypatch.setattr(runtime_cli, "start_x11_display", lambda: lease, raising=False)
+    monkeypatch.setattr(
+        runtime_cli,
+        "find_x11_helpers",
+        lambda: SimpleNamespace(xdotool=Path("/usr/bin/xdotool")),
+    )
     monkeypatch.setattr(runtime_cli, "X11HostDriver", Driver)
     monkeypatch.setattr(runtime_cli, "spawn_owned_process", fake_spawn)
     monkeypatch.setattr(
