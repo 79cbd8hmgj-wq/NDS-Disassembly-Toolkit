@@ -611,7 +611,7 @@ jobs:
           try:
               advanced_pc = session.step().pc
               assert advanced_pc != baseline_pc, (hex(baseline_pc), hex(advanced_pc))
-              session.insert_breakpoint(BreakpointKind.CODE, baseline_pc)
+              session.add_breakpoint(BreakpointKind.CODE, baseline_pc)
           finally:
               session.close()
           PY
@@ -665,7 +665,7 @@ jobs:
           try:
               dirty_pc = session.step().pc
               assert dirty_pc != baseline_pc
-              session.insert_breakpoint(BreakpointKind.CODE, baseline_pc)
+              session.add_breakpoint(BreakpointKind.CODE, baseline_pc)
           finally:
               session.close()
 
