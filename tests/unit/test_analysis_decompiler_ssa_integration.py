@@ -6,6 +6,8 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     BinaryExpression,
     BinaryOperator,
     BranchStatement,
+    CallExpression,
+    CallStatement,
     ConstantExpression,
     DecompiledBlock,
     DecompiledFunction,
@@ -308,3 +310,54 @@ def test_memory_side_effect_order_survives_lowering() -> None:
     assert isinstance(statements[1], MemoryWriteStatement)
     assert statements[0].value.value == 1  # type: ignore[union-attr]
     assert statements[1].value.value == 2  # type: ignore[union-attr]
+
+
+
+def test_unknown_call_clobber_lowers_back_to_register_storage() -> None:
+    source0 = _source(BASE)
+    call_source = _source(BASE + 4)
+    return_source = _source(BASE + 8)
+    function = DecompiledFunction(
+        "arm9",
+        BASE,
+        InstructionSet.ARM,
+        "call_return",
+        (),
+        (),
+        (
+            DecompiledBlock(
+                BASE,
+                InstructionSet.ARM,
+                (
+                    AssignmentStatement(
+                        RegisterExpression(Register.R0, source0),
+                        ConstantExpression(7, source0),
+                        source0,
+                    ),
+                    CallStatement(
+                        CallExpression(
+                            "unknown_call",
+                            0x02004000,
+                            InstructionSet.ARM,
+                            None,
+                            (),
+                            call_source,
+                        ),
+                        call_source,
+                    ),
+                    ReturnStatement(
+                        RegisterExpression(Register.R0, return_source),
+                        return_source,
+                    ),
+                ),
+                (),
+            ),
+        ),
+    )
+
+    lowered = _pipeline(function)
+    returned = lowered.blocks[0].statements[-1]
+
+    assert isinstance(returned, ReturnStatement)
+    assert isinstance(returned.value, RegisterExpression)
+    assert returned.value.register is Register.R0
