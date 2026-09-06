@@ -40,6 +40,7 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
 )
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     CaptureTraceStep,
+    ParameterReference,
     ScenarioDefinition,
     ScenarioResult,
     load_scenario,
@@ -1066,6 +1067,10 @@ class _ManagedScenarioContext:
         )
 
     def capture_trace(self, step: CaptureTraceStep) -> None:
+        if isinstance(step.output, ParameterReference):
+            raise RuntimeScenarioError(
+                "trace output parameter reference was not resolved"
+            )
         output = Path(step.output)
         if output.is_absolute() or output.name != step.output or step.output in {"", ".", ".."}:
             raise RuntimeScenarioError("trace output must be one safe path component")
