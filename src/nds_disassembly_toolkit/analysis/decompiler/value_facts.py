@@ -11,10 +11,10 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     UnknownExpression,
 )
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
-    SSACompareExpression,
     SSAAssignmentStatement,
     SSABinaryExpression,
     SSACallExpression,
+    SSACompareExpression,
     SSAExpression,
     SSAFunction,
     SSAMemoryReadExpression,
