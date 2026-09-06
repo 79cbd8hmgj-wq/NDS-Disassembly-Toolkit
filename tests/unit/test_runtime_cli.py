@@ -810,6 +810,8 @@ def test_managed_ui_scenario_requires_owned_window(
     monkeypatch.setattr(runtime_cli, "process_is_owned", lambda loaded: True)
     monkeypatch.setattr(runtime_cli, "_managed_backend", lambda kind: Backend())
 
-    with pytest.raises(RuntimeScenarioError, match="window"):
-        with runtime_cli._scenario_context(record, definition):
-            pass
+    with (
+        pytest.raises(RuntimeScenarioError, match="window"),
+        runtime_cli._scenario_context(record, definition),
+    ):
+        pass
