@@ -397,3 +397,66 @@ def test_x11_driver_discovers_window_by_owned_pid(
     monkeypatch.setattr(driver, "_window_pid", lambda window_id: 1234)
 
     assert driver.wait_for_window(session, timeout=0.01) == "4194305"
+
+
+
+def test_x11_driver_sends_explicit_owned_key_down_and_up(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from nds_disassembly_toolkit.analysis.orchestration import (
+        EmulatorKind,
+        RuntimeLifecycleState,
+        RuntimeSessionRecord,
+    )
+    from nds_disassembly_toolkit.analysis.orchestration.x11 import X11HostDriver
+    from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
+
+    session = RuntimeSessionRecord(
+        schema_version=1,
+        session_id="session-a",
+        lifecycle=RuntimeLifecycleState.RUNNING,
+        emulator=EmulatorKind.DESMUME,
+        emulator_executable=Path("/usr/bin/desmume-cli"),
+        emulator_sha256=None,
+        emulator_version=None,
+        rom_path=tmp_path / "game.nds",
+        rom_sha256="0" * 64,
+        cpu=RuntimeCpu.ARM9,
+        pid=1234,
+        process_group=1234,
+        process_start_identity="start",
+        debugger_host="127.0.0.1",
+        debugger_port=39001,
+        display=":104",
+        window_id="0xabc",
+        session_root=tmp_path,
+        last_completed_step=None,
+        last_completed_case=None,
+    )
+    calls: list[list[str]] = []
+    driver = X11HostDriver(xdotool=Path("/usr/bin/xdotool"))
+    monkeypatch.setattr(driver, "_window_pid", lambda window_id: 1234)
+
+    def fake_run(argv: list[str], **kwargs: object) -> object:
+        calls.append(list(argv))
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.orchestration.x11.subprocess.run",
+        fake_run,
+    )
+
+    driver.key_down(session, "Shift_R")
+    driver.key_down(session, "F1")
+    driver.key_up(session, "F1")
+    driver.key_up(session, "Shift_R")
+
+    assert calls == [
+        ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "Shift_R"],
+        ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "F1"],
+        ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "F1"],
+        ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "Shift_R"],
+    ]
