@@ -239,3 +239,18 @@ def test_write_memory_rejects_non_ok_response() -> None:
 
     with pytest.raises(RuntimeProtocolError, match="write"):
         client.write_memory(0x02000000, b"\x01")
+
+
+
+def test_continue_can_be_split_around_host_action() -> None:
+    sock = FakeSocket([b"+", _packet("S02")])
+    client = RSPClient(sock)
+
+    client.begin_continue()
+    assert sock.sent == [_packet("c")]
+
+    client.interrupt()
+    stopped = client.wait_for_stop()
+
+    assert stopped.signal == 2
+    assert sock.sent == [_packet("c"), b"\x03", b"+"]
