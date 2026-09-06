@@ -144,8 +144,11 @@ def _simplify_expression(
                 return left
             if expression.operator is BinaryOperator.BITWISE_XOR and right.value == 0:
                 return left
-            if expression.operator is BinaryOperator.BITWISE_AND and right.value == _MASK32:
-                return left
+            if expression.operator is BinaryOperator.BITWISE_AND:
+                if right.value == 0:
+                    return ConstantExpression(0, expression.source)
+                if right.value == _MASK32:
+                    return left
             if (
                 expression.operator
                 in {
@@ -171,6 +174,13 @@ def _simplify_expression(
                     ),
                     expression.source,
                 )
+
+        if (
+            expression.operator is BinaryOperator.BITWISE_AND
+            and isinstance(left, ConstantExpression)
+            and left.value == 0
+        ):
+            return ConstantExpression(0, expression.source)
 
         return SSABinaryExpression(
             expression.operator,
