@@ -147,7 +147,7 @@ class CaptureSnapshotStep:
 @dataclass(frozen=True, slots=True)
 class CaptureTraceStep:
     id: str
-    output: str | ParameterReference
+    output: str | ParameterReference | ParameterReference
     steps: int | None = None
     events: int | None = None
     break_address: int | None = None
