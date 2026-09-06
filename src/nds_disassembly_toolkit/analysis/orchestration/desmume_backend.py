@@ -30,6 +30,7 @@ class DeSmuMEBackend:
     def __init__(self) -> None:
         self._runtime_record: Any | None = None
         self._host_driver: Any | None = None
+        self._debugger: Any | None = None
 
     @property
     def kind(self) -> EmulatorKind:
@@ -99,19 +100,29 @@ class DeSmuMEBackend:
         return DeSmuMESession.connect(cpu=cpu, host=host, port=port, timeout=timeout)
 
 
-    def bind_managed_session(self, record: Any, host_driver: Any) -> None:
+    def bind_managed_session(
+        self,
+        record: Any,
+        host_driver: Any,
+        debugger: Any | None = None,
+    ) -> None:
         self._runtime_record = record
         self._host_driver = host_driver
+        self._debugger = debugger
 
-    def _bound_runtime(self) -> tuple[Any, Any]:
-        if self._runtime_record is None or self._host_driver is None:
+    def _bound_runtime(self) -> tuple[Any, Any, Any]:
+        if (
+            self._runtime_record is None
+            or self._host_driver is None
+            or self._debugger is None
+        ):
             raise RuntimeInputError(
                 "DeSmuME save-state operation requires a bound managed session"
             )
-        return self._runtime_record, self._host_driver
+        return self._runtime_record, self._host_driver, self._debugger
 
     def _slot_directory(self) -> Path:
-        record, _ = self._bound_runtime()
+        record, _, _ = self._bound_runtime()
         return Path(record.session_root) / "config" / "desmume"
 
     @staticmethod
@@ -161,7 +172,7 @@ class DeSmuMEBackend:
         shutil.copyfile(slot, destination)
 
     def load_state(self, source: Path) -> None:
-        record, host = self._bound_runtime()
+        record, host, debugger = self._bound_runtime()
         if not source.is_file():
             raise RuntimeCheckpointError("checkpoint state file does not exist")
         slot = self._trigger_slot_save()
