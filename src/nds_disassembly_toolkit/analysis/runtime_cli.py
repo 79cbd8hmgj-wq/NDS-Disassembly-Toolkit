@@ -1152,7 +1152,7 @@ def _owned_x11_driver(record: RuntimeSessionRecord) -> X11HostDriver:
     helpers = find_x11_helpers()
     if helpers.xdotool is None:
         raise RuntimeScenarioError(
-            "managed X11 operation requires xdotool"
+            "managed X11 window operation requires xdotool"
         )
     driver = X11HostDriver(
         xdotool=helpers.xdotool,
