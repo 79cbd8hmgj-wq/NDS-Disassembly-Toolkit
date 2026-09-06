@@ -183,9 +183,11 @@ class DeSmuMEBackend:
         temporary = slot.with_suffix(slot.suffix + ".tmp")
         shutil.copyfile(source, temporary)
         temporary.replace(slot)
-        debugger.run_host_action(
-            lambda: (host.send_key(record, "F1"), time.sleep(0.05))
-        )
+        def load_action() -> None:
+            host.send_key(record, "F1")
+            time.sleep(0.05)
+
+        debugger.run_host_action(load_action)
 
 
     def host_key_for(self, button: DSButton) -> str:
