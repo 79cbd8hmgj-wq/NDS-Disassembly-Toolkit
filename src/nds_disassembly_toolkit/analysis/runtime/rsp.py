@@ -354,8 +354,19 @@ class RSPClient:
 
         raise RuntimeProtocolError(f"runtime debugger returned invalid stop reply: {response}")
 
+    def begin_continue(self) -> None:
+        self._send(self._frame("c"))
+        if not self._no_ack:
+            self._read_ack()
+
+    def wait_for_stop(self) -> RSPStopReply:
+        response = self._receive_packet()
+        self._raise_peer_error(response)
+        return self._parse_stop(response)
+
     def continue_execution(self) -> RSPStopReply:
-        return self._parse_stop(self.command("c"))
+        self.begin_continue()
+        return self.wait_for_stop()
 
     def step(self) -> RSPStopReply:
         return self._parse_stop(self.command("s"))
