@@ -890,3 +890,541 @@ def _prototype_propagation_result(
         iterations=iterations,
         warnings=warnings,
     )
+
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypePropagationResult:
+    prototypes: tuple[FunctionPrototype, ...]
+    value_types: tuple[
+        tuple[FunctionTypeIdentity, SSAValue, RecoveredType],
+        ...,
+    ]
+    converged: bool
+    iterations: int
+    warnings: tuple[str, ...] = ()
+
+    def prototype_for(
+        self,
+        identity: FunctionTypeIdentity,
+    ) -> FunctionPrototype | None:
+        for prototype in self.prototypes:
+            if prototype.identity == identity:
+                return prototype
+        return None
+
+    def type_for_value(
+        self,
+        identity: FunctionTypeIdentity,
+        value: SSAValue,
+    ) -> RecoveredType | None:
+        for candidate_identity, candidate_value, recovered in self.value_types:
+            if candidate_identity == identity and candidate_value == value:
+                return recovered
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _CallConstraint:
+    caller: FunctionTypeIdentity
+    callee: FunctionTypeIdentity
+    statement: SSACallStatement
+
+
+_ValueKey = tuple[FunctionTypeIdentity, SSAValue]
+
+
+def _identity(function: SSAFunction) -> FunctionTypeIdentity:
+    return FunctionTypeIdentity(
+        function.component,
+        function.address,
+        function.instruction_set,
+    )
+
+
+def _identity_sort_key(
+    identity: FunctionTypeIdentity,
+) -> tuple[str, int, str]:
+    return (
+        identity.component,
+        identity.address,
+        identity.instruction_set.value,
+    )
+
+
+def _value_sort_key(value: SSAValue) -> tuple[object, ...]:
+    storage = value.storage
+    return (
+        storage.kind.value,
+        storage.register.value if storage.register is not None else "",
+        storage.stack_offset if storage.stack_offset is not None else 0,
+        storage.temporary_name or "",
+        value.version,
+    )
+
+
+def _value_key_sort_key(key: _ValueKey) -> tuple[object, ...]:
+    identity, value = key
+    return (*_identity_sort_key(identity), *_value_sort_key(value))
+
+
+def _resolve_call_identity(
+    call: SSACallStatement,
+    functions: dict[FunctionTypeIdentity, SSAFunction],
+) -> FunctionTypeIdentity | None:
+    expression = call.call
+    if expression.target_component is not None:
+        candidate = FunctionTypeIdentity(
+            expression.target_component,
+            expression.target_address,
+            expression.target_instruction_set,
+        )
+        return candidate if candidate in functions else None
+
+    matches = tuple(
+        identity
+        for identity in functions
+        if (
+            identity.address == expression.target_address
+            and identity.instruction_set
+            is expression.target_instruction_set
+        )
+    )
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _call_constraints(
+    functions: dict[FunctionTypeIdentity, SSAFunction],
+) -> tuple[_CallConstraint, ...]:
+    output: list[_CallConstraint] = []
+    for caller in sorted(functions, key=_identity_sort_key):
+        function = functions[caller]
+        for block in sorted(function.blocks, key=lambda item: item.address):
+            for statement in block.statements:
+                if not isinstance(statement, SSACallStatement):
+                    continue
+                callee = _resolve_call_identity(statement, functions)
+                if callee is None:
+                    continue
+                output.append(
+                    _CallConstraint(
+                        caller=caller,
+                        callee=callee,
+                        statement=statement,
+                    )
+                )
+    return tuple(output)
+
+
+def _expression_type_from_state(
+    expression: SSAExpression,
+    *,
+    identity: FunctionTypeIdentity,
+    value_types: dict[_ValueKey, RecoveredType],
+    blocked_values: set[_ValueKey],
+) -> RecoveredType:
+    if isinstance(expression, ConstantExpression):
+        return IntegerType(4, RecoveredSignedness.UNKNOWN)
+    if isinstance(expression, AddressExpression):
+        return PointerType(component=expression.component)
+    if isinstance(expression, SSAReferenceExpression):
+        if expression.value is None:
+            return UnknownType()
+        key = (identity, expression.value)
+        if key in blocked_values:
+            return UnknownType()
+        return value_types.get(key, UnknownType())
+    if isinstance(expression, SSAMemoryReadExpression):
+        return IntegerType(
+            expression.width,
+            RecoveredSignedness.UNKNOWN,
+        )
+    return UnknownType()
+
+
+def _parameter_type_from_state(
+    function: SSAFunction,
+    prototype: FunctionPrototype,
+    position: int,
+    value_types: dict[_ValueKey, RecoveredType],
+    blocked_values: set[_ValueKey],
+) -> RecoveredType:
+    if position < len(function.entry_definitions):
+        key = (prototype.identity, function.entry_definitions[position])
+        if key in blocked_values:
+            return UnknownType()
+        return value_types.get(
+            key,
+            prototype.parameters[position].recovered_type,
+        )
+    return prototype.parameters[position].recovered_type
+
+
+def _with_final_types(
+    function: SSAFunction,
+    base: FunctionPrototype,
+    *,
+    value_types: dict[_ValueKey, RecoveredType],
+    blocked_values: set[_ValueKey],
+    return_type: RecoveredType,
+    conflicts: set[str],
+) -> FunctionPrototype:
+    parameters = tuple(
+        replace(
+            parameter,
+            recovered_type=_parameter_type_from_state(
+                function,
+                base,
+                parameter.position,
+                value_types,
+                blocked_values,
+            ),
+        )
+        for parameter in base.parameters
+    )
+    return replace(
+        base,
+        parameters=parameters,
+        return_type=return_type,
+        conflicts=tuple(sorted(conflicts)),
+    )
+
+
+def _record_merge(
+    left: RecoveredType,
+    right: RecoveredType,
+) -> tuple[RecoveredType, tuple[str, ...]]:
+    return merge_recovered_types(left, right)
+
+
+def propagate_prototypes(
+    functions: tuple[SSAFunction, ...],
+    environments: tuple[LocalTypeEnvironment, ...],
+    *,
+    iteration_cap: int = 32,
+) -> PrototypePropagationResult:
+    if iteration_cap <= 0:
+        raise ValueError("prototype propagation iteration cap must be positive")
+    if len(functions) != len(environments):
+        raise ValueError("functions and local type environments must align")
+
+    function_map: dict[FunctionTypeIdentity, SSAFunction] = {}
+    environment_map: dict[FunctionTypeIdentity, LocalTypeEnvironment] = {}
+    base_prototypes: dict[FunctionTypeIdentity, FunctionPrototype] = {}
+
+    for function, environment in zip(
+        functions,
+        environments,
+        strict=True,
+    ):
+        identity = _identity(function)
+        if identity in function_map:
+            raise ValueError("duplicate function prototype identity")
+        function_map[identity] = function
+        environment_map[identity] = environment
+        base_prototypes[identity] = recover_local_prototype(
+            function,
+            environment,
+        )
+
+    value_types: dict[_ValueKey, RecoveredType] = {}
+    for identity in sorted(function_map, key=_identity_sort_key):
+        environment = environment_map[identity]
+        function = function_map[identity]
+        prototype = base_prototypes[identity]
+
+        for binding in environment.value_bindings:
+            value_types[(identity, binding.value)] = binding.recovered_type
+
+        for parameter in prototype.parameters:
+            if parameter.position >= len(function.entry_definitions):
+                continue
+            key = (
+                identity,
+                function.entry_definitions[parameter.position],
+            )
+            value_types.setdefault(key, parameter.recovered_type)
+
+        for block in function.blocks:
+            for statement in block.statements:
+                if (
+                    isinstance(statement, SSACallStatement)
+                    and statement.result is not None
+                ):
+                    value_types.setdefault(
+                        (identity, statement.result),
+                        UnknownType(),
+                    )
+
+    return_types = {
+        identity: prototype.return_type
+        for identity, prototype in base_prototypes.items()
+    }
+    conflicts = {
+        identity: set(prototype.conflicts)
+        for identity, prototype in base_prototypes.items()
+    }
+    blocked_values: set[_ValueKey] = set()
+    blocked_returns: set[FunctionTypeIdentity] = set()
+    calls = _call_constraints(function_map)
+
+    return_refs: dict[
+        FunctionTypeIdentity,
+        tuple[SSAValue, ...],
+    ] = {}
+    for identity, function in function_map.items():
+        values: list[SSAValue] = []
+        for block in sorted(function.blocks, key=lambda item: item.address):
+            for statement in block.statements:
+                if (
+                    isinstance(statement, SSAReturnStatement)
+                    and isinstance(
+                        statement.value,
+                        SSAReferenceExpression,
+                    )
+                    and statement.value.value is not None
+                ):
+                    values.append(statement.value.value)
+        return_refs[identity] = tuple(values)
+
+    for iteration in range(1, iteration_cap + 1):
+        next_value_types = dict(value_types)
+        next_return_types = dict(return_types)
+        next_conflicts = {
+            identity: set(items)
+            for identity, items in conflicts.items()
+        }
+        next_blocked_values = set(blocked_values)
+        next_blocked_returns = set(blocked_returns)
+
+        # Keep a function return type linked to the SSA values returned by the
+        # function. This is what lets a call result returned directly by its
+        # caller carry a callee type through a transitive chain.
+        for identity in sorted(function_map, key=_identity_sort_key):
+            if identity in blocked_returns:
+                next_return_types[identity] = UnknownType()
+                continue
+            for value in return_refs[identity]:
+                value_key = (identity, value)
+                if value_key in blocked_values:
+                    continue
+                merged, merge_conflicts = _record_merge(
+                    return_types[identity],
+                    value_types.get(value_key, UnknownType()),
+                )
+                if merge_conflicts:
+                    next_return_types[identity] = UnknownType()
+                    next_value_types[value_key] = UnknownType()
+                    next_blocked_returns.add(identity)
+                    next_blocked_values.add(value_key)
+                    next_conflicts[identity].update(merge_conflicts)
+                    break
+                next_return_types[identity] = merged
+                next_value_types[value_key] = merged
+
+        for constraint in calls:
+            caller_function = function_map[constraint.caller]
+            callee_function = function_map[constraint.callee]
+            callee_prototype = base_prototypes[constraint.callee]
+
+            for position, argument in enumerate(
+                constraint.statement.call.arguments
+            ):
+                if position >= len(callee_prototype.parameters):
+                    break
+
+                caller_value_key: _ValueKey | None = None
+                if (
+                    isinstance(argument, SSAReferenceExpression)
+                    and argument.value is not None
+                ):
+                    caller_value_key = (
+                        constraint.caller,
+                        argument.value,
+                    )
+
+                callee_value_key: _ValueKey | None = None
+                if position < len(callee_function.entry_definitions):
+                    callee_value_key = (
+                        constraint.callee,
+                        callee_function.entry_definitions[position],
+                    )
+
+                caller_type = _expression_type_from_state(
+                    argument,
+                    identity=constraint.caller,
+                    value_types=value_types,
+                    blocked_values=blocked_values,
+                )
+                callee_type = (
+                    _parameter_type_from_state(
+                        callee_function,
+                        callee_prototype,
+                        position,
+                        value_types,
+                        blocked_values,
+                    )
+                )
+
+                merged, merge_conflicts = _record_merge(
+                    caller_type,
+                    callee_type,
+                )
+                if merge_conflicts:
+                    if caller_value_key is not None:
+                        next_value_types[caller_value_key] = UnknownType()
+                        next_blocked_values.add(caller_value_key)
+                    if callee_value_key is not None:
+                        next_value_types[callee_value_key] = UnknownType()
+                        next_blocked_values.add(callee_value_key)
+                    next_conflicts[constraint.caller].update(
+                        merge_conflicts
+                    )
+                    next_conflicts[constraint.callee].update(
+                        merge_conflicts
+                    )
+                    continue
+
+                if (
+                    caller_value_key is not None
+                    and caller_value_key not in blocked_values
+                ):
+                    next_value_types[caller_value_key] = merged
+                if (
+                    callee_value_key is not None
+                    and callee_value_key not in blocked_values
+                ):
+                    next_value_types[callee_value_key] = merged
+
+            result = constraint.statement.result
+            if result is None:
+                continue
+            result_key = (constraint.caller, result)
+            callee_return = (
+                UnknownType()
+                if constraint.callee in blocked_returns
+                else return_types[constraint.callee]
+            )
+            result_type = (
+                UnknownType()
+                if result_key in blocked_values
+                else value_types.get(result_key, UnknownType())
+            )
+
+            if isinstance(callee_return, VoidType):
+                if not isinstance(result_type, UnknownType):
+                    conflict = "call result conflict: void callee used as value"
+                    next_value_types[result_key] = UnknownType()
+                    next_blocked_values.add(result_key)
+                    next_blocked_returns.add(constraint.callee)
+                    next_conflicts[constraint.caller].add(conflict)
+                    next_conflicts[constraint.callee].add(conflict)
+                continue
+
+            merged, merge_conflicts = _record_merge(
+                callee_return,
+                result_type,
+            )
+            if merge_conflicts:
+                next_value_types[result_key] = UnknownType()
+                next_return_types[constraint.callee] = UnknownType()
+                next_blocked_values.add(result_key)
+                next_blocked_returns.add(constraint.callee)
+                next_conflicts[constraint.caller].update(
+                    merge_conflicts
+                )
+                next_conflicts[constraint.callee].update(
+                    merge_conflicts
+                )
+                continue
+
+            if result_key not in blocked_values:
+                next_value_types[result_key] = merged
+            if constraint.callee not in blocked_returns:
+                next_return_types[constraint.callee] = merged
+
+        unchanged = (
+            next_value_types == value_types
+            and next_return_types == return_types
+            and next_conflicts == conflicts
+            and next_blocked_values == blocked_values
+            and next_blocked_returns == blocked_returns
+        )
+        value_types = next_value_types
+        return_types = next_return_types
+        conflicts = next_conflicts
+        blocked_values = next_blocked_values
+        blocked_returns = next_blocked_returns
+
+        if unchanged:
+            return _prototype_propagation_result(
+                function_map,
+                base_prototypes,
+                value_types,
+                blocked_values,
+                return_types,
+                conflicts,
+                converged=True,
+                iterations=iteration,
+            )
+
+    return _prototype_propagation_result(
+        function_map,
+        base_prototypes,
+        value_types,
+        blocked_values,
+        return_types,
+        conflicts,
+        converged=False,
+        iterations=iteration_cap,
+        warnings=(
+            f"prototype propagation reached iteration cap {iteration_cap}",
+        ),
+    )
+
+
+def _prototype_propagation_result(
+    functions: dict[FunctionTypeIdentity, SSAFunction],
+    base_prototypes: dict[FunctionTypeIdentity, FunctionPrototype],
+    value_types: dict[_ValueKey, RecoveredType],
+    blocked_values: set[_ValueKey],
+    return_types: dict[FunctionTypeIdentity, RecoveredType],
+    conflicts: dict[FunctionTypeIdentity, set[str]],
+    *,
+    converged: bool,
+    iterations: int,
+    warnings: tuple[str, ...] = (),
+) -> PrototypePropagationResult:
+    prototypes = tuple(
+        _with_final_types(
+            functions[identity],
+            base_prototypes[identity],
+            value_types=value_types,
+            blocked_values=blocked_values,
+            return_type=return_types[identity],
+            conflicts=conflicts[identity],
+        )
+        for identity in sorted(functions, key=_identity_sort_key)
+    )
+    records = tuple(
+        (
+            identity,
+            value,
+            (
+                UnknownType()
+                if key in blocked_values
+                else value_types[key]
+            ),
+        )
+        for key in sorted(value_types, key=_value_key_sort_key)
+        for identity, value in (key,)
+    )
+    return PrototypePropagationResult(
+        prototypes=prototypes,
+        value_types=records,
+        converged=converged,
+        iterations=iterations,
+        warnings=warnings,
+    )
