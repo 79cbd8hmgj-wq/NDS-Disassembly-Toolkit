@@ -26,6 +26,9 @@ class X11Helpers:
     xdotool: Path | None
 
 
+_DISPLAY_LEASE_FILENAME = "x11-display.json"
+
+
 @dataclass(frozen=True, slots=True)
 class X11DisplayLease:
     display_number: int
