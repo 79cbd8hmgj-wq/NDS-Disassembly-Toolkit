@@ -408,6 +408,7 @@ class SSAFunction:
     parameters: tuple[DecompilerVariable, ...]
     locals: tuple[DecompilerVariable, ...]
     blocks: tuple[SSABlock, ...]
+    entry_definitions: tuple[SSAValue, ...] = ()
     warnings: tuple[str, ...] = ()
 
     def block(self, address: int) -> SSABlock:
@@ -415,6 +416,50 @@ class SSAFunction:
             if block.address == address:
                 return block
         raise KeyError(f"SSA block 0x{address:08X} does not exist")
+
+
+class SSADefinitionKind(StrEnum):
+    ENTRY = "entry"
+    PHI = "phi"
+    ASSIGNMENT = "assignment"
+
+
+@dataclass(frozen=True, slots=True)
+class SSADefinition:
+    value: SSAValue
+    kind: SSADefinitionKind
+    block_address: int
+    statement_index: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SSAUse:
+    value: SSAValue
+    block_address: int
+    statement_index: int | None
+    phi_predecessor_address: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DefUseIndex:
+    definitions: tuple[SSADefinition, ...]
+    use_records: tuple[SSAUse, ...]
+    phi_records: tuple[tuple[int, PhiNode], ...]
+
+    def definition(self, value: SSAValue) -> SSADefinition | None:
+        for definition in self.definitions:
+            if definition.value == value:
+                return definition
+        return None
+
+    def uses(self, value: SSAValue) -> tuple[SSAUse, ...]:
+        return tuple(use for use in self.use_records if use.value == value)
+
+    def phi_for(self, storage: SSAStorage, block_address: int) -> PhiNode | None:
+        for address, phi in self.phi_records:
+            if address == block_address and phi.output.storage == storage:
+                return phi
+        return None
 
 
 def _storage_sort_key(storage: SSAStorage) -> tuple[int, str]:
@@ -637,6 +682,17 @@ def build_ssa_function(function: DecompiledFunction) -> SSAFunction:
 
     counters: dict[SSAStorage, int] = {}
     stacks: dict[SSAStorage, list[SSAValue]] = {}
+    entry_definitions: list[SSAValue] = []
+    entry_storages: set[SSAStorage] = set()
+    for parameter in function.parameters:
+        storage = _storage_for_variable(parameter)
+        if storage in entry_storages:
+            raise ValueError("function parameters contain duplicate SSA storage")
+        entry_storages.add(storage)
+        value = _new_value(storage, (), counters)
+        stacks.setdefault(storage, []).append(value)
+        entry_definitions.append(value)
+
     renamed_statements: dict[int, tuple[SSAStatement, ...]] = {}
     phi_outputs: dict[tuple[int, SSAStorage], SSAValue] = {}
     phi_inputs: dict[
@@ -741,5 +797,116 @@ def build_ssa_function(function: DecompiledFunction) -> SSAFunction:
         parameters=function.parameters,
         locals=function.locals,
         blocks=tuple(result_blocks),
+        entry_definitions=tuple(entry_definitions),
         warnings=function.warnings,
+    )
+
+
+
+def _expression_values(expression: SSAExpression) -> tuple[SSAValue, ...]:
+    values: list[SSAValue] = []
+
+    def visit(current: SSAExpression) -> None:
+        if isinstance(current, SSAReferenceExpression):
+            if current.value is not None:
+                values.append(current.value)
+            return
+        if isinstance(current, SSAUnaryExpression):
+            visit(current.operand)
+            return
+        if isinstance(current, SSABinaryExpression | SSACompareExpression):
+            visit(current.left)
+            visit(current.right)
+            return
+        if isinstance(current, SSAMemoryReadExpression):
+            visit(current.address)
+            return
+        if isinstance(current, SSACallExpression):
+            for argument in current.arguments:
+                visit(argument)
+
+    visit(expression)
+    return tuple(values)
+
+
+def _statement_values(statement: SSAStatement) -> tuple[SSAValue, ...]:
+    if isinstance(statement, SSAAssignmentStatement):
+        return _expression_values(statement.value)
+    if isinstance(statement, SSAMemoryWriteStatement):
+        return (
+            *_expression_values(statement.address),
+            *_expression_values(statement.value),
+        )
+    if isinstance(statement, SSACallStatement):
+        return _expression_values(statement.call)
+    if isinstance(statement, SSAReturnStatement):
+        return () if statement.value is None else _expression_values(statement.value)
+    if isinstance(statement, SSABranchStatement):
+        return (
+            ()
+            if statement.condition is None
+            else _expression_values(statement.condition)
+        )
+    return ()
+
+
+def build_def_use_index(function: SSAFunction) -> DefUseIndex:
+    definitions: list[SSADefinition] = [
+        SSADefinition(
+            value=value,
+            kind=SSADefinitionKind.ENTRY,
+            block_address=function.address,
+            statement_index=None,
+        )
+        for value in function.entry_definitions
+    ]
+    uses: list[SSAUse] = []
+    phi_records: list[tuple[int, PhiNode]] = []
+
+    for block in function.blocks:
+        for phi in block.phis:
+            definitions.append(
+                SSADefinition(
+                    value=phi.output,
+                    kind=SSADefinitionKind.PHI,
+                    block_address=block.address,
+                    statement_index=None,
+                )
+            )
+            phi_records.append((block.address, phi))
+            for incoming in phi.inputs:
+                if incoming.value is None:
+                    continue
+                uses.append(
+                    SSAUse(
+                        value=incoming.value,
+                        block_address=block.address,
+                        statement_index=None,
+                        phi_predecessor_address=incoming.predecessor_address,
+                    )
+                )
+
+        for statement_index, statement in enumerate(block.statements):
+            if isinstance(statement, SSAAssignmentStatement):
+                definitions.append(
+                    SSADefinition(
+                        value=statement.target,
+                        kind=SSADefinitionKind.ASSIGNMENT,
+                        block_address=block.address,
+                        statement_index=statement_index,
+                    )
+                )
+            for value in _statement_values(statement):
+                uses.append(
+                    SSAUse(
+                        value=value,
+                        block_address=block.address,
+                        statement_index=statement_index,
+                    )
+                )
+
+    return DefUseIndex(
+        definitions=tuple(definitions),
+        use_records=tuple(uses),
+        phi_records=tuple(phi_records),
     )
