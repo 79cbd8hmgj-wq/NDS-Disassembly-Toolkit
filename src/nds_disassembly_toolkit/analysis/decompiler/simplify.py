@@ -237,7 +237,11 @@ def _rewrite_statement(
         call = _simplify_expression(statement.call, replacements)
         if not isinstance(call, SSACallExpression):
             raise TypeError("call statement simplification lost its call expression")
-        return SSACallStatement(call, statement.source)
+        return SSACallStatement(
+            call,
+            statement.source,
+            statement.result,
+        )
     if isinstance(statement, SSAReturnStatement):
         return SSAReturnStatement(
             (
