@@ -15,19 +15,19 @@ from nds_disassembly_toolkit.analysis.runtime import (
 from nds_disassembly_toolkit.errors import (
     NdsToolkitError,
     RuntimeAnalysisError,
-    RuntimeConnectionError,
-    RuntimeProtocolError,
-    RuntimeTargetStateError,
-    RuntimeTimeoutError,
     RuntimeCheckpointError,
+    RuntimeConnectionError,
     RuntimeDisplayError,
     RuntimeEnvironmentError,
     RuntimeInputError,
     RuntimeLaunchError,
     RuntimeOrchestrationError,
     RuntimeOwnershipError,
+    RuntimeProtocolError,
     RuntimeRecoveryError,
     RuntimeScenarioError,
+    RuntimeTargetStateError,
+    RuntimeTimeoutError,
 )
 
 
