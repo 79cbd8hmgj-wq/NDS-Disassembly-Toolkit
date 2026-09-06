@@ -112,7 +112,7 @@ class DeSmuMEBackend:
 
     def _slot_directory(self) -> Path:
         record, _ = self._bound_runtime()
-        return record.session_root / "config" / "desmume"
+        return Path(record.session_root) / "config" / "desmume"
 
     @staticmethod
     def _slot_snapshot(directory: Path) -> dict[Path, tuple[int, int]]:
