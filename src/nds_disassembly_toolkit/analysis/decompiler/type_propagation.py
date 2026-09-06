@@ -474,6 +474,8 @@ class RenderTypeContext:
     parameter_types: tuple[tuple[str, str], ...] = ()
     local_types: tuple[tuple[str, str], ...] = ()
     structures: tuple[RenderStructType, ...] = ()
+    forward_structs: tuple[str, ...] = ()
+    return_type: str | None = None
 
     def parameter_type(self, variable_name: str) -> str | None:
         for name, type_name in self.parameter_types:
