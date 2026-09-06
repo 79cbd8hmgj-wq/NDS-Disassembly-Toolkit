@@ -433,3 +433,59 @@ nds-toolkit project investigate game.ndsre \
 Candidate identity remains `(component, runtime_address, instruction_set)`. Ambiguous component-less call targets are not guessed, and string/xref evidence is suppressed when overlapping components persist different strings at the same numeric runtime address. Optional pseudo-C is delegated to the Phase 7I decompiler only after deterministic ranking and `--top` truncation, so it is context rather than a hidden score source.
 
 `project investigate` opens `.ndsre` read-only and reads `.ndstrace` files offline. Phase 7J introduces no persistence migration, debugger connection, new decoder/runtime engine, or new third-party dependency. See `docs/investigation.md` for selector semantics, score weights, output formats, and examples.
+
+
+## Phase 7K SSA and decompiler IR v2
+
+Phase 7K refines the existing Phase 7I decompiler internally without changing the public `decompile_function(...)` or `project decompile` workflow.
+
+The on-demand decompiler pipeline is now:
+
+```text
+persisted CFG + typed semantics + FunctionDataFlow
+        ↓
+Phase 7I source-like lift
+        ↓
+promotable-storage normalization
+        ↓
+deterministic SSA
+├── dominators / immediate dominators
+├── dominance frontiers
+├── PHI placement
+├── register/stack/temp versioning
+└── def-use indexing
+        ↓
+partial ValueFacts
+        ↓
+fixed-point simplification
+        ↓
+SSA lowering
+        ↓
+existing structurer + renderer
+        ↓
+pseudo-C
+```
+
+Only exact storage identities are promoted: toolkit registers, exact recovered stack slots/arguments, and deterministic decompiler temporaries. Arbitrary memory reads/writes are **not** converted to memory SSA. Memory writes, calls, unsupported statements, and other side effects remain explicit.
+
+The initial value-fact layer tracks conservative 32-bit information including known-zero/known-one masks, derived signed/unsigned bounds, proven nonzero state, alignment, and component-aware proven addresses. A naked numeric constant is not guessed to belong to an overlay.
+
+The simplifier repeatedly applies a stable pass order for constant folding, copy/safe-expression propagation, PHI cleanup, exact algebraic identities, and dead pure-definition removal. It stops at a defensive iteration cap and reports non-convergence rather than making an unsound transformation.
+
+Example machine-register churn such as:
+
+```text
+r1 = arg0
+r2 = r1 + 4
+return r2
+```
+
+can now lower to pseudo-C equivalent to:
+
+```c
+return arg0 + 4;
+```
+
+while conflicting PHIs, calls, memory effects, unsupported operations, and ambiguous overlay ownership remain conservative.
+
+Phase 7K is derived on demand. It does not change the `.ndsre` schema, persist SSA, introduce another decoder, or add Ghidra/LLVM/RetDec/Miasm/angr as runtime dependencies.
