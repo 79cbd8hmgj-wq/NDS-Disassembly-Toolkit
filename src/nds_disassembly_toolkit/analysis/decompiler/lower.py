@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from nds_disassembly_toolkit.analysis.decompiler.access_paths import (
+    normalize_access_path,
+)
 from nds_disassembly_toolkit.analysis.decompiler.model import (
     AddressExpression,
     AssignmentStatement,
@@ -27,7 +30,6 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     UnknownStatement,
     VariableExpression,
 )
-from nds_disassembly_toolkit.analysis.decompiler.access_paths import normalize_access_path
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAAssignmentStatement,
     SSABinaryExpression,
@@ -199,10 +201,10 @@ def _typed_field_address(
             or candidate.conflicts
         ):
             continue
-        for field in candidate.fields:
+        for candidate_field in candidate.fields:
             if (
-                field.offset != path.byte_offset
-                or field.width_bytes != width
+                candidate_field.offset != path.byte_offset
+                or candidate_field.width_bytes != width
             ):
                 continue
             base = _reference_expression(
@@ -216,9 +218,9 @@ def _typed_field_address(
             return FieldAddressExpression(
                 base=base,
                 structure_name=candidate.name,
-                field_name=field.name,
-                offset=field.offset,
-                width=field.width_bytes,
+                field_name=candidate_field.name,
+                offset=candidate_field.offset,
+                width=candidate_field.width_bytes,
                 source=source,
             )
     return None
