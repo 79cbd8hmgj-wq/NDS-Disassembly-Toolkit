@@ -252,11 +252,16 @@ def _rewrite_statement(
 def _replacement_phi_value(
     value: SSAValue | None,
     replacements: dict[SSAValue, SSAExpression],
+    expected_storage: object,
 ) -> SSAValue | None:
     if value is None:
         return None
     replacement = _resolve_replacement(value, replacements)
-    if isinstance(replacement, SSAReferenceExpression):
+    if (
+        isinstance(replacement, SSAReferenceExpression)
+        and replacement.value is not None
+        and replacement.value.storage == expected_storage
+    ):
         return replacement.value
     return value
 
@@ -275,7 +280,11 @@ def _rewrite_function(
                 tuple(
                     PhiInput(
                         item.predecessor_address,
-                        _replacement_phi_value(item.value, replacements),
+                        _replacement_phi_value(
+                            item.value,
+                            replacements,
+                            phi.output.storage,
+                        ),
                     )
                     for item in phi.inputs
                 ),
@@ -320,7 +329,8 @@ def _expression_simplification_pass(function: SSAFunction) -> SSAFunction:
 def _propagation_pass(function: SSAFunction) -> SSAFunction:
     index = build_def_use_index(function)
     replacements: dict[SSAValue, SSAExpression] = {}
-    removed: set[SSAValue] = set()
+    removed_assignments: set[SSAValue] = set()
+    targets_with_phi_uses: set[SSAValue] = set()
 
     for block in function.blocks:
         for statement in block.statements:
@@ -346,14 +356,49 @@ def _propagation_pass(function: SSAFunction) -> SSAFunction:
                 continue
             if is_copy or is_unconditional_value or len(uses) <= 1:
                 replacements[statement.target] = value
-                removed.add(statement.target)
+                if has_phi_use:
+                    targets_with_phi_uses.add(statement.target)
+                else:
+                    removed_assignments.add(statement.target)
 
-    if not replacements:
+    removed_phis: set[SSAValue] = set()
+    for block in function.blocks:
+        for phi in block.phis:
+            resolved: list[SSAValue | None] = []
+            for item in phi.inputs:
+                if item.value is None:
+                    resolved.append(None)
+                    continue
+                replacement = _resolve_replacement(item.value, replacements)
+                if (
+                    isinstance(replacement, SSAReferenceExpression)
+                    and replacement.value is not None
+                ):
+                    resolved.append(replacement.value)
+                else:
+                    resolved.append(item.value)
+            if not resolved or any(value is None for value in resolved):
+                continue
+            first = resolved[0]
+            assert first is not None
+            if all(value == first for value in resolved[1:]):
+                replacements[phi.output] = SSAReferenceExpression(
+                    first.storage,
+                    first,
+                    phi.output.source,
+                )
+                removed_phis.add(phi.output)
+
+    if not replacements and not removed_phis:
         return function
+
+    # Assignments feeding a PHI are retained until the PHI has been removed.
+    # The following dead-definition pass then removes them if no other use remains.
     return _rewrite_function(
         function,
         replacements,
-        frozenset(removed),
+        frozenset(removed_assignments),
+        frozenset(removed_phis),
     )
 
 
