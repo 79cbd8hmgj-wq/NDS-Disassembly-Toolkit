@@ -4,6 +4,7 @@ import pytest
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
     AssignmentStatement,
+    CompareExpression,
     ConstantExpression,
     DecompiledFunction,
     DecompilerVariable,
@@ -23,7 +24,6 @@ from nds_disassembly_toolkit.analysis.model import (
     InstructionSet,
     Register,
 )
-from nds_disassembly_toolkit.analysis.decompiler.model import CompareExpression
 
 BASE = 0x02010000
 
@@ -76,7 +76,7 @@ def _return(value: int, address: int) -> StatementNode:
 
 
 def test_switch_case_values_are_normalized_and_cases_are_ordered() -> None:
-    function, arg0 = _function()
+    _, arg0 = _function()
     source = _source()
     switch = SwitchNode(
         VariableExpression(arg0, source),
