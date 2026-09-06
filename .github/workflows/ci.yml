@@ -541,8 +541,20 @@ jobs:
           json.dump({'pc': baseline_pc}, open('/tmp/managed-baseline-pc.json', 'w'))
           PY
 
+          set +e
           nds-toolkit runtime checkpoint save "$SESSION_ROOT" baseline \
             --output /tmp/managed-checkpoint-save.json
+          CHECKPOINT_STATUS=$?
+          set -e
+          if [ "$CHECKPOINT_STATUS" -ne 0 ]; then
+            echo "---- managed session tree after checkpoint failure ----"
+            find "$SESSION_ROOT" -maxdepth 5 -type f -print -exec ls -l {} \; || true
+            echo "---- managed DeSmuME stdout ----"
+            cat "$SESSION_ROOT/emulator.stdout.log" || true
+            echo "---- managed DeSmuME stderr ----"
+            cat "$SESSION_ROOT/emulator.stderr.log" || true
+            exit "$CHECKPOINT_STATUS"
+          fi
 
           python - <<'PY'
           import json
