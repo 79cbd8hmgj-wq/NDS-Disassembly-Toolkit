@@ -122,6 +122,7 @@ def _make_context(
             if (
                 not isinstance(statement, SSACallStatement)
                 or statement.result is None
+                or statement.call.target_component is None
                 or not index.uses(statement.result)
             ):
                 continue
