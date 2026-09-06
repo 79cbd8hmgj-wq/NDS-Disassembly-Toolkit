@@ -467,3 +467,62 @@ def test_x11_driver_sends_explicit_owned_key_down_and_up(
         ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
         ["/usr/bin/xdotool", "keyup", "Shift_R"],
     ]
+
+
+
+def test_x11_driver_keys_target_owned_window_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from nds_disassembly_toolkit.analysis.orchestration import (
+        EmulatorKind,
+        RuntimeLifecycleState,
+        RuntimeSessionRecord,
+    )
+    from nds_disassembly_toolkit.analysis.orchestration.x11 import X11HostDriver
+    from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
+
+    session = RuntimeSessionRecord(
+        schema_version=1,
+        session_id="session-a",
+        lifecycle=RuntimeLifecycleState.RUNNING,
+        emulator=EmulatorKind.DESMUME,
+        emulator_executable=Path("/usr/bin/desmume-cli"),
+        emulator_sha256=None,
+        emulator_version=None,
+        rom_path=tmp_path / "game.nds",
+        rom_sha256="0" * 64,
+        cpu=RuntimeCpu.ARM9,
+        pid=1234,
+        process_group=1234,
+        process_start_identity="start",
+        debugger_host="127.0.0.1",
+        debugger_port=39001,
+        display=":104",
+        window_id="0xabc",
+        session_root=tmp_path,
+        last_completed_step=None,
+        last_completed_case=None,
+    )
+    calls: list[list[str]] = []
+    driver = X11HostDriver(
+        xdotool=Path("/usr/bin/xdotool"),
+        display=":104",
+    )
+    monkeypatch.setattr(driver, "_window_pid", lambda window_id: 1234)
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.orchestration.x11.subprocess.run",
+        lambda argv, **kwargs: calls.append(list(argv)),
+    )
+
+    driver.key_down(session, "Shift_R")
+    driver.send_key(session, "F1")
+    driver.key_up(session, "Shift_R")
+
+    assert [
+        ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "Shift_R"],
+        ["/usr/bin/xdotool", "key", "--window", "0xabc", "F1"],
+        ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "Shift_R"],
+    ] == [
+        call for call in calls if call[1] in {"keydown", "key", "keyup"}
+    ]
