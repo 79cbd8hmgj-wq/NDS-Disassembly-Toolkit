@@ -310,8 +310,10 @@ def collect_field_accesses(
                     _collect_expression(statement.value, output)
                 continue
 
-            if isinstance(statement, SSABranchStatement):
-                if statement.condition is not None:
-                    _collect_expression(statement.condition, output)
+            if (
+                isinstance(statement, SSABranchStatement)
+                and statement.condition is not None
+            ):
+                _collect_expression(statement.condition, output)
 
     return tuple(sorted(output, key=_evidence_sort_key))
