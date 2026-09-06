@@ -38,6 +38,17 @@ nds-toolkit runtime matrix run matrix.json --session-root runtime/SESSION
 nds-toolkit runtime session stop runtime/SESSION
 ```
 
+### Current managed emulator capability profile
+
+The Phase 7H3 Linux managed profiles are capability-specific rather than assumed equivalent:
+
+| Managed backend | Debugger | Owned X11 window | DS buttons/touch | Checkpoint save/restore |
+| --- | --- | --- | --- | --- |
+| DeSmuME CLI `release_0_9_13` | ARM9, direct RSP | supported | supported for the verified 256×384 vertical CLI layout | supported through the isolated slot-1 savestate path |
+| stock melonDS live-gate build | ARM9/ARM7, initial-ACK RSP | not guaranteed by the current managed profile | unsupported | unsupported |
+
+`runtime doctor --require ...` reports these capability boundaries before an experiment. The toolkit does not guess a window layout or savestate mechanism for a backend that has not been verified.
+
 Managed sessions own their process identity, debugger endpoint, logs, checkpoints, traces, case results, journal, and failure directory. Cleanup re-proves PID/start-time/executable/process-group ownership before signaling a process. Debugger ports default to loopback and are dynamically allocated for managed sessions.
 
 Scenario JSON is versioned and intentionally constrained. It supports finite waits, Nintendo DS button/touch actions, guarded memory writes, snapshot/trace capture, assertions, and checkpoint save/restore. It does **not** support arbitrary shell commands or image/OCR state recognition. Input/mutation actions may declare generic runtime preconditions and postconditions, and all waits are finite.
