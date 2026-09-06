@@ -554,8 +554,15 @@ jobs:
               timeout=2.0,
           )
           try:
-              session.run_host_action(lambda: time.sleep(0.1))
-              assert session.read_memory(0x02000100, 4) == bytes.fromhex('11223344')
+              baseline = bytes.fromhex('11223344')
+              for _ in range(50):
+                  session.run_host_action(lambda: time.sleep(0.05))
+                  if session.read_memory(0x02000100, 4) == baseline:
+                      break
+              else:
+                  raise AssertionError(
+                      'managed DeSmuME ROM sentinel never became ready'
+                  )
           finally:
               session.close()
           PY
