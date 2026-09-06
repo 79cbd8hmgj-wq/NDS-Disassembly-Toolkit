@@ -20,7 +20,11 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     SwitchNode,
     VariableExpression,
 )
-from nds_disassembly_toolkit.analysis.model import CFGEdge, CFGEdgeKind
+from nds_disassembly_toolkit.analysis.model import (
+    CFGEdge,
+    CFGEdgeKind,
+    ConditionCode,
+)
 
 _LOCAL_EDGE_KINDS = frozenset({CFGEdgeKind.BRANCH, CFGEdgeKind.FALLTHROUGH})
 
