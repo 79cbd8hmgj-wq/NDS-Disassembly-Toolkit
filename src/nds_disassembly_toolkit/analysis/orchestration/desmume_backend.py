@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import shutil
+import time
 from pathlib import Path
+from typing import Any
 
 from nds_disassembly_toolkit.analysis.orchestration.input import (
     DSButton,
@@ -24,6 +27,10 @@ from nds_disassembly_toolkit.errors import (
 
 
 class DeSmuMEBackend:
+    def __init__(self) -> None:
+        self._runtime_record: Any | None = None
+        self._host_driver: Any | None = None
+
     @property
     def kind(self) -> EmulatorKind:
         return EmulatorKind.DESMUME
@@ -34,7 +41,7 @@ class DeSmuMEBackend:
             debugger_arm9=True,
             debugger_arm7=False,
             managed_launch=True,
-            save_state=False,
+            save_state=True,
             battery_save_isolation=False,
             window_input=True,
             touchscreen_input=True,
@@ -92,13 +99,53 @@ class DeSmuMEBackend:
         return DeSmuMESession.connect(cpu=cpu, host=host, port=port, timeout=timeout)
 
 
+    def bind_managed_session(self, record: Any, host_driver: Any) -> None:
+        self._runtime_record = record
+        self._host_driver = host_driver
+
+    def _bound_runtime(self) -> tuple[Any, Any]:
+        if self._runtime_record is None or self._host_driver is None:
+            raise RuntimeInputError(
+                "DeSmuME save-state operation requires a bound managed session"
+            )
+        return self._runtime_record, self._host_driver
+
+    def _slot_path(self) -> Path:
+        record, _ = self._bound_runtime()
+        return (
+            record.session_root
+            / "config"
+            / "desmume"
+            / f"{Path(record.rom_path).stem}.ds1"
+        )
+
     def save_state(self, destination: Path) -> None:
-        del destination
-        raise RuntimeCheckpointError("DeSmuME managed save-state support is not available yet")
+        record, host = self._bound_runtime()
+        slot = self._slot_path()
+        slot.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            slot.unlink()
+        except FileNotFoundError:
+            pass
+        host.send_key(record, "Shift_R+F1")
+        deadline = time.monotonic() + 5.0
+        while not slot.is_file():
+            if time.monotonic() >= deadline:
+                raise RuntimeCheckpointError(
+                    "DeSmuME did not create managed save-state slot 1"
+                )
+            time.sleep(0.01)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(slot, destination)
 
     def load_state(self, source: Path) -> None:
-        del source
-        raise RuntimeCheckpointError("DeSmuME managed save-state support is not available yet")
+        record, host = self._bound_runtime()
+        if not source.is_file():
+            raise RuntimeCheckpointError("checkpoint state file does not exist")
+        slot = self._slot_path()
+        slot.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, slot)
+        host.send_key(record, "F1")
 
 
     def host_key_for(self, button: DSButton) -> str:
