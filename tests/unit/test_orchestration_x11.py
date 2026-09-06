@@ -458,8 +458,12 @@ def test_x11_driver_sends_explicit_owned_key_down_and_up(
     driver.key_up(session, "Shift_R")
 
     assert calls == [
-        ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "Shift_R"],
-        ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "F1"],
-        ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "F1"],
-        ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "Shift_R"],
+        ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
+        ["/usr/bin/xdotool", "keydown", "Shift_R"],
+        ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
+        ["/usr/bin/xdotool", "keydown", "F1"],
+        ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
+        ["/usr/bin/xdotool", "keyup", "F1"],
+        ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
+        ["/usr/bin/xdotool", "keyup", "Shift_R"],
     ]
