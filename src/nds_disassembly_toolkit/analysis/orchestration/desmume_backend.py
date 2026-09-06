@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nds_disassembly_toolkit.analysis.orchestration.input import (
+    DSButton,
+    ScreenLayoutProfile,
+    ScreenViewport,
+    WindowGeometry,
+)
 from nds_disassembly_toolkit.analysis.orchestration.model import (
     DebuggerHandshakeMode,
     EmulatorCapabilities,
@@ -10,7 +16,11 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
 )
 from nds_disassembly_toolkit.analysis.runtime.desmume import DeSmuMESession
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
-from nds_disassembly_toolkit.errors import RuntimeCheckpointError, RuntimeLaunchError
+from nds_disassembly_toolkit.errors import (
+    RuntimeCheckpointError,
+    RuntimeInputError,
+    RuntimeLaunchError,
+)
 
 
 class DeSmuMEBackend:
@@ -26,8 +36,8 @@ class DeSmuMEBackend:
             managed_launch=True,
             save_state=False,
             battery_save_isolation=False,
-            window_input=False,
-            touchscreen_input=False,
+            window_input=True,
+            touchscreen_input=True,
             screenshot=False,
             debugger_handshake_mode=DebuggerHandshakeMode.DIRECT,
         )
@@ -89,3 +99,31 @@ class DeSmuMEBackend:
     def load_state(self, source: Path) -> None:
         del source
         raise RuntimeCheckpointError("DeSmuME managed save-state support is not available yet")
+
+
+    def host_key_for(self, button: DSButton) -> str:
+        mapping = {
+            DSButton.A: "x",
+            DSButton.B: "z",
+            DSButton.SELECT: "Shift_R",
+            DSButton.START: "Return",
+            DSButton.RIGHT: "Right",
+            DSButton.LEFT: "Left",
+            DSButton.UP: "Up",
+            DSButton.DOWN: "Down",
+            DSButton.R: "w",
+            DSButton.L: "q",
+            DSButton.X: "s",
+            DSButton.Y: "a",
+        }
+        return mapping[button]
+
+    def layout_profile(self, geometry: WindowGeometry) -> ScreenLayoutProfile:
+        if geometry.width != 256 or geometry.height != 384:
+            raise RuntimeInputError(
+                "managed DeSmuME CLI input requires exact 256x384 window geometry"
+            )
+        return ScreenLayoutProfile(
+            window=geometry,
+            lower_screen=ScreenViewport(0, 192, 256, 192),
+        )
