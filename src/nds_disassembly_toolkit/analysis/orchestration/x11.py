@@ -351,6 +351,7 @@ class X11HostDriver:
         subprocess.run(
             [str(self.xdotool), "key", "--window", window_id, host_key],
             check=True,
+            env=self._display_environment(session),
         )
 
 
@@ -371,6 +372,7 @@ class X11HostDriver:
                 str(y),
             ],
             check=True,
+            env=self._display_environment(session),
         )
 
     def pointer_down(
@@ -385,6 +387,7 @@ class X11HostDriver:
         subprocess.run(
             [str(self.xdotool), "mousedown", str(button)],
             check=True,
+            env=self._display_environment(session),
         )
 
     def pointer_up(
@@ -399,6 +402,7 @@ class X11HostDriver:
         subprocess.run(
             [str(self.xdotool), "mouseup", str(button)],
             check=True,
+            env=self._display_environment(session),
         )
 
     def capture_window(
@@ -418,4 +422,5 @@ class X11HostDriver:
                 str(destination),
             ],
             check=True,
+            env=self._display_environment(session),
         )
