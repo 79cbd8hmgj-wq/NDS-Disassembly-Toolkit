@@ -140,8 +140,8 @@ class DeSmuMEBackend:
         directory = self._slot_directory()
         directory.mkdir(parents=True, exist_ok=True)
         before = self._slot_snapshot(directory)
-        debugger.begin_continue()
-        try:
+
+        def action() -> Path:
             host.key_down(record, "Shift_R")
             try:
                 host.key_down(record, "F1")
@@ -167,9 +167,8 @@ class DeSmuMEBackend:
                         "DeSmuME did not create or update managed save-state slot 1"
                     )
                 time.sleep(0.01)
-        finally:
-            debugger.interrupt()
-            debugger.wait_for_stop()
+
+        return Path(debugger.run_host_action(action))
 
     def save_state(self, destination: Path) -> None:
         slot = self._trigger_slot_save()
@@ -184,13 +183,9 @@ class DeSmuMEBackend:
         temporary = slot.with_suffix(slot.suffix + ".tmp")
         shutil.copyfile(source, temporary)
         temporary.replace(slot)
-        debugger.begin_continue()
-        try:
-            host.send_key(record, "F1")
-            time.sleep(0.05)
-        finally:
-            debugger.interrupt()
-            debugger.wait_for_stop()
+        debugger.run_host_action(
+            lambda: (host.send_key(record, "F1"), time.sleep(0.05))
+        )
 
 
     def host_key_for(self, button: DSButton) -> str:
