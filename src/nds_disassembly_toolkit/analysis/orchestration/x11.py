@@ -344,12 +344,21 @@ class X11HostDriver:
             raise RuntimeInputError("window is not owned by the managed emulator process")
         return window_id
 
+    def _focus_owned_window(self, session: RuntimeSessionRecord) -> str:
+        window_id = self._require_owned_window(session)
+        subprocess.run(
+            [str(self.xdotool), "windowfocus", "--sync", window_id],
+            check=True,
+            env=self._display_environment(session),
+        )
+        return window_id
+
     def key_down(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
-        window_id = self._require_owned_window(session)
+        self._focus_owned_window(session)
         subprocess.run(
-            [str(self.xdotool), "keydown", "--window", window_id, host_key],
+            [str(self.xdotool), "keydown", host_key],
             check=True,
             env=self._display_environment(session),
         )
@@ -357,9 +366,9 @@ class X11HostDriver:
     def key_up(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
-        window_id = self._require_owned_window(session)
+        self._focus_owned_window(session)
         subprocess.run(
-            [str(self.xdotool), "keyup", "--window", window_id, host_key],
+            [str(self.xdotool), "keyup", host_key],
             check=True,
             env=self._display_environment(session),
         )
@@ -367,9 +376,9 @@ class X11HostDriver:
     def send_key(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
-        window_id = self._require_owned_window(session)
+        self._focus_owned_window(session)
         subprocess.run(
-            [str(self.xdotool), "key", "--window", window_id, host_key],
+            [str(self.xdotool), "key", host_key],
             check=True,
             env=self._display_environment(session),
         )
