@@ -8,7 +8,11 @@ import pytest
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind
 from nds_disassembly_toolkit.analysis.orchestration.input import DSButton, DSPoint
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
+    CaptureSnapshotStep,
+    CaptureTraceStep,
     JournalStepState,
+    MemoryWriteStep,
+    ParameterReference,
     ParameterReference,
     ScenarioJournal,
     ScenarioJournalStep,
@@ -231,3 +235,51 @@ def test_parameter_reference_rejects_arbitrary_object_shape(tmp_path: Path) -> N
 
     with pytest.raises(RuntimeScenarioError):
         load_scenario(_write(tmp_path / "bad-parameter.json", payload))
+
+
+
+def test_load_scenario_parses_explicit_typed_parameter_references(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "name": "parameterized",
+        "backend": "desmume",
+        "cpu": "arm9",
+        "checkpoint": "baseline",
+        "steps": [
+            {
+                "type": "memory_write",
+                "address": "0x02000020",
+                "replacement": {"parameter": "write_bytes"},
+                "expected_before": "00",
+            },
+            {
+                "type": "capture_snapshot",
+                "label": {"parameter": "snapshot_label"},
+            },
+            {
+                "type": "capture_trace",
+                "output": {"parameter": "trace_name"},
+                "steps": 1,
+            },
+            {
+                "type": "assert",
+                "condition": {
+                    "type": "memory_equals",
+                    "address": "0x02000020",
+                    "bytes": {"parameter": "expected_bytes"},
+                },
+            },
+        ],
+    }
+
+    scenario = load_scenario(_write(tmp_path / "parameterized.json", payload))
+
+    assert isinstance(scenario.steps[0], MemoryWriteStep)
+    assert scenario.steps[0].replacement == ParameterReference("write_bytes")
+    assert isinstance(scenario.steps[1], CaptureSnapshotStep)
+    assert scenario.steps[1].label == ParameterReference("snapshot_label")
+    assert isinstance(scenario.steps[2], CaptureTraceStep)
+    assert scenario.steps[2].output == ParameterReference("trace_name")
+    assert scenario.steps[3].condition.expected == ParameterReference("expected_bytes")
