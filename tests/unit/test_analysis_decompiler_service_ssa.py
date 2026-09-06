@@ -237,3 +237,116 @@ def test_service_runs_phase_7l_type_recovery_before_render(
     )
     assert "arg0->field_04" in result.pseudo_c
     assert "arg0->field_08" in result.pseudo_c
+
+
+
+def test_service_uses_optional_project_prototype_render_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nds_disassembly_toolkit.analysis.decompiler.prototype import (
+        FunctionPrototype,
+        PrototypeParameter,
+        PrototypePropagationResult,
+    )
+    from nds_disassembly_toolkit.analysis.decompiler.prototype_service import (
+        ProjectPrototypeAnalysis,
+    )
+    from nds_disassembly_toolkit.analysis.decompiler.ssa import (
+        build_ssa_function,
+    )
+    from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
+        LocalStructureRecovery,
+    )
+    from nds_disassembly_toolkit.analysis.decompiler.type_model import (
+        PointerType,
+    )
+    from nds_disassembly_toolkit.analysis.decompiler.type_propagation import (
+        FunctionTypeIdentity,
+        LocalTypeEnvironment,
+    )
+
+    arg0 = DecompilerVariable(
+        "arg0",
+        DecompilerVariableKind.ARGUMENT,
+        register=Register.R0,
+    )
+    source = _source(BASE)
+    ir = DecompiledFunction(
+        "arm9",
+        BASE,
+        InstructionSet.ARM,
+        "prototype_service",
+        (arg0,),
+        (),
+        (
+            DecompiledBlock(
+                BASE,
+                InstructionSet.ARM,
+                (
+                    ReturnStatement(
+                        VariableExpression(arg0, source),
+                        source,
+                    ),
+                ),
+                (),
+            ),
+        ),
+    )
+    ssa = build_ssa_function(ir)
+    identity = FunctionTypeIdentity(
+        "arm9",
+        BASE,
+        InstructionSet.ARM,
+    )
+    pointer = PointerType(
+        pointee_name="struct_actor",
+        component="arm9",
+    )
+    prototype_analysis = ProjectPrototypeAnalysis(
+        propagation=PrototypePropagationResult(
+            prototypes=(
+                FunctionPrototype(
+                    identity=identity,
+                    name="prototype_service",
+                    parameters=(
+                        PrototypeParameter(
+                            position=0,
+                            name="arg0",
+                            register=Register.R0,
+                            stack_offset=None,
+                            recovered_type=pointer,
+                        ),
+                    ),
+                    return_type=pointer,
+                ),
+            ),
+            value_types=(),
+            converged=True,
+            iterations=1,
+        ),
+        functions=(ssa,),
+        environments=(
+            LocalTypeEnvironment(
+                value_bindings=(),
+                field_bindings=(),
+                structures=LocalStructureRecovery(()),
+            ),
+        ),
+    )
+    monkeypatch.setattr(service, "build_name_context", lambda *args: object())
+    monkeypatch.setattr(service, "lift_function", lambda *args: ir)
+
+    result = service.decompile_function(  # type: ignore[arg-type]
+        _ProjectStub(),
+        "arm9",
+        BASE,
+        InstructionSet.ARM,
+        prototype_analysis=prototype_analysis,
+    )
+
+    assert "struct struct_actor;" in result.pseudo_c
+    assert (
+        "struct struct_actor * prototype_service("
+        "struct struct_actor *arg0)"
+    ) in result.pseudo_c
+    assert "return arg0;" in result.pseudo_c
