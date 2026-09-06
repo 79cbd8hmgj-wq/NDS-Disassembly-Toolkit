@@ -1052,8 +1052,11 @@ class _ManagedScenarioContext:
         host_key = cast(str, self.backend.host_key_for(button))
 
         def action() -> None:
-            driver.send_key(self.record, host_key)
-            time.sleep(0.05)
+            driver.key_down(self.record, host_key)
+            try:
+                time.sleep(0.05)
+            finally:
+                driver.key_up(self.record, host_key)
 
         self.debugger.run_host_action(action)
 
