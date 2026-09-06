@@ -815,3 +815,13 @@ def test_managed_ui_scenario_requires_owned_window(
         runtime_cli._scenario_context(record, definition),
     ):
         pass
+
+
+
+def test_runtime_matrix_parser_accepts_matrix_path() -> None:
+    arguments = build_parser().parse_args(
+        ["runtime", "matrix", "run", "matrix.json"]
+    )
+    assert arguments.runtime_command == "matrix"
+    assert arguments.runtime_matrix_command == "run"
+    assert arguments.matrix == Path("matrix.json")
