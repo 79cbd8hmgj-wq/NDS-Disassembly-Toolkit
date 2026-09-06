@@ -23,6 +23,7 @@ The standalone toolkit now provides:
 - conservative evidence-backed ARM/Thumb pseudo-C generated from persisted CFG, data-flow, stack/ABI, symbol, and annotation evidence, with safe control-flow structuring and explicit uncertainty fallback;
 - melonDS GDB-RSP runtime inspection for ARM9/ARM7, including snapshots, memory reads, temporary code conditions, and bounded stepping;
 - portable `.ndstrace` capture, BEFORE/AFTER memory differentials, read-only static-project correlation, behavioral trace comparison, and transparent dynamic function ranking;
+- Phase 7H3 managed runtime orchestration with isolated emulator sessions, dynamic loopback debugger ports, validated checkpoints, finite state predicates, guarded runtime writes, normalized Nintendo DS input models, durable scenario journals/safe resume, failure evidence bundles, and deterministic acceptance matrices;
 - deterministic Phase 7J investigation ranking that fuses matching strings/annotations, typed constants, requested-address xrefs, one-hop call relationships, and existing runtime trace differentials, with optional top-candidate pseudo-C previews;
 - reusable CLI parser/runner helpers so game projects can consume toolkit commands while enforcing stricter game-specific policy.
 
@@ -54,6 +55,13 @@ nds-toolkit project decompile game.ndsre arm9 0x02012340 --mode arm
 nds-toolkit project investigate game.ndsre --text power --constant 500 --top 25
 nds-toolkit project investigate game.ndsre --baseline idle.ndstrace --target attack.ndstrace --decompile
 nds-toolkit runtime --help
+nds-toolkit runtime doctor --emulator desmume
+nds-toolkit runtime launch GAME.nds --emulator desmume --cpu arm9 --session-root runtime
+nds-toolkit runtime checkpoint save runtime/SESSION baseline
+nds-toolkit runtime scenario run runtime/SESSION scenario.json
+nds-toolkit runtime session resume runtime/SESSION scenario.json
+nds-toolkit runtime matrix run matrix.json --session-root runtime/SESSION
+nds-toolkit runtime session stop runtime/SESSION
 nds-toolkit assets inventory GAME.nds --output assets.json
 nds-toolkit source-patch build work/game source-patch.json
 ```
