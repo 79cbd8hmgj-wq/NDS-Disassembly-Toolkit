@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
-    ConstantExpression,
     DecompilerVariable,
     DecompilerVariableKind,
     SourceRef,
@@ -124,7 +123,7 @@ def _call(
     target: SSAFunction,
     argument: SSAValue | None = None,
     result: SSAValue | None = None,
-    target_component: str | None | object = ...,
+    target_component: str | object | None = ...,
 ) -> SSACallStatement:
     component = (
         target.component
