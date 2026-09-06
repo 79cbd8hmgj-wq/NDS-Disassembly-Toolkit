@@ -294,9 +294,15 @@ class RSPClient:
             response = self.command(
                 f"M{chunk_address:x},{len(chunk):x}:{chunk.hex()}"
             )
-            if response != "OK":
-                raise RuntimeProtocolError("runtime debugger rejected memory write")
-            consumed += len(chunk)
+            if response == "OK":
+                consumed += len(chunk)
+                continue
+            if response == "":
+                verified = self.read_memory(chunk_address, len(chunk))
+                if verified == chunk:
+                    consumed += len(chunk)
+                    continue
+            raise RuntimeProtocolError("runtime debugger rejected memory write")
 
     @staticmethod
     def _validate_breakpoint(kind: int, address: int, length: int) -> None:
