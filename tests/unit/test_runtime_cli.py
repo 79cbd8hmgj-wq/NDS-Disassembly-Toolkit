@@ -671,3 +671,75 @@ def test_runtime_resume_dispatch_reuses_session_journal(
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "passed"
     assert payload["completed_steps"] == ["step-0000", "step-0001"]
+
+
+
+def test_managed_scenario_trace_uses_existing_capture_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = type(
+        "Record",
+        (),
+        {
+            "session_root": tmp_path,
+            "cpu": RuntimeCpu.ARM9,
+            "emulator": runtime_cli.EmulatorKind.DESMUME,
+            "rom_sha256": "1" * 64,
+            "window_id": None,
+            "display": None,
+        },
+    )()
+    debugger = object()
+    backend = object()
+    context = runtime_cli._ManagedScenarioContext(record, backend, debugger)
+    calls: list[tuple[object, object, Path]] = []
+
+    def fake_capture(session: object, config: object, destination: Path) -> None:
+        calls.append((session, config, destination))
+
+    monkeypatch.setattr(runtime_cli, "capture_trace", fake_capture)
+    step = runtime_cli.CaptureTraceStep(
+        id="trace-step",
+        output="case.ndstrace",
+        steps=4,
+    )
+
+    context.capture_trace(step)
+
+    assert len(calls) == 1
+    session, config, destination = calls[0]
+    assert session is debugger
+    assert config.mode is runtime_cli.TraceCaptureMode.STEP
+    assert config.limit == 4
+    assert destination == tmp_path / "traces" / "case.ndstrace"
+
+
+def test_managed_scenario_snapshot_writes_canonical_runtime_json(
+    tmp_path: Path,
+) -> None:
+    class Debugger:
+        def snapshot(self) -> RuntimeSnapshot:
+            return _snapshot(0x02000044)
+
+    record = type(
+        "Record",
+        (),
+        {
+            "session_root": tmp_path,
+            "cpu": RuntimeCpu.ARM9,
+            "emulator": runtime_cli.EmulatorKind.DESMUME,
+            "rom_sha256": "1" * 64,
+            "window_id": None,
+            "display": None,
+        },
+    )()
+    context = runtime_cli._ManagedScenarioContext(record, object(), Debugger())
+
+    context.capture_snapshot("before-action")
+
+    payload = json.loads(
+        (tmp_path / "traces" / "before-action.json").read_text(encoding="utf-8")
+    )
+    assert payload["pc"] == "0x02000044"
+    assert payload["registers"]["pc"] == "0x02000044"
