@@ -21,6 +21,7 @@ def _validate_width(width: int) -> None:
 
 class RecoveredTypeKind(StrEnum):
     UNKNOWN = "unknown"
+    VOID = "void"
     INTEGER = "integer"
     POINTER = "pointer"
     STRUCT = "struct"
@@ -37,6 +38,13 @@ class UnknownType:
     @property
     def kind(self) -> RecoveredTypeKind:
         return RecoveredTypeKind.UNKNOWN
+
+
+@dataclass(frozen=True, slots=True)
+class VoidType:
+    @property
+    def kind(self) -> RecoveredTypeKind:
+        return RecoveredTypeKind.VOID
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +127,7 @@ class RecoveredStructType:
 
 RecoveredType: TypeAlias = (
     UnknownType
+    | VoidType
     | IntegerType
     | PointerType
     | RecoveredStructType
