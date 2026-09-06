@@ -32,6 +32,10 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
     spawn_owned_process,
     stop_owned_process,
 )
+from nds_disassembly_toolkit.analysis.orchestration.x11 import (
+    X11HostDriver,
+    find_x11_helpers,
+)
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     CaptureTraceStep,
     ScenarioDefinition,
@@ -68,7 +72,7 @@ from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     TraceSummary,
 )
 from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
-from nds_disassembly_toolkit.errors import RuntimeScenarioError
+from nds_disassembly_toolkit.errors import RuntimeRecoveryError, RuntimeScenarioError
 
 _MAX_STEP_COUNT = 256
 _MAX_TRACE_STEPS = 100000
@@ -1074,12 +1078,24 @@ def _scenario_context(
         raise RuntimeScenarioError("managed emulator process ownership could not be proven")
     backend = _managed_backend(record.emulator)
     capabilities = backend.capabilities
-    for capability in sorted(_scenario_capabilities(definition)):
+    required_capabilities = _scenario_capabilities(definition)
+    for capability in sorted(required_capabilities):
         if not hasattr(capabilities, capability):
             raise RuntimeScenarioError(f"unknown required capability: {capability}")
         if not bool(getattr(capabilities, capability)):
             raise RuntimeScenarioError(
                 f"managed backend does not provide required capability: {capability}"
+            )
+    if {"window_input", "touchscreen_input"} & required_capabilities:
+        helpers = find_x11_helpers()
+        if helpers.xdotool is None:
+            raise RuntimeScenarioError(
+                "managed UI scenario requires X11 window ownership verification"
+            )
+        driver = X11HostDriver(xdotool=helpers.xdotool)
+        if not driver.window_is_owned(record):
+            raise RuntimeScenarioError(
+                "managed UI scenario window ownership could not be proven"
             )
     debugger = backend.connect_debugger(
         cpu=record.cpu,
@@ -1152,12 +1168,17 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             return 0
         if arguments.runtime_session_command == "resume":
             definition = load_scenario(arguments.scenario)
-            with _scenario_context(record, definition) as scenario_context:
-                result = resume_scenario(
-                    scenario_context,
-                    definition,
-                    journal_path=record.session_root / "journal.json",
-                )
+            try:
+                with _scenario_context(record, definition) as scenario_context:
+                    result = resume_scenario(
+                        scenario_context,
+                        definition,
+                        journal_path=record.session_root / "journal.json",
+                    )
+            except RuntimeScenarioError as exc:
+                raise RuntimeRecoveryError(
+                    "managed runtime session could not be safely adopted"
+                ) from exc
             _write_json(_scenario_result_json(result), arguments.output)
             return 0
         raise ValueError("runtime session requires info, stop, or resume")
