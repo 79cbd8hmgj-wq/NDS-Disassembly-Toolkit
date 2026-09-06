@@ -461,3 +461,74 @@ jobs:
             ps -ef | grep -E '[d]esmume|[X]vfb' || true
             exit "$STATUS"
           fi
+
+      - name: Verify managed DeSmuME window input through public CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf /tmp/nds-managed-runtime
+          mkdir -p /tmp/nds-managed-runtime
+
+          nds-toolkit runtime launch /tmp/rsp-smoke.nds \
+            --emulator desmume \
+            --cpu arm9 \
+            --session-root /tmp/nds-managed-runtime \
+            --executable /tmp/desmume/desmume/src/frontend/posix/build/cli/desmume-cli \
+            --output /tmp/managed-session.json
+
+          SESSION_ROOT="$(python - <<'PY'
+          import json
+          print(json.load(open('/tmp/managed-session.json'))['session_root'])
+          PY
+          )"
+          export SESSION_ROOT
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.load(open('/tmp/managed-session.json'))
+          assert payload['display'].startswith(':')
+          assert payload['window_id']
+          root = Path(os.environ['SESSION_ROOT'])
+          assert (root / 'display.json').is_file()
+          PY
+
+          cat >/tmp/managed-input-scenario.json <<'JSON'
+          {
+            "schema_version": 1,
+            "name": "managed-input-smoke",
+            "backend": "desmume",
+            "cpu": "arm9",
+            "required_capabilities": ["window_input", "touchscreen_input"],
+            "steps": [
+              {"id": "press-a", "type": "button", "button": "A"},
+              {"id": "touch-center", "type": "touch_tap", "point": [128, 96]}
+            ]
+          }
+          JSON
+
+          nds-toolkit runtime scenario run \
+            "$SESSION_ROOT" /tmp/managed-input-scenario.json \
+            --output /tmp/managed-input-result.json
+
+          python - <<'PY'
+          import json
+          result = json.load(open('/tmp/managed-input-result.json'))
+          assert result['status'] == 'passed'
+          assert result['completed_steps'] == ['press-a', 'touch-center']
+          PY
+
+          nds-toolkit runtime session stop "$SESSION_ROOT" \
+            --output /tmp/managed-stopped.json
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          stopped = json.load(open('/tmp/managed-stopped.json'))
+          assert stopped['lifecycle'] == 'closed'
+          assert not (Path(os.environ['SESSION_ROOT']) / 'display.json').exists()
+          PY
