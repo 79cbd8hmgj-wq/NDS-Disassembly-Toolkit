@@ -18,10 +18,12 @@ from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
 from nds_disassembly_toolkit.analysis.orchestration.input import (
     DSButton,
     DSPoint,
+    ScreenLayoutProfile,
     ScreenViewport,
     TouchDrag,
     TouchFlick,
     TouchTap,
+    WindowGeometry,
     map_touch_point,
 )
 from nds_disassembly_toolkit.analysis.orchestration.model import (
@@ -158,6 +160,7 @@ __all__ = [
     "ScenarioJournal",
     "ScenarioJournalStep",
     "ScenarioResult",
+    "ScreenLayoutProfile",
     "ScreenViewport",
     "TouchDrag",
     "TouchDragStep",
@@ -166,6 +169,7 @@ __all__ = [
     "TouchTap",
     "TouchTapStep",
     "WaitStep",
+    "WindowGeometry",
     "WindowReady",
     "apply_guarded_write",
     "create_checkpoint",
