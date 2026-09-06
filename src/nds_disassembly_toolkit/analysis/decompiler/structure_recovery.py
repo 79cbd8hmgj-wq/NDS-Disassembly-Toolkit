@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from itertools import pairwise
 
-from nds_disassembly_toolkit.analysis.decompiler.model import SourceRef
 from nds_disassembly_toolkit.analysis.decompiler.access_paths import (
     FieldAccessEvidence,
     collect_field_accesses,
 )
+from nds_disassembly_toolkit.analysis.decompiler.model import SourceRef
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     DefUseIndex,
     PhiNode,
