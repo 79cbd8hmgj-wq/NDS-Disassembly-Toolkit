@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -120,6 +121,55 @@ def start_x11_display(
         start_identity=start_identity,
         executable=helpers.xvfb.resolve(),
     )
+
+
+
+def _display_lease_path(session_root: Path) -> Path:
+    return session_root / "display.json"
+
+
+def store_x11_display_lease(
+    session_root: Path,
+    lease: X11DisplayLease,
+) -> None:
+    path = _display_lease_path(session_root)
+    temporary = path.with_suffix(".json.tmp")
+    payload = {
+        "display_number": lease.display_number,
+        "pid": lease.pid,
+        "process_group": lease.process_group,
+        "start_identity": lease.start_identity,
+        "executable": str(lease.executable),
+    }
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def load_x11_display_lease(session_root: Path) -> X11DisplayLease | None:
+    path = _display_lease_path(session_root)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("display lease must be an object")
+        return X11DisplayLease(
+            display_number=int(payload["display_number"]),
+            pid=int(payload["pid"]),
+            process_group=int(payload["process_group"]),
+            start_identity=str(payload["start_identity"]),
+            executable=Path(str(payload["executable"])).resolve(),
+        )
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeDisplayError("managed X11 display lease is invalid") from exc
+
+
+def remove_x11_display_lease(session_root: Path) -> None:
+    with suppress(FileNotFoundError):
+        _display_lease_path(session_root).unlink()
 
 
 def _lease_is_owned(lease: X11DisplayLease) -> bool:
