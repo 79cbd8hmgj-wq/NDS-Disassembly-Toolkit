@@ -382,13 +382,13 @@ jobs:
           rom[0x10:0x12] = b'00'
           rom[0x12] = 0
           rom[0x14] = 0
-          struct.pack_into('<IIII', rom, 0x20, 0x4000, 0x02000000, 0x02000000, 4)
+          struct.pack_into('<IIII', rom, 0x20, 0x4000, 0x02000000, 0x02000000, 12)
           struct.pack_into('<IIII', rom, 0x30, 0x8000, 0x03800000, 0x03800000, 4)
           struct.pack_into('<II', rom, 0x40, 0, 0)
           struct.pack_into('<II', rom, 0x48, 0, 0)
           struct.pack_into('<I', rom, 0x80, len(rom))
           struct.pack_into('<I', rom, 0x84, 0x4000)
-          rom[0x4000:0x4004] = bytes.fromhex('feffffea')
+          rom[0x4000:0x400C] = bytes.fromhex('0000a0e10000a0e1feffffea')
           rom[0x8000:0x8004] = bytes.fromhex('feffffea')
 
           def crc16(data: bytes) -> int:
@@ -521,6 +521,26 @@ jobs:
           assert (root / 'display.json').is_file()
           PY
 
+          python - <<'PY'
+          import json
+          import os
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          session_info = json.load(open('/tmp/managed-session.json'))
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=session_info['debugger_host'],
+              port=session_info['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              baseline_pc = session.snapshot().pc
+          finally:
+              session.close()
+          json.dump({'pc': baseline_pc}, open('/tmp/managed-baseline-pc.json', 'w'))
+          PY
+
           nds-toolkit runtime checkpoint save "$SESSION_ROOT" baseline \
             --output /tmp/managed-checkpoint-save.json
 
@@ -536,33 +556,91 @@ jobs:
           assert (root / 'checkpoints' / 'baseline' / 'state.bin').is_file()
           PY
 
+          python - <<'PY'
+          import json
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          session_info = json.load(open('/tmp/managed-session.json'))
+          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=session_info['debugger_host'],
+              port=session_info['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              advanced_pc = session.step().pc
+              assert advanced_pc != baseline_pc, (hex(baseline_pc), hex(advanced_pc))
+          finally:
+              session.close()
+          PY
+
           nds-toolkit runtime checkpoint restore "$SESSION_ROOT" baseline \
             --output /tmp/managed-checkpoint-restore.json
 
           python - <<'PY'
           import json
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
           restored = json.load(open('/tmp/managed-checkpoint-restore.json'))
           assert restored['name'] == 'baseline'
+          session_info = json.load(open('/tmp/managed-session.json'))
+          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=session_info['debugger_host'],
+              port=session_info['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              assert session.snapshot().pc == baseline_pc
+          finally:
+              session.close()
           PY
 
-          cat >/tmp/managed-checkpoint-scenario.json <<'JSON'
-          {
-            "schema_version": 1,
-            "name": "managed-checkpoint-under-debugger",
-            "backend": "desmume",
-            "cpu": "arm9",
-            "required_capabilities": ["save_state"],
-            "checkpoint": "baseline",
-            "steps": [
-              {
-                "id": "verify-debugger-after-restore",
-                "type": "assert",
-                "condition": {"type": "debugger_reachable"},
-                "timeout": 2.0
-              }
-            ]
+          python - <<'PY'
+          import json
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          session_info = json.load(open('/tmp/managed-session.json'))
+          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=session_info['debugger_host'],
+              port=session_info['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              dirty_pc = session.step().pc
+              assert dirty_pc != baseline_pc
+          finally:
+              session.close()
+
+          scenario = {
+              'schema_version': 1,
+              'name': 'managed-checkpoint-under-debugger',
+              'backend': 'desmume',
+              'cpu': 'arm9',
+              'required_capabilities': ['save_state'],
+              'checkpoint': 'baseline',
+              'steps': [
+                  {
+                      'id': 'verify-debugger-restored-pc',
+                      'type': 'assert',
+                      'condition': {
+                          'type': 'pc_equals',
+                          'address': hex(baseline_pc),
+                      },
+                      'timeout': 2.0,
+                  }
+              ],
           }
-          JSON
+          with open('/tmp/managed-checkpoint-scenario.json', 'w') as handle:
+              json.dump(scenario, handle)
+          PY
 
           nds-toolkit runtime scenario run \
             "$SESSION_ROOT" /tmp/managed-checkpoint-scenario.json \
@@ -572,7 +650,7 @@ jobs:
           import json
           restored = json.load(open('/tmp/managed-checkpoint-scenario-result.json'))
           assert restored['status'] == 'passed'
-          assert restored['completed_steps'] == ['verify-debugger-after-restore']
+          assert restored['completed_steps'] == ['verify-debugger-restored-pc']
           PY
 
           cat >/tmp/managed-input-scenario.json <<'JSON'
