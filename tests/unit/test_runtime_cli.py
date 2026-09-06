@@ -742,4 +742,5 @@ def test_managed_scenario_snapshot_writes_canonical_runtime_json(
         (tmp_path / "traces" / "before-action.json").read_text(encoding="utf-8")
     )
     assert payload["pc"] == "0x02000044"
-    assert payload["registers"]["pc"] == "0x02000044"
+    registers = {item["name"]: item["value"] for item in payload["registers"]}
+    assert registers["pc"] == "0x02000044"
