@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from nds_disassembly_toolkit.analysis.orchestration.input import (
+    DSButton,
+    ScreenLayoutProfile,
+    WindowGeometry,
+)
 from nds_disassembly_toolkit.analysis.orchestration.model import (
     DebuggerHandshakeMode,
     EmulatorCapabilities,
@@ -12,7 +17,11 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
 from nds_disassembly_toolkit.analysis.orchestration.process import allocate_loopback_port
 from nds_disassembly_toolkit.analysis.runtime.melonds import MelonDSSession
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
-from nds_disassembly_toolkit.errors import RuntimeCheckpointError, RuntimeLaunchError
+from nds_disassembly_toolkit.errors import (
+    RuntimeCheckpointError,
+    RuntimeInputError,
+    RuntimeLaunchError,
+)
 
 
 class MelonDSBackend:
@@ -114,3 +123,16 @@ class MelonDSBackend:
     def load_state(self, source: Path) -> None:
         del source
         raise RuntimeCheckpointError("melonDS managed save-state support is not available yet")
+
+
+    def host_key_for(self, button: DSButton) -> str:
+        del button
+        raise RuntimeInputError(
+            "managed melonDS input profile is not guaranteed by this backend"
+        )
+
+    def layout_profile(self, geometry: WindowGeometry) -> ScreenLayoutProfile:
+        del geometry
+        raise RuntimeInputError(
+            "managed melonDS layout profile is not guaranteed by this backend"
+        )
