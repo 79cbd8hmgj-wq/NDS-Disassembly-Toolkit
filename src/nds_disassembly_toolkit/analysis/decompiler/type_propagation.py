@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import pairwise
 
 from nds_disassembly_toolkit.analysis.decompiler.access_paths import (
     collect_field_accesses,
@@ -31,6 +32,7 @@ from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
 from nds_disassembly_toolkit.analysis.decompiler.type_model import (
     IntegerType,
     PointerType,
+    RecoveredStructField,
     RecoveredSignedness,
     RecoveredType,
     TypeEvidence,
@@ -569,3 +571,411 @@ def build_render_type_context(
         parameter_types=tuple(parameter_types),
         structures=tuple(structures),
     )
+
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class FunctionTypeIdentity:
+    component: str
+    address: int
+    instruction_set: object
+
+    def __post_init__(self) -> None:
+        if not self.component:
+            raise ValueError("function type identity component cannot be empty")
+        if self.address < 0:
+            raise ValueError("function type identity address cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class PropagatedStructure:
+    name: str
+    fields: tuple[RecoveredStructField, ...]
+    conflicts: tuple[str, ...] = ()
+    interprocedural_support: bool = False
+
+    @property
+    def should_render(self) -> bool:
+        return (
+            self.interprocedural_support
+            and bool(self.fields)
+            and not self.conflicts
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InterproceduralTypePropagation:
+    records: tuple[
+        tuple[FunctionTypeIdentity, SSAValue, PropagatedStructure],
+        ...,
+    ]
+    converged: bool
+    iterations: int
+    warnings: tuple[str, ...] = ()
+
+    def structure_for(
+        self,
+        identity: FunctionTypeIdentity,
+        root: SSAValue,
+    ) -> PropagatedStructure | None:
+        for candidate_identity, candidate_root, structure in self.records:
+            if candidate_identity == identity and candidate_root == root:
+                return structure
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _PropagationState:
+    names: tuple[str, ...] = ()
+    fields: tuple[RecoveredStructField, ...] = ()
+    conflicts: tuple[str, ...] = ()
+    interprocedural_support: bool = False
+
+
+_RootKey = tuple[FunctionTypeIdentity, SSAValue]
+
+
+def _function_type_identity(function: SSAFunction) -> FunctionTypeIdentity:
+    return FunctionTypeIdentity(
+        function.component,
+        function.address,
+        function.instruction_set,
+    )
+
+
+def _root_key_sort_key(key: _RootKey) -> tuple[object, ...]:
+    identity, value = key
+    return (
+        identity.component,
+        identity.address,
+        identity.instruction_set.value,  # type: ignore[attr-defined]
+        *_value_sort_key(value),
+    )
+
+
+def _root_fallback_name(key: _RootKey) -> str:
+    identity, value = key
+    storage = value.storage
+    if storage.register is not None:
+        root_name = f"{storage.register.value}_v{value.version}"
+    elif storage.stack_offset is not None:
+        sign = "m" if storage.stack_offset < 0 else "p"
+        root_name = f"stack_{sign}{abs(storage.stack_offset):x}_v{value.version}"
+    else:
+        root_name = f"{storage.temporary_name or 'tmp'}_v{value.version}"
+    function_name = f"{identity.component}_{identity.address:08x}"
+    return f"struct_{function_name}_{root_name}"
+
+
+def _merge_source_refs(
+    *groups: tuple[SourceRef, ...],
+) -> tuple[SourceRef, ...]:
+    unique = {
+        (source.address, source.instruction_set.value): source
+        for group in groups
+        for source in group
+    }
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _merge_integer_signedness(
+    fields: tuple[RecoveredStructField, ...],
+) -> RecoveredSignedness:
+    signedness = {
+        field.field_type.signedness
+        for field in fields
+        if isinstance(field.field_type, IntegerType)
+    }
+    if len(signedness) == 1:
+        return next(iter(signedness))
+    return RecoveredSignedness.UNKNOWN
+
+
+def _merge_structure_fields(
+    left: tuple[RecoveredStructField, ...],
+    right: tuple[RecoveredStructField, ...],
+) -> tuple[tuple[RecoveredStructField, ...], tuple[str, ...]]:
+    by_offset: dict[int, list[RecoveredStructField]] = {}
+    for field in (*left, *right):
+        by_offset.setdefault(field.offset, []).append(field)
+
+    merged: list[RecoveredStructField] = []
+    conflicts: list[str] = []
+    for offset in sorted(by_offset):
+        candidates = tuple(by_offset[offset])
+        widths = sorted({field.width_bytes for field in candidates})
+        if len(widths) != 1:
+            conflicts.append(
+                f"field 0x{offset:x} has conflicting widths "
+                + "/".join(str(width) for width in widths)
+            )
+            continue
+        width = widths[0]
+        merged.append(
+            RecoveredStructField(
+                offset=offset,
+                width_bytes=width,
+                name=min(field.name for field in candidates),
+                field_type=IntegerType(
+                    width,
+                    _merge_integer_signedness(candidates),
+                ),
+                source=_merge_source_refs(
+                    *(field.source for field in candidates)
+                ),
+            )
+        )
+
+    ordered = tuple(sorted(merged, key=lambda field: field.offset))
+    for previous, current in pairwise(ordered):
+        if current.offset < previous.offset + previous.width_bytes:
+            conflicts.append(
+                "field overlap: "
+                f"{previous.name} and {current.name}"
+            )
+    return ordered, tuple(sorted(set(conflicts)))
+
+
+def _merge_propagation_states(
+    left: _PropagationState,
+    right: _PropagationState,
+) -> _PropagationState:
+    fields, field_conflicts = _merge_structure_fields(
+        left.fields,
+        right.fields,
+    )
+    return _PropagationState(
+        names=tuple(sorted(set((*left.names, *right.names)))),
+        fields=fields,
+        conflicts=tuple(
+            sorted(
+                set(
+                    (
+                        *left.conflicts,
+                        *right.conflicts,
+                        *field_conflicts,
+                    )
+                )
+            )
+        ),
+        interprocedural_support=(
+            left.interprocedural_support
+            or right.interprocedural_support
+        ),
+    )
+
+
+def _call_target_identity(
+    call: SSACallExpression,
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction],
+) -> FunctionTypeIdentity | None:
+    if call.target_component is not None:
+        candidate = FunctionTypeIdentity(
+            call.target_component,
+            call.target_address,
+            call.target_instruction_set,
+        )
+        return candidate if candidate in functions_by_identity else None
+
+    matches = tuple(
+        identity
+        for identity in functions_by_identity
+        if (
+            identity.address == call.target_address
+            and identity.instruction_set == call.target_instruction_set
+        )
+    )
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _interprocedural_links(
+    functions: tuple[SSAFunction, ...],
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction],
+) -> tuple[tuple[_RootKey, _RootKey], ...]:
+    links: set[tuple[_RootKey, _RootKey]] = set()
+
+    for function in functions:
+        caller_identity = _function_type_identity(function)
+        caller_index = build_def_use_index(function)
+        for block in function.blocks:
+            for statement in block.statements:
+                if not isinstance(statement, SSACallStatement):
+                    continue
+                target_identity = _call_target_identity(
+                    statement.call,
+                    functions_by_identity,
+                )
+                if target_identity is None:
+                    continue
+                callee = functions_by_identity[target_identity]
+                callee_index = build_def_use_index(callee)
+                for argument_index, argument in enumerate(
+                    statement.call.arguments
+                ):
+                    if argument_index >= len(callee.entry_definitions):
+                        break
+                    if (
+                        not isinstance(argument, SSAReferenceExpression)
+                        or argument.value is None
+                    ):
+                        continue
+                    caller_root = canonical_pointer_root(
+                        function,
+                        argument.value,
+                        index=caller_index,
+                    )
+                    callee_root = canonical_pointer_root(
+                        callee,
+                        callee.entry_definitions[argument_index],
+                        index=callee_index,
+                    )
+                    left = (caller_identity, caller_root)
+                    right = (target_identity, callee_root)
+                    if _root_key_sort_key(right) < _root_key_sort_key(left):
+                        left, right = right, left
+                    links.add((left, right))
+
+    return tuple(
+        sorted(
+            links,
+            key=lambda pair: (
+                _root_key_sort_key(pair[0]),
+                _root_key_sort_key(pair[1]),
+            ),
+        )
+    )
+
+
+def propagate_interprocedural_types(
+    functions: tuple[SSAFunction, ...],
+    environments: tuple[LocalTypeEnvironment, ...],
+    *,
+    iteration_cap: int = 32,
+) -> InterproceduralTypePropagation:
+    if iteration_cap <= 0:
+        raise ValueError("interprocedural propagation iteration cap must be positive")
+    if len(functions) != len(environments):
+        raise ValueError("functions and local type environments must align")
+
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction] = {}
+    environment_by_identity: dict[
+        FunctionTypeIdentity,
+        LocalTypeEnvironment,
+    ] = {}
+    for function, environment in zip(
+        functions,
+        environments,
+        strict=True,
+    ):
+        identity = _function_type_identity(function)
+        if identity in functions_by_identity:
+            raise ValueError("duplicate function type identity")
+        functions_by_identity[identity] = function
+        environment_by_identity[identity] = environment
+
+    links = _interprocedural_links(
+        functions,
+        functions_by_identity,
+    )
+
+    state: dict[_RootKey, _PropagationState] = {}
+    for identity, environment in environment_by_identity.items():
+        for candidate in environment.structures.candidates:
+            key = (identity, candidate.root)
+            state[key] = _PropagationState(
+                names=(candidate.name,),
+                fields=candidate.fields,
+                conflicts=candidate.conflicts,
+                interprocedural_support=False,
+            )
+
+    linked_keys = {key for pair in links for key in pair}
+    for key in linked_keys:
+        existing = state.get(key, _PropagationState())
+        state[key] = _PropagationState(
+            names=(
+                existing.names
+                if existing.names
+                else (_root_fallback_name(key),)
+            ),
+            fields=existing.fields,
+            conflicts=existing.conflicts,
+            interprocedural_support=True,
+        )
+
+    if not state:
+        return InterproceduralTypePropagation(
+            records=(),
+            converged=True,
+            iterations=1,
+        )
+
+    for iteration in range(1, iteration_cap + 1):
+        updated = dict(state)
+        for left, right in links:
+            merged = _merge_propagation_states(
+                state[left],
+                state[right],
+            )
+            merged = _PropagationState(
+                names=merged.names,
+                fields=merged.fields,
+                conflicts=merged.conflicts,
+                interprocedural_support=True,
+            )
+            updated[left] = _merge_propagation_states(
+                updated[left],
+                merged,
+            )
+            updated[right] = _merge_propagation_states(
+                updated[right],
+                merged,
+            )
+        if updated == state:
+            return InterproceduralTypePropagation(
+                records=_propagation_records(updated),
+                converged=True,
+                iterations=iteration,
+            )
+        state = updated
+
+    warning = (
+        f"interprocedural type propagation reached iteration cap "
+        f"{iteration_cap}"
+    )
+    return InterproceduralTypePropagation(
+        records=_propagation_records(state),
+        converged=False,
+        iterations=iteration_cap,
+        warnings=(warning,),
+    )
+
+
+def _propagation_records(
+    state: dict[_RootKey, _PropagationState],
+) -> tuple[
+    tuple[FunctionTypeIdentity, SSAValue, PropagatedStructure],
+    ...,
+]:
+    records: list[
+        tuple[FunctionTypeIdentity, SSAValue, PropagatedStructure]
+    ] = []
+    for key in sorted(state, key=_root_key_sort_key):
+        identity, root = key
+        item = state[key]
+        name = min(item.names) if item.names else _root_fallback_name(key)
+        records.append(
+            (
+                identity,
+                root,
+                PropagatedStructure(
+                    name=name,
+                    fields=item.fields,
+                    conflicts=item.conflicts,
+                    interprocedural_support=item.interprocedural_support,
+                ),
+            )
+        )
+    return tuple(records)
