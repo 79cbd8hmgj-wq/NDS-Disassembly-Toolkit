@@ -13,7 +13,6 @@ from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     JournalStepState,
     MemoryWriteStep,
     ParameterReference,
-    ParameterReference,
     ScenarioJournal,
     ScenarioJournalStep,
     load_journal,
