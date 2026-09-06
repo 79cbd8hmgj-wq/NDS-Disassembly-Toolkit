@@ -16,6 +16,8 @@ from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
 from nds_disassembly_toolkit.analysis.orchestration.input import DSButton
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     ButtonStep,
+    MemoryWriteStep,
+    ParameterReference,
     ScenarioDefinition,
 )
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
@@ -186,3 +188,96 @@ def test_baseline_restore_failure_aborts_remaining_cases(tmp_path: Path) -> None
     assert [case.id for case in result.cases] == ["first", "second"]
     assert [case.status for case in result.cases] == ["passed", "failed"]
     assert result.status == "aborted"
+
+
+
+@dataclass
+class ParameterFactory:
+    root: Path
+    contexts: list["ParameterContext"] = field(default_factory=list)
+
+    def __call__(self, case: AcceptanceCase) -> "ParameterContext":
+        context = ParameterContext(self.root / case.id)
+        self.contexts.append(context)
+        return context
+
+
+@dataclass
+class ParameterContext:
+    session_root: Path
+    memory: bytes = b"\x00"
+
+    def restore_checkpoint(self, name: str) -> None:
+        assert name == "baseline"
+        self.memory = b"\x00"
+
+    def read_memory(self, address: int, length: int) -> bytes:
+        assert address == 0x02000020
+        return self.memory[:length]
+
+    def write_memory(self, address: int, data: bytes) -> None:
+        assert address == 0x02000020
+        self.memory = data
+
+
+def test_case_parameters_resolve_typed_memory_bytes(tmp_path: Path) -> None:
+    scenario = ScenarioDefinition(
+        schema_version=1,
+        name="parameterized",
+        backend=EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=(),
+        checkpoint="baseline",
+        steps=(
+            MemoryWriteStep(
+                id="write",
+                address=0x02000020,
+                replacement=ParameterReference("test_value"),
+                expected_before=b"\x00",
+            ),
+        ),
+    )
+    matrix = AcceptanceMatrix(
+        schema_version=1,
+        scenario=Path("scenario.json"),
+        cases=(
+            AcceptanceCase("one", {"test_value": "01"}),
+            AcceptanceCase("two", {"test_value": "15"}),
+        ),
+    )
+    factory = ParameterFactory(tmp_path)
+
+    result = run_acceptance_matrix(factory, matrix, scenario)
+
+    assert result.status == "passed"
+    assert [context.memory for context in factory.contexts] == [b"\x01", b"\x15"]
+
+
+def test_unknown_parameter_reference_fails_before_case_execution(tmp_path: Path) -> None:
+    scenario = ScenarioDefinition(
+        schema_version=1,
+        name="parameterized",
+        backend=EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=(),
+        checkpoint="baseline",
+        steps=(
+            MemoryWriteStep(
+                id="write",
+                address=0x02000020,
+                replacement=ParameterReference("missing"),
+                expected_before=b"\x00",
+            ),
+        ),
+    )
+    matrix = AcceptanceMatrix(
+        schema_version=1,
+        scenario=Path("scenario.json"),
+        cases=(AcceptanceCase("one", {"different": "01"}),),
+    )
+    factory = ParameterFactory(tmp_path)
+
+    with pytest.raises(RuntimeScenarioError, match="missing"):
+        run_acceptance_matrix(factory, matrix, scenario)
+
+    assert factory.contexts == []
