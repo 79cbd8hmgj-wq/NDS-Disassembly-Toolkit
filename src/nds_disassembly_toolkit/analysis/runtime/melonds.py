@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from typing import Protocol, Self
+from typing import Callable, Protocol, Self, TypeVar
 
 from nds_disassembly_toolkit.analysis.runtime.model import (
     BreakpointKind,
@@ -55,6 +55,7 @@ _BREAKPOINT_KIND_TO_RSP = {
     BreakpointKind.ACCESS: 4,
 }
 _TRAP_SIGNAL = 5
+_HostActionResult = TypeVar("_HostActionResult")
 _EXPECTED_TRAP_KINDS = frozenset(
     {
         StopReasonKind.BREAKPOINT,
@@ -78,6 +79,10 @@ class _RSPClientLike(Protocol):
     def insert_breakpoint(self, kind: int, address: int, length: int) -> None: ...
 
     def remove_breakpoint(self, kind: int, address: int, length: int) -> None: ...
+
+    def begin_continue(self) -> None: ...
+
+    def wait_for_stop(self) -> RSPStopReply: ...
 
     def continue_execution(self) -> RSPStopReply: ...
 
@@ -210,6 +215,22 @@ class MelonDSSession:
         length: int = 4,
     ) -> None:
         self._client.remove_breakpoint(_BREAKPOINT_KIND_TO_RSP[kind], address, length)
+
+    def run_host_action(
+        self,
+        action: Callable[[], _HostActionResult],
+    ) -> _HostActionResult:
+        self._client.begin_continue()
+        try:
+            result = action()
+        except BaseException:
+            with suppress(Exception):
+                self._client.interrupt()
+                self._client.wait_for_stop()
+            raise
+        self._client.interrupt()
+        self._client.wait_for_stop()
+        return result
 
     def continue_execution(self) -> RuntimeSnapshot:
         reply = self._client.continue_execution()
