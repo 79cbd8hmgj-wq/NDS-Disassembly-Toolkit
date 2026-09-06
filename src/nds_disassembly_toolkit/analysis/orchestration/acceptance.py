@@ -493,10 +493,6 @@ def run_acceptance_matrix(
         for case in matrix.cases
     }
 
-    resolved_scenarios = {
-        case.id: _resolve_case_scenario(scenario, case.parameters)
-        for case in matrix.cases
-    }
 
     results: list[AcceptanceCaseResult] = []
     saw_case_failure = False
