@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import TypeVar
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
     AddressExpression,
@@ -591,6 +592,11 @@ def propagate_prototypes(
         for identity, prototype in prototypes_by_identity.items()
         if prototype.conflicts
     }
+    parameter_conflicts: set[_ParameterKey] = set()
+    return_conflicts: set[FunctionTypeIdentity] = set(
+        locked_return_conflicts
+    )
+    value_conflicts: set[_ValueKey] = set()
 
     for identity, prototype in prototypes_by_identity.items():
         return_types[identity] = prototype.return_type
@@ -611,9 +617,11 @@ def propagate_prototypes(
                 current,
                 binding.recovered_type,
             )
-            value_types[key] = (
-                UnknownType() if messages else merged
-            )
+            if messages:
+                value_conflicts.add(key)
+                value_types[key] = UnknownType()
+            else:
+                value_types[key] = merged
             _record_conflicts(
                 conflicts,
                 (identity,),
@@ -644,6 +652,9 @@ def propagate_prototypes(
             identity: set(messages)
             for identity, messages in conflicts.items()
         }
+        next_parameter_conflicts = set(parameter_conflicts)
+        next_return_conflicts = set(return_conflicts)
+        next_value_conflicts = set(value_conflicts)
 
         # Keep each parameter slot and its entry SSA value equivalent.
         for identity, function in functions_by_identity.items():
@@ -668,13 +679,35 @@ def propagate_prototypes(
                 )
                 merged, messages = _merge_pair(left, right)
                 resolved = UnknownType() if messages else merged
-                next_parameters[parameter_key] = resolved
-                next_values[value_key] = resolved
+                parameter_messages = _accumulate_type(
+                    next_parameters,
+                    parameter_key,
+                    resolved,
+                    poisoned=next_parameter_conflicts,
+                    source_conflicts=messages,
+                )
+                value_messages = _accumulate_type(
+                    next_values,
+                    value_key,
+                    resolved,
+                    poisoned=next_value_conflicts,
+                    source_conflicts=messages,
+                )
                 _record_conflicts(
                     next_conflicts,
                     (identity,),
                     f"parameter {position}",
-                    messages,
+                    tuple(
+                        sorted(
+                            set(
+                                (
+                                    *messages,
+                                    *parameter_messages,
+                                    *value_messages,
+                                )
+                            )
+                        )
+                    ),
                 )
 
         # Returned SSA values constrain the function return type.
@@ -698,13 +731,35 @@ def propagate_prototypes(
                 value_type,
             )
             resolved = UnknownType() if messages else merged
-            next_returns[constraint.identity] = resolved
-            next_values[value_key] = resolved
+            return_messages = _accumulate_type(
+                next_returns,
+                constraint.identity,
+                resolved,
+                poisoned=next_return_conflicts,
+                source_conflicts=messages,
+            )
+            value_messages = _accumulate_type(
+                next_values,
+                value_key,
+                resolved,
+                poisoned=next_value_conflicts,
+                source_conflicts=messages,
+            )
             _record_conflicts(
                 next_conflicts,
                 (constraint.identity,),
                 "return value",
-                messages,
+                tuple(
+                    sorted(
+                        set(
+                            (
+                                *messages,
+                                *return_messages,
+                                *value_messages,
+                            )
+                        )
+                    )
+                ),
             )
 
         # Caller argument values and callee parameter slots are equivalent.
@@ -730,14 +785,31 @@ def propagate_prototypes(
                 callee_type,
             )
             resolved = UnknownType() if messages else merged
-            next_values[caller_key] = resolved
-            next_parameters[parameter_key] = resolved
-            next_values[
-                (
-                    constraint.callee_identity,
-                    constraint.callee_value,
-                )
-            ] = resolved
+            callee_value_key = (
+                constraint.callee_identity,
+                constraint.callee_value,
+            )
+            caller_messages = _accumulate_type(
+                next_values,
+                caller_key,
+                resolved,
+                poisoned=next_value_conflicts,
+                source_conflicts=messages,
+            )
+            parameter_messages = _accumulate_type(
+                next_parameters,
+                parameter_key,
+                resolved,
+                poisoned=next_parameter_conflicts,
+                source_conflicts=messages,
+            )
+            callee_value_messages = _accumulate_type(
+                next_values,
+                callee_value_key,
+                resolved,
+                poisoned=next_value_conflicts,
+                source_conflicts=messages,
+            )
             _record_conflicts(
                 next_conflicts,
                 (
@@ -745,7 +817,18 @@ def propagate_prototypes(
                     constraint.callee_identity,
                 ),
                 f"call parameter {constraint.parameter_position}",
-                messages,
+                tuple(
+                    sorted(
+                        set(
+                            (
+                                *messages,
+                                *caller_messages,
+                                *parameter_messages,
+                                *callee_value_messages,
+                            )
+                        )
+                    )
+                ),
             )
 
         # Callee return type and caller r0 call-result definition are equivalent.
@@ -769,8 +852,20 @@ def propagate_prototypes(
                 caller_type,
             )
             resolved = UnknownType() if messages else merged
-            next_returns[constraint.callee_identity] = resolved
-            next_values[caller_key] = resolved
+            return_messages = _accumulate_type(
+                next_returns,
+                constraint.callee_identity,
+                resolved,
+                poisoned=next_return_conflicts,
+                source_conflicts=messages,
+            )
+            value_messages = _accumulate_type(
+                next_values,
+                caller_key,
+                resolved,
+                poisoned=next_value_conflicts,
+                source_conflicts=messages,
+            )
             _record_conflicts(
                 next_conflicts,
                 (
@@ -778,7 +873,17 @@ def propagate_prototypes(
                     constraint.caller_identity,
                 ),
                 "call return",
-                messages,
+                tuple(
+                    sorted(
+                        set(
+                            (
+                                *messages,
+                                *return_messages,
+                                *value_messages,
+                            )
+                        )
+                    )
+                ),
             )
 
         if (
@@ -786,6 +891,9 @@ def propagate_prototypes(
             and next_returns == return_types
             and next_values == value_types
             and next_conflicts == conflicts
+            and next_parameter_conflicts == parameter_conflicts
+            and next_return_conflicts == return_conflicts
+            and next_value_conflicts == value_conflicts
         ):
             return _prototype_propagation_result(
                 functions_by_identity,
@@ -802,6 +910,9 @@ def propagate_prototypes(
         return_types = next_returns
         value_types = next_values
         conflicts = next_conflicts
+        parameter_conflicts = next_parameter_conflicts
+        return_conflicts = next_return_conflicts
+        value_conflicts = next_value_conflicts
 
     return _prototype_propagation_result(
         functions_by_identity,
