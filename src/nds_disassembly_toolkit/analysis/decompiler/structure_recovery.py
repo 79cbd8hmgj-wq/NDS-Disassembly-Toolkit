@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from itertools import pairwise
 
 from nds_disassembly_toolkit.analysis.decompiler.access_paths import (
     FieldAccessEvidence,
@@ -267,7 +268,7 @@ def _candidate_for_root(
         )
 
     ordered_fields = tuple(sorted(fields, key=lambda field: field.offset))
-    for previous, current in zip(ordered_fields, ordered_fields[1:]):
+    for previous, current in pairwise(ordered_fields):
         if current.offset < previous.offset + previous.width_bytes:
             conflicts.append(
                 "field overlap: "
