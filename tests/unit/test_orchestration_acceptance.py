@@ -194,9 +194,9 @@ def test_baseline_restore_failure_aborts_remaining_cases(tmp_path: Path) -> None
 @dataclass
 class ParameterFactory:
     root: Path
-    contexts: list["ParameterContext"] = field(default_factory=list)
+    contexts: list[ParameterContext] = field(default_factory=list)
 
-    def __call__(self, case: AcceptanceCase) -> "ParameterContext":
+    def __call__(self, case: AcceptanceCase) -> ParameterContext:
         context = ParameterContext(self.root / case.id)
         self.contexts.append(context)
         return context
