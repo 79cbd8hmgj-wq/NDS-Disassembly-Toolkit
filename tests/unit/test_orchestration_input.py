@@ -7,10 +7,10 @@ from nds_disassembly_toolkit.analysis.orchestration.input import (
     DSPoint,
     ScreenLayoutProfile,
     ScreenViewport,
-    WindowGeometry,
     TouchDrag,
     TouchFlick,
     TouchTap,
+    WindowGeometry,
     map_touch_point,
 )
 
