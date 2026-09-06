@@ -10,6 +10,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from nds_disassembly_toolkit.analysis.orchestration.input import WindowGeometry
 from nds_disassembly_toolkit.analysis.orchestration.model import RuntimeSessionRecord
 from nds_disassembly_toolkit.analysis.orchestration.process import (
     _linux_process_executable,
@@ -159,9 +160,24 @@ class X11HostDriver:
         *,
         xdotool: Path,
         capture_tool: Path | None = None,
+        display: str | None = None,
     ) -> None:
         self.xdotool = xdotool
         self.capture_tool = capture_tool
+        self.display = display
+
+    def _display_environment(
+        self,
+        session: RuntimeSessionRecord | None = None,
+    ) -> dict[str, str]:
+        display = self.display
+        if session is not None and session.display is not None:
+            display = session.display
+        if display is None:
+            raise RuntimeInputError("managed X11 operation requires a DISPLAY")
+        environment = os.environ.copy()
+        environment["DISPLAY"] = display
+        return environment
 
     def _window_pid(self, window_id: str) -> int | None:
         completed = subprocess.run(
@@ -169,6 +185,11 @@ class X11HostDriver:
             check=False,
             capture_output=True,
             text=True,
+            env=(
+                None
+                if self.display is None
+                else {**os.environ, "DISPLAY": self.display}
+            ),
         )
         if completed.returncode != 0:
             return None
@@ -176,6 +197,86 @@ class X11HostDriver:
             return int(completed.stdout.strip())
         except ValueError:
             return None
+
+    def wait_for_window(
+        self,
+        session: RuntimeSessionRecord,
+        *,
+        timeout: float,
+    ) -> str:
+        if timeout <= 0:
+            raise RuntimeInputError("window discovery timeout must be positive")
+        if session.pid is None:
+            raise RuntimeInputError("managed session has no emulator process")
+        environment = self._display_environment(session)
+        deadline = time.monotonic() + timeout
+        while True:
+            completed = subprocess.run(
+                [
+                    str(self.xdotool),
+                    "search",
+                    "--onlyvisible",
+                    "--pid",
+                    str(session.pid),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            if completed.returncode == 0:
+                candidates = [
+                    line.strip()
+                    for line in completed.stdout.splitlines()
+                    if line.strip()
+                ]
+                for window_id in candidates:
+                    if self._window_pid(window_id) == session.pid:
+                        return window_id
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.01, remaining))
+        raise RuntimeInputError("owned emulator window did not become ready")
+
+    def window_geometry(self, session: RuntimeSessionRecord) -> WindowGeometry:
+        window_id = self._require_owned_window(session)
+        completed = subprocess.run(
+            [
+                str(self.xdotool),
+                "getwindowgeometry",
+                "--shell",
+                window_id,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=self._display_environment(session),
+        )
+        if completed.returncode != 0:
+            raise RuntimeInputError("failed to query owned emulator window geometry")
+        values: dict[str, int] = {}
+        for line in completed.stdout.splitlines():
+            name, separator, raw_value = line.partition("=")
+            if not separator or name not in {"X", "Y", "WIDTH", "HEIGHT"}:
+                continue
+            try:
+                values[name] = int(raw_value, 0)
+            except ValueError as exc:
+                raise RuntimeInputError(
+                    "owned emulator window geometry is malformed"
+                ) from exc
+        if set(values) != {"X", "Y", "WIDTH", "HEIGHT"}:
+            raise RuntimeInputError("owned emulator window geometry is incomplete")
+        try:
+            return WindowGeometry(
+                x=values["X"],
+                y=values["Y"],
+                width=values["WIDTH"],
+                height=values["HEIGHT"],
+            )
+        except ValueError as exc:
+            raise RuntimeInputError("owned emulator window geometry is invalid") from exc
 
     def window_is_owned(self, session: RuntimeSessionRecord) -> bool:
         pid = session.pid
