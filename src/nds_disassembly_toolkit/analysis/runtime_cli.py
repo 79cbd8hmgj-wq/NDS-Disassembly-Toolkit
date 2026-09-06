@@ -1148,6 +1148,33 @@ class _ManagedScenarioContext:
         capture_trace(self.debugger, config, self.session_root / "traces" / step.output)
 
 
+def _owned_x11_driver(record: RuntimeSessionRecord) -> X11HostDriver:
+    helpers = find_x11_helpers()
+    if helpers.xdotool is None:
+        raise RuntimeScenarioError(
+            "managed X11 operation requires xdotool"
+        )
+    driver = X11HostDriver(
+        xdotool=helpers.xdotool,
+        display=record.display,
+    )
+    if not driver.window_is_owned(record):
+        raise RuntimeScenarioError(
+            "managed emulator window ownership could not be proven"
+        )
+    return driver
+
+
+def _bind_managed_backend_runtime(
+    backend: object,
+    record: RuntimeSessionRecord,
+    driver: X11HostDriver,
+) -> None:
+    bind = getattr(backend, "bind_managed_session", None)
+    if callable(bind):
+        bind(record, driver)
+
+
 @contextmanager
 def _scenario_context(
     record: RuntimeSessionRecord,
@@ -1170,21 +1197,16 @@ def _scenario_context(
             raise RuntimeScenarioError(
                 f"managed backend does not provide required capability: {capability}"
             )
-    if {"window_input", "touchscreen_input"} & required_capabilities:
-        helpers = find_x11_helpers()
-        if helpers.xdotool is None:
-            raise RuntimeScenarioError(
-                "managed UI scenario requires X11 window ownership verification"
-            )
-        driver = X11HostDriver(
-            xdotool=helpers.xdotool,
-            display=record.display,
+    needs_x11 = bool(
+        {"window_input", "touchscreen_input"} & required_capabilities
+        or (
+            record.emulator is EmulatorKind.DESMUME
+            and "save_state" in required_capabilities
         )
-        if not driver.window_is_owned(record):
-            raise RuntimeScenarioError(
-                "managed UI scenario window ownership could not be proven"
-            )
-        host_driver = driver
+    )
+    if needs_x11:
+        host_driver = _owned_x11_driver(record)
+        _bind_managed_backend_runtime(backend, record, host_driver)
     debugger = backend.connect_debugger(
         cpu=record.cpu,
         host=record.debugger_host,
@@ -1321,7 +1343,14 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
         if arguments.runtime_checkpoint_command is None:
             raise ValueError("runtime checkpoint requires save or restore")
         record = load_session(arguments.session)
+        if not process_is_owned(record):
+            raise RuntimeScenarioError(
+                "managed emulator process ownership could not be proven"
+            )
         backend = _managed_backend(record.emulator)
+        if record.emulator is EmulatorKind.DESMUME:
+            driver = _owned_x11_driver(record)
+            _bind_managed_backend_runtime(backend, record, driver)
         context = CheckpointContext(
             checkpoint_root=record.session_root / "checkpoints",
             emulator=record.emulator,
