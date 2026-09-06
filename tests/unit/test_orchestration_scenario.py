@@ -22,7 +22,11 @@ from nds_disassembly_toolkit.analysis.runtime import (
     RuntimeStop,
     StopReasonKind,
 )
-from nds_disassembly_toolkit.errors import RuntimeScenarioError
+from nds_disassembly_toolkit.errors import (
+    RuntimeCheckpointError,
+    RuntimeRecoveryError,
+    RuntimeScenarioError,
+)
 
 
 @dataclass
