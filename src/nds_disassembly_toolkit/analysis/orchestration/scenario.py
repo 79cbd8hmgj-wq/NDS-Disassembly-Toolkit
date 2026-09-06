@@ -1059,7 +1059,7 @@ def resume_scenario(
         raise RuntimeRecoveryError("recovery requires a checkpoint anchor")
     try:
         _invoke_context(context, "restore_checkpoint", checkpoint)
-    except RuntimeScenarioError as exc:
+    except Exception as exc:
         raise RuntimeRecoveryError(
             f"failed to restore safe recovery checkpoint {checkpoint}"
         ) from exc
