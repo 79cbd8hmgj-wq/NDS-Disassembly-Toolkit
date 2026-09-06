@@ -1050,14 +1050,26 @@ class _ManagedScenarioContext:
     def press_button(self, button: DSButton) -> None:
         driver = self._require_host_driver()
         host_key = cast(str, self.backend.host_key_for(button))
-        driver.send_key(self.record, host_key)
+
+        def action() -> None:
+            driver.send_key(self.record, host_key)
+            time.sleep(0.05)
+
+        self.debugger.run_host_action(action)
 
     def touch_tap(self, point: DSPoint) -> None:
         driver = self._require_host_driver()
         x, y = self._mapped_touch_point(point)
-        driver.move_pointer(self.record, x, y)
-        driver.pointer_down(self.record)
-        driver.pointer_up(self.record)
+
+        def action() -> None:
+            driver.move_pointer(self.record, x, y)
+            driver.pointer_down(self.record)
+            try:
+                time.sleep(0.05)
+            finally:
+                driver.pointer_up(self.record)
+
+        self.debugger.run_host_action(action)
 
     def _touch_motion(
         self,
@@ -1070,13 +1082,17 @@ class _ManagedScenarioContext:
         driver = self._require_host_driver()
         start_x, start_y = self._mapped_touch_point(start)
         end_x, end_y = self._mapped_touch_point(end)
-        driver.move_pointer(self.record, start_x, start_y)
-        driver.pointer_down(self.record)
-        try:
-            time.sleep(duration)
-            driver.move_pointer(self.record, end_x, end_y)
-        finally:
-            driver.pointer_up(self.record)
+
+        def action() -> None:
+            driver.move_pointer(self.record, start_x, start_y)
+            driver.pointer_down(self.record)
+            try:
+                time.sleep(duration)
+                driver.move_pointer(self.record, end_x, end_y)
+            finally:
+                driver.pointer_up(self.record)
+
+        self.debugger.run_host_action(action)
 
     def touch_drag(self, start: DSPoint, end: DSPoint, duration: float) -> None:
         self._touch_motion(start, end, duration)
