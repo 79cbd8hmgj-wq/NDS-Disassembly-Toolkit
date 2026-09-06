@@ -344,6 +344,24 @@ class X11HostDriver:
             raise RuntimeInputError("window is not owned by the managed emulator process")
         return window_id
 
+    def key_down(self, session: RuntimeSessionRecord, host_key: str) -> None:
+        if not host_key:
+            raise RuntimeInputError("host key must not be empty")
+        window_id = self._require_owned_window(session)
+        subprocess.run(
+            [str(self.xdotool), "keydown", "--window", window_id, host_key],
+            check=True,
+        )
+
+    def key_up(self, session: RuntimeSessionRecord, host_key: str) -> None:
+        if not host_key:
+            raise RuntimeInputError("host key must not be empty")
+        window_id = self._require_owned_window(session)
+        subprocess.run(
+            [str(self.xdotool), "keyup", "--window", window_id, host_key],
+            check=True,
+        )
+
     def send_key(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
