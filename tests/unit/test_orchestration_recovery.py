@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind
 from nds_disassembly_toolkit.analysis.orchestration.input import DSButton
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
