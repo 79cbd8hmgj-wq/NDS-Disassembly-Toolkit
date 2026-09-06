@@ -4,12 +4,9 @@ from dataclasses import replace
 
 from nds_disassembly_toolkit.analysis.decompiler.lift import lift_function
 from nds_disassembly_toolkit.analysis.decompiler.lower import lower_ssa_function
-from nds_disassembly_toolkit.analysis.decompiler.lower import lower_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.model import DecompilationResult
 from nds_disassembly_toolkit.analysis.decompiler.names import build_name_context
 from nds_disassembly_toolkit.analysis.decompiler.render import render_pseudo_c
-from nds_disassembly_toolkit.analysis.decompiler.simplify import simplify_ssa_function
-from nds_disassembly_toolkit.analysis.decompiler.ssa import build_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.simplify import simplify_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.ssa import build_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.structure import structure_function
