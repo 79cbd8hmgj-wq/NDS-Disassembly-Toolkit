@@ -513,6 +513,36 @@ def _merge_pair(
     return merge_recovered_types(left, right)
 
 
+_TypeKey = TypeVar("_TypeKey")
+
+
+def _accumulate_type(
+    mapping: dict[_TypeKey, RecoveredType],
+    key: _TypeKey,
+    candidate: RecoveredType,
+    *,
+    poisoned: set[_TypeKey],
+    source_conflicts: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    if key in poisoned:
+        mapping[key] = UnknownType()
+        return source_conflicts
+    if source_conflicts:
+        poisoned.add(key)
+        mapping[key] = UnknownType()
+        return source_conflicts
+
+    current = mapping.get(key, UnknownType())
+    merged, messages = _merge_pair(current, candidate)
+    if messages:
+        poisoned.add(key)
+        mapping[key] = UnknownType()
+        return messages
+
+    mapping[key] = merged
+    return ()
+
+
 def _record_conflicts(
     conflicts: dict[FunctionTypeIdentity, set[str]],
     identities: tuple[FunctionTypeIdentity, ...],
