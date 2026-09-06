@@ -291,7 +291,7 @@ class ResumeFactory:
     actions: list[str] = field(default_factory=list)
     restores: list[str] = field(default_factory=list)
 
-    def __call__(self, case: AcceptanceCase) -> "ResumeContext":
+    def __call__(self, case: AcceptanceCase) -> ResumeContext:
         return ResumeContext(self, case.id, self.root)
 
 
