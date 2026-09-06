@@ -197,7 +197,7 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
     backend.load_state(destination)
 
     assert slot.read_bytes() == b"restored-state"
-    assert host.keys == ["Shift_R+F1", "F1"]
+    assert host.keys == ["Shift_R+F1", "Shift_R+F1", "F1"]
 
 
 def test_desmume_state_requires_bound_managed_session(tmp_path: Path) -> None:
