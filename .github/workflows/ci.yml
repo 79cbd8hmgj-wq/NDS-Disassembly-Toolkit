@@ -393,7 +393,7 @@ jobs:
               'fcffff1a'  # bne poll
               '004080e5'  # str r4, [r0]
               'faffffea'  # b poll
-              '00f03f02'  # 0x023ff000
+              '00010002'  # 0x02000100
               '44332211'  # 0x11223344
               '30010004'  # 0x04000130 KEYINPUT
               'ddccbbaa'  # 0xaabbccdd
@@ -555,7 +555,7 @@ jobs:
           )
           try:
               session.run_host_action(lambda: time.sleep(0.1))
-              assert session.read_memory(0x023FF000, 4) == bytes.fromhex('11223344')
+              assert session.read_memory(0x02000100, 4) == bytes.fromhex('11223344')
           finally:
               session.close()
           PY
@@ -591,7 +591,7 @@ jobs:
                       'type': 'assert',
                       'condition': {
                           'type': 'memory_equals',
-                          'address': '0x023ff000',
+                          'address': '0x02000100',
                           'bytes': '11223344',
                       },
                       'timeout': 2.0,
@@ -602,7 +602,7 @@ jobs:
                       'button': 'A',
                       'postcondition': {
                           'type': 'memory_equals',
-                          'address': '0x023ff000',
+                          'address': '0x02000100',
                           'bytes': 'aabbccdd',
                       },
                       'timeout': 2.0,
@@ -637,7 +637,7 @@ jobs:
               timeout=2.0,
           )
           try:
-              assert session.read_memory(0x023FF000, 4) == bytes.fromhex('aabbccdd')
+              assert session.read_memory(0x02000100, 4) == bytes.fromhex('aabbccdd')
           finally:
               session.close()
           PY
@@ -660,7 +660,7 @@ jobs:
               timeout=2.0,
           )
           try:
-              assert session.read_memory(0x023FF000, 4) == bytes.fromhex('11223344')
+              assert session.read_memory(0x02000100, 4) == bytes.fromhex('11223344')
           finally:
               session.close()
           PY
