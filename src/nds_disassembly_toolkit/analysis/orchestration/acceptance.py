@@ -5,7 +5,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from nds_disassembly_toolkit.analysis.orchestration.model import MATRIX_SCHEMA_VERSION
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
@@ -341,7 +341,11 @@ def _identity_value(value: object) -> object:
 
 
 def _identity_payload(value: object) -> str:
-    normalized = _identity_value(asdict(value) if hasattr(value, "__dataclass_fields__") else value)
+    normalized = _identity_value(
+        asdict(cast(Any, value))
+        if hasattr(value, "__dataclass_fields__")
+        else value
+    )
     rendered = json.dumps(
         normalized,
         sort_keys=True,
@@ -520,9 +524,9 @@ def run_acceptance_matrix(
                         continue
                     reusable[prior_case.id] = prior_case
 
-        prior_case = reusable.get(case.id)
-        if prior_case is not None:
-            results.append(prior_case)
+        reusable_case = reusable.get(case.id)
+        if reusable_case is not None:
+            results.append(reusable_case)
             continue
 
         resolved_scenario = resolved_cases[case.id]
