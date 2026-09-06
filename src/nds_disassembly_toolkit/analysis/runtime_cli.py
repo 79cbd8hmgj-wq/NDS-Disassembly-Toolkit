@@ -5,7 +5,7 @@ import json
 import sys
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -45,6 +45,7 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
     process_is_owned,
     spawn_owned_process,
     stop_owned_process,
+    store_session,
 )
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     CaptureTraceStep,
@@ -58,6 +59,11 @@ from nds_disassembly_toolkit.analysis.orchestration.scenario import (
 from nds_disassembly_toolkit.analysis.orchestration.x11 import (
     X11HostDriver,
     find_x11_helpers,
+    load_x11_display_lease,
+    remove_x11_display_lease,
+    start_x11_display,
+    stop_x11_display,
+    store_x11_display_lease,
 )
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, LocationAnnotation
 from nds_disassembly_toolkit.analysis.runtime import (
@@ -1170,7 +1176,10 @@ def _scenario_context(
             raise RuntimeScenarioError(
                 "managed UI scenario requires X11 window ownership verification"
             )
-        driver = X11HostDriver(xdotool=helpers.xdotool)
+        driver = X11HostDriver(
+            xdotool=helpers.xdotool,
+            display=record.display,
+        )
         if not driver.window_is_owned(record):
             raise RuntimeScenarioError(
                 "managed UI scenario window ownership could not be proven"
@@ -1226,18 +1235,55 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             rom=arguments.rom,
             cpu=arguments.cpu,
         )
-        launch = backend.build_launch_spec(
-            executable=session_record.emulator_executable,
-            rom=session_record.rom_path,
-            cpu=session_record.cpu,
-            debugger_host=session_record.debugger_host,
-            debugger_port=session_record.debugger_port,
-            session_root=session_record.session_root,
-            display=arguments.display,
-        )
-        running = spawn_owned_process(session_record, launch)
-        _write_json(_session_json(running), arguments.output)
-        return 0
+        display_lease = None
+        running: RuntimeSessionRecord | None = None
+        display = arguments.display
+        try:
+            if backend.capabilities.window_input and display is None:
+                display_lease = start_x11_display()
+                display = display_lease.display
+                store_x11_display_lease(session_record.session_root, display_lease)
+
+            if display is not None:
+                session_record = replace(session_record, display=display)
+                store_session(session_record)
+
+            launch = backend.build_launch_spec(
+                executable=session_record.emulator_executable,
+                rom=session_record.rom_path,
+                cpu=session_record.cpu,
+                debugger_host=session_record.debugger_host,
+                debugger_port=session_record.debugger_port,
+                session_root=session_record.session_root,
+                display=display,
+            )
+            running = spawn_owned_process(session_record, launch)
+
+            if backend.capabilities.window_input:
+                helpers = find_x11_helpers()
+                if helpers.xdotool is None:
+                    raise RuntimeScenarioError(
+                        "managed window input requires xdotool"
+                    )
+                driver = X11HostDriver(
+                    xdotool=helpers.xdotool,
+                    display=display,
+                )
+                window_id = driver.wait_for_window(running, timeout=5.0)
+                running = replace(running, window_id=window_id)
+                store_session(running)
+
+            _write_json(_session_json(running), arguments.output)
+            return 0
+        except BaseException:
+            if running is not None:
+                with suppress(Exception):
+                    stop_owned_process(running)
+            if display_lease is not None:
+                with suppress(Exception):
+                    stop_x11_display(display_lease)
+                remove_x11_display_lease(session_record.session_root)
+            raise
 
     if command == "session":
         if arguments.runtime_session_command is None:
@@ -1248,6 +1294,10 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             return 0
         if arguments.runtime_session_command == "stop":
             stopped = stop_owned_process(record)
+            display_lease = load_x11_display_lease(record.session_root)
+            if display_lease is not None:
+                stop_x11_display(display_lease)
+                remove_x11_display_lease(record.session_root)
             _write_json(_session_json(stopped), arguments.output)
             return 0
         if arguments.runtime_session_command == "resume":
