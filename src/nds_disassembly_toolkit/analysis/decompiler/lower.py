@@ -17,6 +17,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     DecompilerStatement,
     DecompilerVariable,
     DecompilerVariableKind,
+    FieldAddressExpression,
     MemoryReadExpression,
     MemoryWriteStatement,
     RegisterExpression,
@@ -26,6 +27,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     UnknownStatement,
     VariableExpression,
 )
+from nds_disassembly_toolkit.analysis.decompiler.access_paths import normalize_access_path
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAAssignmentStatement,
     SSABinaryExpression,
@@ -45,11 +47,18 @@ from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAUnaryExpression,
     SSAValue,
 )
+from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
+    canonical_pointer_root,
+)
+from nds_disassembly_toolkit.analysis.decompiler.type_propagation import (
+    LocalTypeEnvironment,
+)
 
 
 @dataclass(slots=True)
 class _LoweringContext:
     function: SSAFunction
+    type_environment: LocalTypeEnvironment | None = None
     entry_variables: dict[SSAValue, DecompilerVariable] = field(default_factory=dict)
     storage_variables: dict[SSAStorage, DecompilerVariable] = field(default_factory=dict)
     extra_locals: list[DecompilerVariable] = field(default_factory=list)
@@ -63,8 +72,14 @@ def _parameter_storage(variable: DecompilerVariable) -> SSAStorage | None:
     return None
 
 
-def _make_context(function: SSAFunction) -> _LoweringContext:
-    context = _LoweringContext(function)
+def _make_context(
+    function: SSAFunction,
+    type_environment: LocalTypeEnvironment | None = None,
+) -> _LoweringContext:
+    context = _LoweringContext(
+        function=function,
+        type_environment=type_environment,
+    )
     entry_by_storage = {
         value.storage: value
         for value in function.entry_definitions
@@ -157,6 +172,58 @@ def _reference_expression(
     )
 
 
+def _typed_field_address(
+    address: SSAExpression,
+    *,
+    width: int,
+    source: tuple,
+    context: _LoweringContext,
+) -> FieldAddressExpression | None:
+    environment = context.type_environment
+    if environment is None:
+        return None
+
+    path = normalize_access_path(address)
+    if (
+        path is None
+        or path.byte_offset < 0
+        or path.index is not None
+    ):
+        return None
+
+    root = canonical_pointer_root(context.function, path.root)
+    for candidate in environment.structures.candidates:
+        if (
+            candidate.root != root
+            or not candidate.should_render
+            or candidate.conflicts
+        ):
+            continue
+        for field in candidate.fields:
+            if (
+                field.offset != path.byte_offset
+                or field.width_bytes != width
+            ):
+                continue
+            base = _reference_expression(
+                SSAReferenceExpression(
+                    root.storage,
+                    root,
+                    address.source,
+                ),
+                context,
+            )
+            return FieldAddressExpression(
+                base=base,
+                structure_name=candidate.name,
+                field_name=field.name,
+                offset=field.offset,
+                width=field.width_bytes,
+                source=source,
+            )
+    return None
+
+
 def _lower_expression(
     expression: SSAExpression,
     context: _LoweringContext,
@@ -186,8 +253,18 @@ def _lower_expression(
             expression.source,
         )
     if isinstance(expression, SSAMemoryReadExpression):
+        typed_address = _typed_field_address(
+            expression.address,
+            width=expression.width,
+            source=expression.source,
+            context=context,
+        )
         return MemoryReadExpression(
-            _lower_expression(expression.address, context),
+            (
+                typed_address
+                if typed_address is not None
+                else _lower_expression(expression.address, context)
+            ),
             expression.width,
             expression.source,
         )
@@ -231,8 +308,18 @@ def _lower_statement(
             statement.source,
         )
     if isinstance(statement, SSAMemoryWriteStatement):
+        typed_address = _typed_field_address(
+            statement.address,
+            width=statement.width,
+            source=statement.source,
+            context=context,
+        )
         return MemoryWriteStatement(
-            _lower_expression(statement.address, context),
+            (
+                typed_address
+                if typed_address is not None
+                else _lower_expression(statement.address, context)
+            ),
             _lower_expression(statement.value, context),
             statement.width,
             statement.source,
@@ -267,8 +354,12 @@ def _lower_statement(
     raise TypeError(f"unsupported SSA statement: {type(statement).__name__}")
 
 
-def lower_ssa_function(function: SSAFunction) -> DecompiledFunction:
-    context = _make_context(function)
+def lower_ssa_function(
+    function: SSAFunction,
+    *,
+    type_environment: LocalTypeEnvironment | None = None,
+) -> DecompiledFunction:
+    context = _make_context(function, type_environment)
     blocks = tuple(
         DecompiledBlock(
             block.address,
