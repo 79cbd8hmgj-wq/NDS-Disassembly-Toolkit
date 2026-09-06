@@ -825,3 +825,88 @@ def test_runtime_matrix_parser_accepts_matrix_path() -> None:
     assert arguments.runtime_command == "matrix"
     assert arguments.runtime_matrix_command == "run"
     assert arguments.matrix == Path("matrix.json")
+
+
+
+def test_runtime_matrix_dispatch_uses_relative_scenario_and_managed_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    matrix_path = tmp_path / "matrix.json"
+    session_root = tmp_path / "session"
+    record = SimpleNamespace(session_root=session_root)
+    matrix = SimpleNamespace(scenario=Path("scenario.json"))
+    scenario = object()
+    context = object()
+    calls: list[tuple[object, ...]] = []
+
+    class ManagedContext:
+        def __enter__(self) -> object:
+            return context
+
+        def __exit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            return None
+
+    monkeypatch.setattr(runtime_cli, "load_matrix", lambda path: matrix, raising=False)
+    monkeypatch.setattr(runtime_cli, "load_session", lambda path: record)
+    monkeypatch.setattr(
+        runtime_cli,
+        "load_scenario",
+        lambda path: scenario if path == tmp_path / "scenario.json" else None,
+    )
+    monkeypatch.setattr(
+        runtime_cli,
+        "_scenario_context",
+        lambda loaded_record, loaded_scenario: ManagedContext(),
+    )
+
+    def fake_run(
+        context_factory: object,
+        loaded_matrix: object,
+        loaded_scenario: object,
+    ) -> object:
+        case_context = context_factory(SimpleNamespace(id="case-a"))
+        calls.append((case_context, loaded_matrix, loaded_scenario))
+        return SimpleNamespace(
+            status="passed",
+            cases=(
+                SimpleNamespace(
+                    id="case-a",
+                    status="passed",
+                    parameters={"value": "01"},
+                    completed_steps=("step-0000",),
+                    error=None,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        runtime_cli,
+        "run_acceptance_matrix",
+        fake_run,
+        raising=False,
+    )
+
+    assert (
+        main(
+            [
+                "runtime",
+                "matrix",
+                "run",
+                str(matrix_path),
+                "--session-root",
+                str(session_root),
+            ]
+        )
+        == 0
+    )
+    assert calls == [(context, matrix, scenario)]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "passed"
+    assert [case["id"] for case in payload["cases"]] == ["case-a"]
