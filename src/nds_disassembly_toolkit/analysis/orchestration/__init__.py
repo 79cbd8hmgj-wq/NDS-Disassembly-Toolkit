@@ -1,3 +1,4 @@
+from nds_disassembly_toolkit.analysis.orchestration.backend import EmulatorBackend
 from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
     AcceptanceCase,
     AcceptanceCaseResult,
@@ -15,6 +16,11 @@ from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
     restore_checkpoint,
     validate_checkpoint,
 )
+from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmuMEBackend
+from nds_disassembly_toolkit.analysis.orchestration.doctor import (
+    discover_emulator_executable,
+    run_doctor,
+)
 from nds_disassembly_toolkit.analysis.orchestration.input import (
     DSButton,
     DSPoint,
@@ -26,6 +32,7 @@ from nds_disassembly_toolkit.analysis.orchestration.input import (
     WindowGeometry,
     map_touch_point,
 )
+from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import MelonDSBackend
 from nds_disassembly_toolkit.analysis.orchestration.model import (
     CHECKPOINT_SCHEMA_VERSION,
     JOURNAL_SCHEMA_VERSION,
@@ -41,6 +48,13 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
     ProcessIdentity,
     RuntimeLifecycleState,
     RuntimeSessionRecord,
+)
+from nds_disassembly_toolkit.analysis.orchestration.process import (
+    create_session,
+    load_session,
+    process_is_owned,
+    spawn_owned_process,
+    stop_owned_process,
 )
 from nds_disassembly_toolkit.analysis.orchestration.predicates import (
     AllOf,
@@ -127,6 +141,9 @@ __all__ = [
     "DebuggerReachable",
     "DoctorCheckResult",
     "DoctorReport",
+    "EmulatorBackend",
+    "MelonDSBackend",
+    "DeSmuMEBackend",
     "EmulatorCapabilities",
     "EmulatorKind",
     "GuardedWriteEvidence",
@@ -184,4 +201,11 @@ __all__ = [
     "store_journal",
     "validate_checkpoint",
     "wait_for_predicate",
+    "discover_emulator_executable",
+    "run_doctor",
+    "create_session",
+    "load_session",
+    "process_is_owned",
+    "spawn_owned_process",
+    "stop_owned_process",
 ]
