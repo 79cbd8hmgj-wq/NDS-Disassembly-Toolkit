@@ -8,8 +8,8 @@ from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
 )
 from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
     CheckpointContext,
-    CheckpointMetadata,
     CheckpointMemoryFingerprint,
+    CheckpointMetadata,
     CheckpointPredicate,
     create_checkpoint,
     restore_checkpoint,
