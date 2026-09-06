@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -8,6 +9,16 @@ from typing import Any
 import pytest
 
 import nds_disassembly_toolkit.analysis.runtime_cli as runtime_cli
+from nds_disassembly_toolkit.analysis.orchestration import (
+    DSButton,
+    DSPoint,
+    RuntimeLifecycleState,
+    RuntimeSessionRecord,
+    ScreenLayoutProfile,
+    ScreenViewport,
+    WindowGeometry,
+)
+from nds_disassembly_toolkit.analysis.orchestration.x11 import X11DisplayLease
 from nds_disassembly_toolkit.analysis.runtime import (
     BreakpointKind,
     RegisterSnapshot,
@@ -918,15 +929,15 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
 ) -> None:
     class Backend:
         def host_key_for(self, button: object) -> str:
-            assert button is runtime_cli.DSButton.A
+            assert button is DSButton.A
             return "x"
 
         def layout_profile(self, geometry: object) -> object:
             assert geometry.width == 256
             assert geometry.height == 384
-            return runtime_cli.ScreenLayoutProfile(
+            return ScreenLayoutProfile(
                 window=geometry,
-                lower_screen=runtime_cli.ScreenViewport(0, 192, 256, 192),
+                lower_screen=ScreenViewport(0, 192, 256, 192),
             )
 
     class Host:
@@ -937,7 +948,7 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
             self.events.append(("key", host_key))
 
         def window_geometry(self, record: object) -> object:
-            return runtime_cli.WindowGeometry(0, 0, 256, 384)
+            return WindowGeometry(0, 0, 256, 384)
 
         def move_pointer(self, record: object, x: int, y: int) -> None:
             self.events.append(("move", x, y))
@@ -965,7 +976,7 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
     )
 
     context.press_button(runtime_cli.DSButton.A)
-    context.touch_tap(runtime_cli.DSPoint(255, 191))
+    context.touch_tap(DSPoint(255, 191))
 
     assert host.events == [
         ("key", "x"),
@@ -977,10 +988,10 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
 
 
 def _managed_record(tmp_path: Path) -> object:
-    return runtime_cli.RuntimeSessionRecord(
+    return RuntimeSessionRecord(
         schema_version=1,
         session_id="session-a",
-        lifecycle=runtime_cli.RuntimeLifecycleState.CREATED,
+        lifecycle=RuntimeLifecycleState.CREATED,
         emulator=runtime_cli.EmulatorKind.DESMUME,
         emulator_executable=tmp_path / "desmume-cli",
         emulator_sha256=None,
@@ -1017,7 +1028,7 @@ def test_runtime_launch_desmume_owns_display_and_binds_window(
             calls.append(("launch-spec-display", kwargs["display"]))
             return SimpleNamespace(argv=("desmume-cli",), environment=(), cwd=None)
 
-    lease = runtime_cli.X11DisplayLease(
+    lease = X11DisplayLease(
         display_number=104,
         pid=9001,
         process_group=9001,
@@ -1036,7 +1047,7 @@ def test_runtime_launch_desmume_owns_display_and_binds_window(
     def fake_spawn(launch_record: object, spec: object) -> object:
         del spec
         calls.append(("spawn-display", launch_record.display))
-        return runtime_cli.replace(
+        return replace(
             launch_record,
             lifecycle=runtime_cli.RuntimeLifecycleState.LAUNCHING,
             pid=1234,
