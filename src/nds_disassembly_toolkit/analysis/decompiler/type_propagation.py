@@ -1,0 +1,982 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from itertools import pairwise
+
+from nds_disassembly_toolkit.analysis.decompiler.access_paths import (
+    collect_field_accesses,
+    normalize_access_path,
+)
+from nds_disassembly_toolkit.analysis.decompiler.model import SourceRef
+from nds_disassembly_toolkit.analysis.decompiler.ssa import (
+    SSAAssignmentStatement,
+    SSABinaryExpression,
+    SSABranchStatement,
+    SSACallExpression,
+    SSACallStatement,
+    SSACompareExpression,
+    SSAExpression,
+    SSAFunction,
+    SSAMemoryReadExpression,
+    SSAMemoryWriteStatement,
+    SSAReferenceExpression,
+    SSAReturnStatement,
+    SSAUnaryExpression,
+    SSAValue,
+    build_def_use_index,
+)
+from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
+    LocalStructureRecovery,
+    canonical_pointer_root,
+    recover_local_structures,
+)
+from nds_disassembly_toolkit.analysis.decompiler.type_model import (
+    IntegerType,
+    PointerType,
+    RecoveredSignedness,
+    RecoveredStructField,
+    RecoveredType,
+    TypeEvidence,
+    TypeEvidenceKind,
+)
+from nds_disassembly_toolkit.analysis.decompiler.value_facts import (
+    ValueFactsAnalysis,
+    analyze_value_facts,
+)
+from nds_disassembly_toolkit.analysis.model import ConditionCode, InstructionSet
+
+_SIGNED_CONDITIONS = frozenset(
+    {
+        ConditionCode.GE,
+        ConditionCode.LT,
+        ConditionCode.GT,
+        ConditionCode.LE,
+    }
+)
+_UNSIGNED_CONDITIONS = frozenset(
+    {
+        ConditionCode.HS,
+        ConditionCode.LO,
+        ConditionCode.HI,
+        ConditionCode.LS,
+    }
+)
+
+
+def _value_sort_key(value: SSAValue) -> tuple[object, ...]:
+    storage = value.storage
+    return (
+        storage.kind.value,
+        storage.register.value if storage.register is not None else "",
+        storage.stack_offset if storage.stack_offset is not None else 0,
+        storage.temporary_name or "",
+        value.version,
+    )
+
+
+def _evidence_sort_key(evidence: TypeEvidence) -> tuple[object, ...]:
+    return (
+        tuple(
+            (source.address, source.instruction_set.value)
+            for source in evidence.source
+        ),
+        evidence.kind.value,
+        evidence.description,
+    )
+
+
+def _unique_evidence(
+    evidence: list[TypeEvidence],
+) -> tuple[TypeEvidence, ...]:
+    return tuple(sorted(set(evidence), key=_evidence_sort_key))
+
+
+@dataclass(frozen=True, slots=True)
+class ValueTypeBinding:
+    value: SSAValue
+    recovered_type: RecoveredType
+    evidence: tuple[TypeEvidence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FieldTypeBinding:
+    root: SSAValue
+    byte_offset: int
+    recovered_type: IntegerType
+    evidence: tuple[TypeEvidence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LocalTypeEnvironment:
+    value_bindings: tuple[ValueTypeBinding, ...]
+    field_bindings: tuple[FieldTypeBinding, ...]
+    structures: LocalStructureRecovery
+
+    def type_for_value(self, value: SSAValue) -> RecoveredType | None:
+        for binding in self.value_bindings:
+            if binding.value == value:
+                return binding.recovered_type
+        return None
+
+    def type_for_field(
+        self,
+        root: SSAValue,
+        byte_offset: int,
+    ) -> IntegerType | None:
+        for binding in self.field_bindings:
+            if binding.root == root and binding.byte_offset == byte_offset:
+                return binding.recovered_type
+        return None
+
+
+def _assignment_map(
+    function: SSAFunction,
+) -> dict[SSAValue, SSAAssignmentStatement]:
+    return {
+        statement.target: statement
+        for block in function.blocks
+        for statement in block.statements
+        if isinstance(statement, SSAAssignmentStatement)
+    }
+
+
+def _visit_compares(
+    expression: SSAExpression,
+    output: list[SSACompareExpression],
+) -> None:
+    if isinstance(expression, SSACompareExpression):
+        output.append(expression)
+        _visit_compares(expression.left, output)
+        _visit_compares(expression.right, output)
+        return
+    if isinstance(expression, SSAUnaryExpression):
+        _visit_compares(expression.operand, output)
+        return
+    if isinstance(expression, SSABinaryExpression):
+        _visit_compares(expression.left, output)
+        _visit_compares(expression.right, output)
+        return
+    if isinstance(expression, SSAMemoryReadExpression):
+        _visit_compares(expression.address, output)
+        return
+    if isinstance(expression, SSACallExpression):
+        for argument in expression.arguments:
+            _visit_compares(argument, output)
+
+
+def _compare_expressions(
+    function: SSAFunction,
+) -> tuple[SSACompareExpression, ...]:
+    output: list[SSACompareExpression] = []
+    for block in function.blocks:
+        for statement in block.statements:
+            if isinstance(statement, SSAAssignmentStatement):
+                _visit_compares(statement.value, output)
+                continue
+            if isinstance(statement, SSAMemoryWriteStatement):
+                _visit_compares(statement.address, output)
+                _visit_compares(statement.value, output)
+                continue
+            if isinstance(statement, SSACallStatement):
+                _visit_compares(statement.call, output)
+                continue
+            if isinstance(statement, SSAReturnStatement):
+                if statement.value is not None:
+                    _visit_compares(statement.value, output)
+                continue
+            if (
+                isinstance(statement, SSABranchStatement)
+                and statement.condition is not None
+            ):
+                _visit_compares(statement.condition, output)
+    return tuple(output)
+
+
+def _signedness_for_condition(
+    condition: ConditionCode,
+) -> RecoveredSignedness | None:
+    if condition in _SIGNED_CONDITIONS:
+        return RecoveredSignedness.SIGNED
+    if condition in _UNSIGNED_CONDITIONS:
+        return RecoveredSignedness.UNSIGNED
+    return None
+
+
+def _merge_signedness(
+    values: set[RecoveredSignedness],
+) -> RecoveredSignedness:
+    if not values:
+        return RecoveredSignedness.UNKNOWN
+    if len(values) == 1:
+        return next(iter(values))
+    return RecoveredSignedness.UNKNOWN
+
+
+def infer_local_types(
+    function: SSAFunction,
+    *,
+    structures: LocalStructureRecovery | None = None,
+    facts: ValueFactsAnalysis | None = None,
+) -> LocalTypeEnvironment:
+    structure_result = (
+        structures
+        if structures is not None
+        else recover_local_structures(function)
+    )
+    fact_analysis = facts if facts is not None else analyze_value_facts(function)
+    index = build_def_use_index(function)
+    assignments = _assignment_map(function)
+
+    pointer_evidence: dict[SSAValue, list[TypeEvidence]] = {}
+    pointer_components: dict[SSAValue, set[str | None]] = {}
+    candidate_by_root = {
+        candidate.root: candidate
+        for candidate in structure_result.candidates
+    }
+
+    for access in collect_field_accesses(function):
+        root = canonical_pointer_root(function, access.root, index=index)
+        pointer_evidence.setdefault(root, []).append(
+            TypeEvidence(
+                TypeEvidenceKind.POINTER_DEREFERENCE,
+                access.source,
+                (
+                    f"{access.kind.value} {access.width_bytes} byte(s) "
+                    f"at +0x{access.byte_offset:x}"
+                ),
+            )
+        )
+
+    for value, value_facts in fact_analysis.records:
+        if value_facts.address is None:
+            continue
+        root = canonical_pointer_root(function, value, index=index)
+        pointer_evidence.setdefault(root, []).append(
+            TypeEvidence(
+                TypeEvidenceKind.EXACT_ADDRESS,
+                value_facts.provenance,
+                f"proven address 0x{value_facts.address:08x}",
+            )
+        )
+        pointer_components.setdefault(root, set()).add(value_facts.component)
+
+    value_signedness: dict[
+        SSAValue,
+        set[RecoveredSignedness],
+    ] = {}
+    value_evidence: dict[SSAValue, list[TypeEvidence]] = {}
+    field_signedness: dict[
+        tuple[SSAValue, int],
+        set[RecoveredSignedness],
+    ] = {}
+    field_evidence: dict[
+        tuple[SSAValue, int],
+        list[TypeEvidence],
+    ] = {}
+
+    def classify_reference(
+        reference: SSAReferenceExpression,
+        signedness: RecoveredSignedness,
+        evidence: TypeEvidence,
+    ) -> None:
+        if reference.value is None:
+            return
+        value = canonical_pointer_root(
+            function,
+            reference.value,
+            index=index,
+        )
+        assignment = assignments.get(value)
+        if (
+            assignment is not None
+            and isinstance(assignment.value, SSAMemoryReadExpression)
+        ):
+            path = normalize_access_path(assignment.value.address)
+            if (
+                path is not None
+                and path.byte_offset >= 0
+                and path.index is None
+            ):
+                root = canonical_pointer_root(
+                    function,
+                    path.root,
+                    index=index,
+                )
+                key = (root, path.byte_offset)
+                field_signedness.setdefault(key, set()).add(signedness)
+                field_evidence.setdefault(key, []).append(evidence)
+                return
+
+        value_signedness.setdefault(value, set()).add(signedness)
+        value_evidence.setdefault(value, []).append(evidence)
+
+    for compare in _compare_expressions(function):
+        signedness = _signedness_for_condition(compare.condition)
+        if signedness is None:
+            continue
+        kind = (
+            TypeEvidenceKind.SIGNED_COMPARE
+            if signedness is RecoveredSignedness.SIGNED
+            else TypeEvidenceKind.UNSIGNED_COMPARE
+        )
+        compare_evidence = TypeEvidence(
+            kind,
+            compare.source,
+            f"condition {compare.condition.value}",
+        )
+        if isinstance(compare.left, SSAReferenceExpression):
+            classify_reference(compare.left, signedness, compare_evidence)
+        if isinstance(compare.right, SSAReferenceExpression):
+            classify_reference(compare.right, signedness, compare_evidence)
+
+    field_bindings: list[FieldTypeBinding] = []
+    for candidate in structure_result.candidates:
+        for field in candidate.fields:
+            key = (candidate.root, field.offset)
+            signedness = _merge_signedness(
+                field_signedness.get(key, set())
+            )
+            binding_evidence = list(field_evidence.get(key, ()))
+            binding_evidence.extend(
+                TypeEvidence(
+                    (
+                        TypeEvidenceKind.MEMORY_READ
+                        if access.kind.value == "read"
+                        else TypeEvidenceKind.MEMORY_WRITE
+                    ),
+                    access.source,
+                    f"{access.width_bytes} byte(s) at +0x{access.byte_offset:x}",
+                )
+                for access in candidate.accesses
+                if access.byte_offset == field.offset
+            )
+            field_bindings.append(
+                FieldTypeBinding(
+                    root=candidate.root,
+                    byte_offset=field.offset,
+                    recovered_type=IntegerType(
+                        field.width_bytes,
+                        signedness,
+                    ),
+                    evidence=_unique_evidence(binding_evidence),
+                )
+            )
+
+    loaded_types: dict[SSAValue, IntegerType] = {}
+    loaded_evidence: dict[SSAValue, list[TypeEvidence]] = {}
+    for target, assignment in assignments.items():
+        if not isinstance(assignment.value, SSAMemoryReadExpression):
+            continue
+        signedness = _merge_signedness(
+            value_signedness.get(target, set())
+        )
+        loaded_types[target] = IntegerType(
+            assignment.value.width,
+            signedness,
+        )
+        loaded_evidence.setdefault(target, []).append(
+            TypeEvidence(
+                TypeEvidenceKind.MEMORY_READ,
+                assignment.value.source,
+                f"{assignment.value.width} byte memory result",
+            )
+        )
+        loaded_evidence[target].extend(value_evidence.get(target, ()))
+
+    value_bindings: list[ValueTypeBinding] = []
+    all_values = (
+        set(pointer_evidence)
+        | set(loaded_types)
+        | set(value_signedness)
+    )
+    for value in sorted(all_values, key=_value_sort_key):
+        if value in pointer_evidence:
+            structure_candidate = candidate_by_root.get(value)
+            components = pointer_components.get(value, set())
+            component: str | None = None
+            if len(components) == 1:
+                component = next(iter(components))
+            value_bindings.append(
+                ValueTypeBinding(
+                    value=value,
+                    recovered_type=PointerType(
+                        pointee_name=(
+                            structure_candidate.name
+                            if structure_candidate is not None
+                            else None
+                        ),
+                        component=component,
+                    ),
+                    evidence=_unique_evidence(
+                        pointer_evidence[value]
+                    ),
+                )
+            )
+            continue
+
+        loaded = loaded_types.get(value)
+        if loaded is not None:
+            value_bindings.append(
+                ValueTypeBinding(
+                    value=value,
+                    recovered_type=loaded,
+                    evidence=_unique_evidence(
+                        loaded_evidence.get(value, [])
+                    ),
+                )
+            )
+            continue
+
+        signedness = _merge_signedness(
+            value_signedness.get(value, set())
+        )
+        value_bindings.append(
+            ValueTypeBinding(
+                value=value,
+                recovered_type=IntegerType(4, signedness),
+                evidence=_unique_evidence(
+                    value_evidence.get(value, [])
+                ),
+            )
+        )
+
+    return LocalTypeEnvironment(
+        value_bindings=tuple(value_bindings),
+        field_bindings=tuple(
+            sorted(
+                field_bindings,
+                key=lambda binding: (
+                    _value_sort_key(binding.root),
+                    binding.byte_offset,
+                ),
+            )
+        ),
+        structures=structure_result,
+    )
+
+
+
+@dataclass(frozen=True, slots=True)
+class RenderStructField:
+    type_name: str
+    name: str
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class RenderStructType:
+    name: str
+    fields: tuple[RenderStructField, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RenderTypeContext:
+    parameter_types: tuple[tuple[str, str], ...] = ()
+    local_types: tuple[tuple[str, str], ...] = ()
+    structures: tuple[RenderStructType, ...] = ()
+
+    def parameter_type(self, variable_name: str) -> str | None:
+        for name, type_name in self.parameter_types:
+            if name == variable_name:
+                return type_name
+        return None
+
+    def local_type(self, variable_name: str) -> str | None:
+        for name, type_name in self.local_types:
+            if name == variable_name:
+                return type_name
+        return None
+
+
+def _integer_c_type(value: IntegerType) -> str:
+    prefix = (
+        "int"
+        if value.signedness is RecoveredSignedness.SIGNED
+        else "uint"
+    )
+    return f"{prefix}{value.width_bytes * 8}_t"
+
+
+def build_render_type_context(
+    function: SSAFunction,
+    environment: LocalTypeEnvironment,
+) -> RenderTypeContext:
+    renderable = {
+        candidate.root: candidate
+        for candidate in environment.structures.candidates
+        if candidate.should_render and not candidate.conflicts
+    }
+
+    parameter_types: list[tuple[str, str]] = []
+    for index, parameter in enumerate(function.parameters):
+        if index >= len(function.entry_definitions):
+            continue
+        entry = function.entry_definitions[index]
+        candidate = renderable.get(entry)
+        recovered = environment.type_for_value(entry)
+        if (
+            candidate is not None
+            and isinstance(recovered, PointerType)
+            and recovered.pointee_name == candidate.name
+        ):
+            parameter_types.append(
+                (parameter.name, f"struct {candidate.name} *")
+            )
+            continue
+        if isinstance(recovered, IntegerType):
+            parameter_types.append(
+                (parameter.name, _integer_c_type(recovered))
+            )
+
+    structures: list[RenderStructType] = []
+    for candidate in sorted(
+        renderable.values(),
+        key=lambda item: (
+            item.component,
+            item.function_address,
+            item.instruction_set.value,
+            item.name,
+        ),
+    ):
+        fields: list[RenderStructField] = []
+        for field in candidate.fields:
+            recovered_field = environment.type_for_field(
+                candidate.root,
+                field.offset,
+            )
+            type_name = (
+                _integer_c_type(recovered_field)
+                if recovered_field is not None
+                else _integer_c_type(
+                    IntegerType(
+                        field.width_bytes,
+                        RecoveredSignedness.UNKNOWN,
+                    )
+                )
+            )
+            fields.append(
+                RenderStructField(
+                    type_name=type_name,
+                    name=field.name,
+                    offset=field.offset,
+                )
+            )
+        structures.append(
+            RenderStructType(
+                name=candidate.name,
+                fields=tuple(fields),
+            )
+        )
+
+    return RenderTypeContext(
+        parameter_types=tuple(parameter_types),
+        structures=tuple(structures),
+    )
+
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class FunctionTypeIdentity:
+    component: str
+    address: int
+    instruction_set: InstructionSet
+
+    def __post_init__(self) -> None:
+        if not self.component:
+            raise ValueError("function type identity component cannot be empty")
+        if self.address < 0:
+            raise ValueError("function type identity address cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class PropagatedStructure:
+    name: str
+    fields: tuple[RecoveredStructField, ...]
+    conflicts: tuple[str, ...] = ()
+    interprocedural_support: bool = False
+
+    @property
+    def should_render(self) -> bool:
+        return (
+            self.interprocedural_support
+            and bool(self.fields)
+            and not self.conflicts
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InterproceduralTypePropagation:
+    records: tuple[
+        tuple[FunctionTypeIdentity, SSAValue, PropagatedStructure],
+        ...,
+    ]
+    converged: bool
+    iterations: int
+    warnings: tuple[str, ...] = ()
+
+    def structure_for(
+        self,
+        identity: FunctionTypeIdentity,
+        root: SSAValue,
+    ) -> PropagatedStructure | None:
+        for candidate_identity, candidate_root, structure in self.records:
+            if candidate_identity == identity and candidate_root == root:
+                return structure
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _PropagationState:
+    names: tuple[str, ...] = ()
+    fields: tuple[RecoveredStructField, ...] = ()
+    conflicts: tuple[str, ...] = ()
+    interprocedural_support: bool = False
+
+
+_RootKey = tuple[FunctionTypeIdentity, SSAValue]
+
+
+def _function_type_identity(function: SSAFunction) -> FunctionTypeIdentity:
+    return FunctionTypeIdentity(
+        function.component,
+        function.address,
+        function.instruction_set,
+    )
+
+
+def _root_key_sort_key(key: _RootKey) -> tuple[object, ...]:
+    identity, value = key
+    return (
+        identity.component,
+        identity.address,
+        identity.instruction_set.value,
+        *_value_sort_key(value),
+    )
+
+
+def _root_fallback_name(key: _RootKey) -> str:
+    identity, value = key
+    storage = value.storage
+    if storage.register is not None:
+        root_name = f"{storage.register.value}_v{value.version}"
+    elif storage.stack_offset is not None:
+        sign = "m" if storage.stack_offset < 0 else "p"
+        root_name = f"stack_{sign}{abs(storage.stack_offset):x}_v{value.version}"
+    else:
+        root_name = f"{storage.temporary_name or 'tmp'}_v{value.version}"
+    function_name = f"{identity.component}_{identity.address:08x}"
+    return f"struct_{function_name}_{root_name}"
+
+
+def _merge_source_refs(
+    *groups: tuple[SourceRef, ...],
+) -> tuple[SourceRef, ...]:
+    unique = {
+        (source.address, source.instruction_set.value): source
+        for group in groups
+        for source in group
+    }
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _merge_integer_signedness(
+    fields: tuple[RecoveredStructField, ...],
+) -> RecoveredSignedness:
+    signedness = {
+        field.field_type.signedness
+        for field in fields
+        if isinstance(field.field_type, IntegerType)
+    }
+    if len(signedness) == 1:
+        return next(iter(signedness))
+    return RecoveredSignedness.UNKNOWN
+
+
+def _merge_structure_fields(
+    left: tuple[RecoveredStructField, ...],
+    right: tuple[RecoveredStructField, ...],
+) -> tuple[tuple[RecoveredStructField, ...], tuple[str, ...]]:
+    by_offset: dict[int, list[RecoveredStructField]] = {}
+    for field in (*left, *right):
+        by_offset.setdefault(field.offset, []).append(field)
+
+    merged: list[RecoveredStructField] = []
+    conflicts: list[str] = []
+    for offset in sorted(by_offset):
+        candidates = tuple(by_offset[offset])
+        widths = sorted({field.width_bytes for field in candidates})
+        if len(widths) != 1:
+            conflicts.append(
+                f"field 0x{offset:x} has conflicting widths "
+                + "/".join(str(width) for width in widths)
+            )
+            continue
+        width = widths[0]
+        merged.append(
+            RecoveredStructField(
+                offset=offset,
+                width_bytes=width,
+                name=min(field.name for field in candidates),
+                field_type=IntegerType(
+                    width,
+                    _merge_integer_signedness(candidates),
+                ),
+                source=_merge_source_refs(
+                    *(field.source for field in candidates)
+                ),
+            )
+        )
+
+    ordered = tuple(sorted(merged, key=lambda field: field.offset))
+    for previous, current in pairwise(ordered):
+        if current.offset < previous.offset + previous.width_bytes:
+            conflicts.append(
+                "field overlap: "
+                f"{previous.name} and {current.name}"
+            )
+    return ordered, tuple(sorted(set(conflicts)))
+
+
+def _merge_propagation_states(
+    left: _PropagationState,
+    right: _PropagationState,
+) -> _PropagationState:
+    fields, field_conflicts = _merge_structure_fields(
+        left.fields,
+        right.fields,
+    )
+    return _PropagationState(
+        names=tuple(sorted(set((*left.names, *right.names)))),
+        fields=fields,
+        conflicts=tuple(
+            sorted(
+                set(
+                    (
+                        *left.conflicts,
+                        *right.conflicts,
+                        *field_conflicts,
+                    )
+                )
+            )
+        ),
+        interprocedural_support=(
+            left.interprocedural_support
+            or right.interprocedural_support
+        ),
+    )
+
+
+def _call_target_identity(
+    call: SSACallExpression,
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction],
+) -> FunctionTypeIdentity | None:
+    if call.target_component is not None:
+        candidate = FunctionTypeIdentity(
+            call.target_component,
+            call.target_address,
+            call.target_instruction_set,
+        )
+        return candidate if candidate in functions_by_identity else None
+
+    matches = tuple(
+        identity
+        for identity in functions_by_identity
+        if (
+            identity.address == call.target_address
+            and identity.instruction_set == call.target_instruction_set
+        )
+    )
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _interprocedural_links(
+    functions: tuple[SSAFunction, ...],
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction],
+) -> tuple[tuple[_RootKey, _RootKey], ...]:
+    links: set[tuple[_RootKey, _RootKey]] = set()
+
+    for function in functions:
+        caller_identity = _function_type_identity(function)
+        caller_index = build_def_use_index(function)
+        for block in function.blocks:
+            for statement in block.statements:
+                if not isinstance(statement, SSACallStatement):
+                    continue
+                target_identity = _call_target_identity(
+                    statement.call,
+                    functions_by_identity,
+                )
+                if target_identity is None:
+                    continue
+                callee = functions_by_identity[target_identity]
+                callee_index = build_def_use_index(callee)
+                for argument_index, argument in enumerate(
+                    statement.call.arguments
+                ):
+                    if argument_index >= len(callee.entry_definitions):
+                        break
+                    if (
+                        not isinstance(argument, SSAReferenceExpression)
+                        or argument.value is None
+                    ):
+                        continue
+                    caller_root = canonical_pointer_root(
+                        function,
+                        argument.value,
+                        index=caller_index,
+                    )
+                    callee_root = canonical_pointer_root(
+                        callee,
+                        callee.entry_definitions[argument_index],
+                        index=callee_index,
+                    )
+                    left = (caller_identity, caller_root)
+                    right = (target_identity, callee_root)
+                    if _root_key_sort_key(right) < _root_key_sort_key(left):
+                        left, right = right, left
+                    links.add((left, right))
+
+    return tuple(
+        sorted(
+            links,
+            key=lambda pair: (
+                _root_key_sort_key(pair[0]),
+                _root_key_sort_key(pair[1]),
+            ),
+        )
+    )
+
+
+def propagate_interprocedural_types(
+    functions: tuple[SSAFunction, ...],
+    environments: tuple[LocalTypeEnvironment, ...],
+    *,
+    iteration_cap: int = 32,
+) -> InterproceduralTypePropagation:
+    if iteration_cap <= 0:
+        raise ValueError("interprocedural propagation iteration cap must be positive")
+    if len(functions) != len(environments):
+        raise ValueError("functions and local type environments must align")
+
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction] = {}
+    environment_by_identity: dict[
+        FunctionTypeIdentity,
+        LocalTypeEnvironment,
+    ] = {}
+    for function, environment in zip(
+        functions,
+        environments,
+        strict=True,
+    ):
+        identity = _function_type_identity(function)
+        if identity in functions_by_identity:
+            raise ValueError("duplicate function type identity")
+        functions_by_identity[identity] = function
+        environment_by_identity[identity] = environment
+
+    links = _interprocedural_links(
+        functions,
+        functions_by_identity,
+    )
+
+    state: dict[_RootKey, _PropagationState] = {}
+    for identity, environment in environment_by_identity.items():
+        for candidate in environment.structures.candidates:
+            key = (identity, candidate.root)
+            state[key] = _PropagationState(
+                names=(candidate.name,),
+                fields=candidate.fields,
+                conflicts=candidate.conflicts,
+                interprocedural_support=False,
+            )
+
+    linked_keys = {key for pair in links for key in pair}
+    for key in linked_keys:
+        existing = state.get(key, _PropagationState())
+        state[key] = _PropagationState(
+            names=(
+                existing.names
+                if existing.names
+                else (_root_fallback_name(key),)
+            ),
+            fields=existing.fields,
+            conflicts=existing.conflicts,
+            interprocedural_support=True,
+        )
+
+    if not state:
+        return InterproceduralTypePropagation(
+            records=(),
+            converged=True,
+            iterations=1,
+        )
+
+    for iteration in range(1, iteration_cap + 1):
+        updated = dict(state)
+        for left, right in links:
+            merged = _merge_propagation_states(
+                state[left],
+                state[right],
+            )
+            merged = _PropagationState(
+                names=merged.names,
+                fields=merged.fields,
+                conflicts=merged.conflicts,
+                interprocedural_support=True,
+            )
+            updated[left] = _merge_propagation_states(
+                updated[left],
+                merged,
+            )
+            updated[right] = _merge_propagation_states(
+                updated[right],
+                merged,
+            )
+        if updated == state:
+            return InterproceduralTypePropagation(
+                records=_propagation_records(updated),
+                converged=True,
+                iterations=iteration,
+            )
+        state = updated
+
+    warning = (
+        f"interprocedural type propagation reached iteration cap "
+        f"{iteration_cap}"
+    )
+    return InterproceduralTypePropagation(
+        records=_propagation_records(state),
+        converged=False,
+        iterations=iteration_cap,
+        warnings=(warning,),
+    )
+
+
+def _propagation_records(
+    state: dict[_RootKey, _PropagationState],
+) -> tuple[
+    tuple[FunctionTypeIdentity, SSAValue, PropagatedStructure],
+    ...,
+]:
+    records: list[
+        tuple[FunctionTypeIdentity, SSAValue, PropagatedStructure]
+    ] = []
+    for key in sorted(state, key=_root_key_sort_key):
+        identity, root = key
+        item = state[key]
+        name = min(item.names) if item.names else _root_fallback_name(key)
+        records.append(
+            (
+                identity,
+                root,
+                PropagatedStructure(
+                    name=name,
+                    fields=item.fields,
+                    conflicts=item.conflicts,
+                    interprocedural_support=item.interprocedural_support,
+                ),
+            )
+        )
+    return tuple(records)

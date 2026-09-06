@@ -12,6 +12,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     ConstantExpression,
     DecompilationResult,
     DecompilerExpression,
+    FieldAddressExpression,
     GotoNode,
     IfNode,
     LabelNode,
@@ -28,6 +29,9 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     UnknownExpression,
     UnknownStatement,
     VariableExpression,
+)
+from nds_disassembly_toolkit.analysis.decompiler.type_propagation import (
+    RenderTypeContext,
 )
 from nds_disassembly_toolkit.analysis.model import ConditionCode
 
@@ -136,7 +140,11 @@ def _render_expression(expression: DecompilerExpression) -> str:
         )
     if isinstance(expression, CompareExpression):
         return _render_compare(expression)
+    if isinstance(expression, FieldAddressExpression):
+        return f"{_render_expression(expression.base)}->{expression.field_name}"
     if isinstance(expression, MemoryReadExpression):
+        if isinstance(expression.address, FieldAddressExpression):
+            return _render_expression(expression.address)
         type_name = _MEMORY_TYPES[expression.width]
         return f"*({type_name} *){_address_expression(expression.address)}"
     if isinstance(expression, CallExpression):
@@ -159,6 +167,11 @@ def _statement_line(statement: object) -> str:
             f"{_render_expression(statement.value)};"
         )
     if isinstance(statement, MemoryWriteStatement):
+        if isinstance(statement.address, FieldAddressExpression):
+            return (
+                f"{_render_expression(statement.address)} = "
+                f"{_render_expression(statement.value)};"
+            )
         type_name = _MEMORY_TYPES[statement.width]
         return (
             f"*({type_name} *){_address_expression(statement.address)} = "
@@ -235,17 +248,63 @@ def _contains_value_return(nodes: tuple[StructuredNode, ...]) -> bool:
     return False
 
 
-def render_pseudo_c(value: StructuredFunction | DecompilationResult) -> str:
+def _typed_declaration(type_name: str, variable_name: str) -> str:
+    if type_name.endswith("*"):
+        return f"{type_name}{variable_name}"
+    return f"{type_name} {variable_name}"
+
+
+def render_pseudo_c(
+    value: StructuredFunction | DecompilationResult,
+    *,
+    type_context: RenderTypeContext | None = None,
+) -> str:
     structured = value.structured if isinstance(value, DecompilationResult) else value
     function = structured.function
     return_type = "uint32_t" if _contains_value_return(structured.body) else "void"
-    parameters = ", ".join(f"uint32_t {item.name}" for item in function.parameters)
+
+    parameter_types = (
+        {}
+        if type_context is None
+        else dict(type_context.parameter_types)
+    )
+    parameters = ", ".join(
+        _typed_declaration(
+            parameter_types.get(item.name, "uint32_t"),
+            item.name,
+        )
+        for item in function.parameters
+    )
     if not parameters:
         parameters = "void"
 
-    lines = [f"{return_type} {function.name}({parameters}) {{"]
+    lines: list[str] = []
+    if type_context is not None:
+        for structure in type_context.structures:
+            lines.append(f"struct {structure.name} {{")
+            lines.extend(
+                f"    {field.type_name} {field.name};"
+                for field in structure.fields
+            )
+            lines.append("};")
+            lines.append("")
+
+    lines.append(f"{return_type} {function.name}({parameters}) {{")
     if function.locals:
-        lines.extend(f"    uint32_t {variable.name};" for variable in function.locals)
+        local_types = (
+            {}
+            if type_context is None
+            else dict(type_context.local_types)
+        )
+        lines.extend(
+            "    "
+            + _typed_declaration(
+                local_types.get(variable.name, "uint32_t"),
+                variable.name,
+            )
+            + ";"
+            for variable in function.locals
+        )
         if structured.body:
             lines.append("")
     lines.extend(_render_nodes(structured.body, indent=1))

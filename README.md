@@ -22,6 +22,7 @@ The standalone toolkit now provides:
 - `nds-toolkit project` commands for persistent function/string/symbol/xref/CFG/data-flow/annotation inspection;
 - conservative evidence-backed ARM/Thumb pseudo-C generated from persisted CFG, data-flow, stack/ABI, symbol, and annotation evidence, with safe control-flow structuring and explicit uncertainty fallback;
 - Phase 7K toolkit-owned SSA refinement with deterministic dominators/PHIs, register/stack/temporary def-use tracking, conservative known-bit/range/address facts, and fixed-point simplification before pseudo-C rendering;
+- Phase 7L conservative type/pointer/structure recovery from normalized SSA memory-access paths, including deterministic synthetic struct/field layouts, conflict-aware fallback, typed `->field` pseudo-C, width/signedness evidence, and bounded overlay-safe direct-call propagation;
 - melonDS GDB-RSP runtime inspection for ARM9/ARM7, including snapshots, memory reads, temporary code conditions, and bounded stepping;
 - portable `.ndstrace` capture, BEFORE/AFTER memory differentials, read-only static-project correlation, behavioral trace comparison, and transparent dynamic function ranking;
 - Phase 7H3 managed runtime orchestration with isolated emulator sessions, dynamic loopback debugger ports, validated checkpoints, finite state predicates, guarded runtime writes, normalized Nintendo DS input models, durable scenario journals/safe resume, failure evidence bundles, and deterministic acceptance matrices;

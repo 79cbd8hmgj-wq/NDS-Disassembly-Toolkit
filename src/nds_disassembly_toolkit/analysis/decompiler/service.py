@@ -10,6 +10,10 @@ from nds_disassembly_toolkit.analysis.decompiler.render import render_pseudo_c
 from nds_disassembly_toolkit.analysis.decompiler.simplify import simplify_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.ssa import build_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.structure import structure_function
+from nds_disassembly_toolkit.analysis.decompiler.type_propagation import (
+    build_render_type_context,
+    infer_local_types,
+)
 from nds_disassembly_toolkit.analysis.decompiler.value_facts import analyze_value_facts
 from nds_disassembly_toolkit.analysis.model import InstructionSet
 from nds_disassembly_toolkit.analysis.project import AnalysisProject
@@ -52,7 +56,18 @@ def decompile_function(
             ssa = replace(ssa, warnings=(*ssa.warnings, warning))
 
     simplified = simplify_ssa_function(ssa)
-    ir = lower_ssa_function(simplified.function)
+    type_environment = infer_local_types(simplified.function)
+    ir = lower_ssa_function(
+        simplified.function,
+        type_environment=type_environment,
+    )
+    type_context = build_render_type_context(
+        simplified.function,
+        type_environment,
+    )
     structured = structure_function(ir)
-    pseudo_c = render_pseudo_c(structured)
+    pseudo_c = render_pseudo_c(
+        structured,
+        type_context=type_context,
+    )
     return DecompilationResult(ir, structured, pseudo_c)
