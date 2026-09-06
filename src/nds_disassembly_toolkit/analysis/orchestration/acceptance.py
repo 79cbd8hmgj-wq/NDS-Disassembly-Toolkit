@@ -534,8 +534,12 @@ def run_acceptance_matrix(
         case_root.mkdir(parents=True, exist_ok=True)
 
         try:
-            context.restore_checkpoint(scenario.checkpoint)
-        except Exception as exc:
+            scenario_result = run_scenario(
+                context,
+                resolved_scenario,
+                journal_path=case_root / "journal.json",
+            )
+        except RuntimeRecoveryError as exc:
             results.append(
                 AcceptanceCaseResult(
                     id=case.id,
@@ -554,13 +558,6 @@ def run_acceptance_matrix(
             if result_path is not None:
                 _store_result(result_path, result)
             return result
-
-        try:
-            scenario_result = run_scenario(
-                context,
-                resolved_scenario,
-                journal_path=case_root / "journal.json",
-            )
         except Exception as exc:
             saw_case_failure = True
             results.append(
