@@ -53,7 +53,7 @@ class ParameterReference:
 class PredicateDefinition:
     type: str
     address: int | None = None
-    expected: bytes | int | None = None
+    expected: bytes | int | ParameterReference | None = None
     mask: bytes | None = None
     register: str | None = None
     start: int | None = None
@@ -140,14 +140,14 @@ class MemoryWriteStep:
 @dataclass(frozen=True, slots=True)
 class CaptureSnapshotStep:
     id: str
-    label: str | None = None
+    label: str | ParameterReference | None = None
     type: str = "capture_snapshot"
 
 
 @dataclass(frozen=True, slots=True)
 class CaptureTraceStep:
     id: str
-    output: str
+    output: str | ParameterReference
     steps: int | None = None
     events: int | None = None
     break_address: int | None = None
@@ -321,6 +321,64 @@ def _hex_bytes(value: object, *, name: str) -> bytes:
     return result
 
 
+
+def _parameter_reference(value: object, *, name: str) -> ParameterReference:
+    payload = _require_object(value, name=name)
+    _only_keys(payload, {"parameter"}, name=name)
+    parameter = payload.get("parameter")
+    if not isinstance(parameter, str) or not parameter:
+        raise RuntimeScenarioError(
+            f"{name}.parameter must be a non-empty string"
+        )
+    return ParameterReference(parameter)
+
+
+def _hex_bytes_or_parameter(
+    value: object,
+    *,
+    name: str,
+) -> bytes | ParameterReference:
+    if isinstance(value, dict):
+        return _parameter_reference(value, name=name)
+    return _hex_bytes(value, name=name)
+
+
+def _address_or_parameter(
+    value: object,
+    *,
+    name: str,
+) -> int | ParameterReference:
+    if isinstance(value, dict):
+        return _parameter_reference(value, name=name)
+    return _address(value, name=name)
+
+
+def _required_string_or_parameter(
+    payload: dict[str, object],
+    key: str,
+    *,
+    name: str,
+) -> str | ParameterReference:
+    value = payload.get(key)
+    if isinstance(value, dict):
+        return _parameter_reference(value, name=f"{name}.{key}")
+    return _required_string(payload, key, name=name)
+
+
+def _optional_string_or_parameter(
+    payload: dict[str, object],
+    key: str,
+) -> str | ParameterReference | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return _parameter_reference(value, name=key)
+    if not isinstance(value, str) or not value:
+        raise RuntimeScenarioError(f"{key} must be a non-empty string")
+    return value
+
+
 def _point(value: object, *, name: str) -> DSPoint:
     if (
         not isinstance(value, list)
@@ -366,7 +424,7 @@ def _predicate(value: object, *, name: str = "condition") -> PredicateDefinition
     if kind == "register_equals":
         _only_keys(payload, {"type", "register", "value"}, name=name)
         register = _required_string(payload, "register", name=name)
-        expected = _address(payload.get("value"), name="value")
+        expected = _address_or_parameter(payload.get("value"), name="value")
         return PredicateDefinition(kind, register=register, expected=expected)
 
     if kind == "memory_equals":
@@ -374,14 +432,17 @@ def _predicate(value: object, *, name: str = "condition") -> PredicateDefinition
         return PredicateDefinition(
             kind,
             address=_address(payload.get("address")),
-            expected=_hex_bytes(payload.get("bytes"), name="bytes"),
+            expected=_hex_bytes_or_parameter(payload.get("bytes"), name="bytes"),
         )
 
     if kind == "memory_masked_equals":
         _only_keys(payload, {"type", "address", "bytes", "mask"}, name=name)
-        expected_bytes = _hex_bytes(payload.get("bytes"), name="bytes")
+        expected_bytes = _hex_bytes_or_parameter(payload.get("bytes"), name="bytes")
         mask_bytes = _hex_bytes(payload.get("mask"), name="mask")
-        if len(expected_bytes) != len(mask_bytes):
+        if (
+            isinstance(expected_bytes, bytes)
+            and len(expected_bytes) != len(mask_bytes)
+        ):
             raise RuntimeScenarioError("memory mask length must match expected bytes")
         return PredicateDefinition(
             kind,
@@ -498,10 +559,17 @@ def _parse_step(raw: object, ordinal: int) -> ScenarioStep:
         expected_before = (
             None
             if expected_value is None
-            else _hex_bytes(expected_value, name="expected_before")
+            else _hex_bytes_or_parameter(expected_value, name="expected_before")
         )
-        replacement = _hex_bytes(payload.get("replacement"), name="replacement")
-        if expected_before is not None and len(expected_before) != len(replacement):
+        replacement = _hex_bytes_or_parameter(
+            payload.get("replacement"),
+            name="replacement",
+        )
+        if (
+            isinstance(expected_before, bytes)
+            and isinstance(replacement, bytes)
+            and len(expected_before) != len(replacement)
+        ):
             raise RuntimeScenarioError("expected_before must match replacement length")
         pre, post, timeout = _action_conditions(payload)
         return MemoryWriteStep(
@@ -517,7 +585,10 @@ def _parse_step(raw: object, ordinal: int) -> ScenarioStep:
 
     if kind == "capture_snapshot":
         _only_keys(payload, {"id", "type", "label"}, name=step_id)
-        return CaptureSnapshotStep(step_id, _optional_string(payload, "label"))
+        return CaptureSnapshotStep(
+            step_id,
+            _optional_string_or_parameter(payload, "label"),
+        )
 
     if kind == "capture_trace":
         _only_keys(
@@ -525,7 +596,11 @@ def _parse_step(raw: object, ordinal: int) -> ScenarioStep:
             {"id", "type", "output", "steps", "events", "break", "memory"},
             name=step_id,
         )
-        output = _required_string(payload, "output", name=step_id)
+        output = _required_string_or_parameter(
+            payload,
+            "output",
+            name=step_id,
+        )
         steps_value = payload.get("steps")
         events_value = payload.get("events")
         steps = None if steps_value is None else _positive_int(steps_value, name="steps")
@@ -871,9 +946,17 @@ def _execute_step(context: object, step: ScenarioStep) -> None:
         )
         return
     if isinstance(step, CaptureSnapshotStep):
+        if isinstance(step.label, ParameterReference):
+            raise RuntimeScenarioError(
+                "scenario contains unresolved snapshot-label parameter reference"
+            )
         _invoke_context(context, "capture_snapshot", step.label)
         return
     if isinstance(step, CaptureTraceStep):
+        if isinstance(step.output, ParameterReference):
+            raise RuntimeScenarioError(
+                "scenario contains unresolved trace-output parameter reference"
+            )
         _invoke_context(context, "capture_trace", step)
         return
     if isinstance(step, AssertStep):
