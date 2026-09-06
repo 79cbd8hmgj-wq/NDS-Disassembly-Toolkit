@@ -520,9 +520,9 @@ def test_x11_driver_keys_target_owned_window_explicitly(
     driver.key_up(session, "Shift_R")
 
     assert [
+        call for call in calls if call[1] in {"keydown", "key", "keyup"}
+    ] == [
         ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "Shift_R"],
         ["/usr/bin/xdotool", "key", "--window", "0xabc", "F1"],
         ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "Shift_R"],
-    ] == [
-        call for call in calls if call[1] in {"keydown", "key", "keyup"}
     ]
