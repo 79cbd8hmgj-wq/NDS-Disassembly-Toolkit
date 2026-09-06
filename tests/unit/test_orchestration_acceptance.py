@@ -281,3 +281,83 @@ def test_unknown_parameter_reference_fails_before_case_execution(tmp_path: Path)
         run_acceptance_matrix(factory, matrix, scenario)
 
     assert factory.contexts == []
+
+
+
+@dataclass
+class ResumeFactory:
+    root: Path
+    fail_second: bool
+    actions: list[str] = field(default_factory=list)
+    restores: list[str] = field(default_factory=list)
+
+    def __call__(self, case: AcceptanceCase) -> "ResumeContext":
+        return ResumeContext(self, case.id, self.root)
+
+
+@dataclass
+class ResumeContext:
+    factory: ResumeFactory
+    case_id: str
+    session_root: Path
+
+    def restore_checkpoint(self, name: str) -> None:
+        self.factory.restores.append(name)
+
+    def press_button(self, button: DSButton) -> None:
+        del button
+        self.factory.actions.append(self.case_id)
+        if self.factory.fail_second and self.case_id == "second":
+            raise RuntimeScenarioError("synthetic interrupted case")
+
+
+def _resume_matrix() -> AcceptanceMatrix:
+    return AcceptanceMatrix(
+        schema_version=1,
+        scenario=Path("scenario.json"),
+        cases=(
+            AcceptanceCase("first", {}),
+            AcceptanceCase("second", {}),
+        ),
+    )
+
+
+def test_matrix_resume_reuses_passed_prefix_and_restarts_failed_case(
+    tmp_path: Path,
+) -> None:
+    first = ResumeFactory(tmp_path, fail_second=True)
+    initial = run_acceptance_matrix(first, _resume_matrix(), _scenario())
+    assert initial.status == "failed"
+    assert first.actions == ["first", "second"]
+
+    resumed = ResumeFactory(tmp_path, fail_second=False)
+    result = run_acceptance_matrix(resumed, _resume_matrix(), _scenario())
+
+    assert result.status == "passed"
+    assert resumed.actions == ["second"]
+    assert resumed.restores == ["baseline"]
+    assert [case.status for case in result.cases] == ["passed", "passed"]
+
+
+def test_matrix_resume_rejects_identity_mismatch_before_action(
+    tmp_path: Path,
+) -> None:
+    initial = ResumeFactory(tmp_path, fail_second=False)
+    assert run_acceptance_matrix(initial, _resume_matrix(), _scenario()).status == "passed"
+
+    changed = ScenarioDefinition(
+        schema_version=1,
+        name="changed-scenario",
+        backend=EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=(),
+        checkpoint="baseline",
+        steps=(ButtonStep("action", DSButton.A),),
+    )
+    resumed = ResumeFactory(tmp_path, fail_second=False)
+
+    with pytest.raises(RuntimeRecoveryError, match="identity"):
+        run_acceptance_matrix(resumed, _resume_matrix(), changed)
+
+    assert resumed.actions == []
+    assert resumed.restores == []
