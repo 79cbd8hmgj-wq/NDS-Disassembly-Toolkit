@@ -450,3 +450,122 @@ def infer_local_types(
         ),
         structures=structure_result,
     )
+
+
+
+@dataclass(frozen=True, slots=True)
+class RenderStructField:
+    type_name: str
+    name: str
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class RenderStructType:
+    name: str
+    fields: tuple[RenderStructField, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RenderTypeContext:
+    parameter_types: tuple[tuple[str, str], ...] = ()
+    local_types: tuple[tuple[str, str], ...] = ()
+    structures: tuple[RenderStructType, ...] = ()
+
+    def parameter_type(self, variable_name: str) -> str | None:
+        for name, type_name in self.parameter_types:
+            if name == variable_name:
+                return type_name
+        return None
+
+    def local_type(self, variable_name: str) -> str | None:
+        for name, type_name in self.local_types:
+            if name == variable_name:
+                return type_name
+        return None
+
+
+def _integer_c_type(value: IntegerType) -> str:
+    prefix = (
+        "int"
+        if value.signedness is RecoveredSignedness.SIGNED
+        else "uint"
+    )
+    return f"{prefix}{value.width_bytes * 8}_t"
+
+
+def build_render_type_context(
+    function: SSAFunction,
+    environment: LocalTypeEnvironment,
+) -> RenderTypeContext:
+    renderable = {
+        candidate.root: candidate
+        for candidate in environment.structures.candidates
+        if candidate.should_render and not candidate.conflicts
+    }
+
+    parameter_types: list[tuple[str, str]] = []
+    for index, parameter in enumerate(function.parameters):
+        if index >= len(function.entry_definitions):
+            continue
+        entry = function.entry_definitions[index]
+        candidate = renderable.get(entry)
+        recovered = environment.type_for_value(entry)
+        if (
+            candidate is not None
+            and isinstance(recovered, PointerType)
+            and recovered.pointee_name == candidate.name
+        ):
+            parameter_types.append(
+                (parameter.name, f"struct {candidate.name} *")
+            )
+            continue
+        if isinstance(recovered, IntegerType):
+            parameter_types.append(
+                (parameter.name, _integer_c_type(recovered))
+            )
+
+    structures: list[RenderStructType] = []
+    for candidate in sorted(
+        renderable.values(),
+        key=lambda item: (
+            item.component,
+            item.function_address,
+            item.instruction_set.value,
+            item.name,
+        ),
+    ):
+        fields: list[RenderStructField] = []
+        for field in candidate.fields:
+            recovered_field = environment.type_for_field(
+                candidate.root,
+                field.offset,
+            )
+            type_name = (
+                _integer_c_type(recovered_field)
+                if recovered_field is not None
+                else _integer_c_type(
+                    IntegerType(
+                        field.width_bytes,
+                        RecoveredSignedness.UNKNOWN,
+                    )
+                )
+            )
+            fields.append(
+                RenderStructField(
+                    type_name=type_name,
+                    name=field.name,
+                    offset=field.offset,
+                )
+            )
+        structures.append(
+            RenderStructType(
+                name=candidate.name,
+                fields=tuple(fields),
+            )
+        )
+
+    return RenderTypeContext(
+        parameter_types=tuple(parameter_types),
+        structures=tuple(structures),
+    )
