@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from nds_disassembly_toolkit.analysis.orchestration import (
+    DSButton,
     DebuggerHandshakeMode,
     EmulatorKind,
 )
+from nds_disassembly_toolkit.analysis.orchestration.input import WindowGeometry
+from nds_disassembly_toolkit.errors import RuntimeInputError
 from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmuMEBackend
 from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import MelonDSBackend
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
@@ -114,3 +119,41 @@ def test_melonds_launch_spec_writes_isolated_gdb_config(
     assert "Port = 39012" in rendered
     assert "BreakOnStartup = true" in rendered
     assert str(tmp_path / "saves") in rendered
+
+
+
+def test_desmume_managed_input_profile_matches_pinned_cli() -> None:
+    backend = DeSmuMEBackend()
+
+    assert backend.capabilities.window_input is True
+    assert backend.capabilities.touchscreen_input is True
+    assert {
+        button: backend.host_key_for(button)
+        for button in DSButton
+    } == {
+        DSButton.A: "x",
+        DSButton.B: "z",
+        DSButton.SELECT: "Shift_R",
+        DSButton.START: "Return",
+        DSButton.RIGHT: "Right",
+        DSButton.LEFT: "Left",
+        DSButton.UP: "Up",
+        DSButton.DOWN: "Down",
+        DSButton.R: "w",
+        DSButton.L: "q",
+        DSButton.X: "s",
+        DSButton.Y: "a",
+    }
+
+    profile = backend.layout_profile(WindowGeometry(0, 0, 256, 384))
+    assert profile.lower_screen.x == 0
+    assert profile.lower_screen.y == 192
+    assert profile.lower_screen.width == 256
+    assert profile.lower_screen.height == 192
+
+
+def test_desmume_managed_input_profile_rejects_unknown_geometry() -> None:
+    backend = DeSmuMEBackend()
+
+    with pytest.raises(RuntimeInputError, match="256x384"):
+        backend.layout_profile(WindowGeometry(0, 0, 512, 768))
