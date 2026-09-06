@@ -287,6 +287,18 @@ def add_runtime_parser(subparsers: Any) -> None:
     scenario_run.add_argument("scenario", type=Path)
     _add_output_argument(scenario_run)
 
+    matrix = commands.add_parser(
+        "matrix",
+        help="run a deterministic runtime acceptance matrix",
+    )
+    matrix_commands = matrix.add_subparsers(dest="runtime_matrix_command")
+    matrix_run = matrix_commands.add_parser(
+        "run",
+        help="run a deterministic runtime acceptance matrix",
+    )
+    matrix_run.add_argument("matrix", type=Path)
+    _add_output_argument(matrix_run)
+
     checkpoint = commands.add_parser(
         "checkpoint",
         help="save or restore a managed runtime checkpoint",
