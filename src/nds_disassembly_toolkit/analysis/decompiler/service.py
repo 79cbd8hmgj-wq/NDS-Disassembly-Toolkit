@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from nds_disassembly_toolkit.analysis.decompiler.lift import lift_function
+from nds_disassembly_toolkit.analysis.decompiler.lower import lower_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.model import DecompilationResult
 from nds_disassembly_toolkit.analysis.decompiler.names import build_name_context
 from nds_disassembly_toolkit.analysis.decompiler.render import render_pseudo_c
+from nds_disassembly_toolkit.analysis.decompiler.simplify import simplify_ssa_function
+from nds_disassembly_toolkit.analysis.decompiler.ssa import build_ssa_function
 from nds_disassembly_toolkit.analysis.decompiler.structure import structure_function
+from nds_disassembly_toolkit.analysis.decompiler.value_facts import analyze_value_facts
 from nds_disassembly_toolkit.analysis.model import InstructionSet
 from nds_disassembly_toolkit.analysis.project import AnalysisProject
 from nds_disassembly_toolkit.errors import DecompilerError
@@ -34,7 +40,19 @@ def decompile_function(
         raise DecompilerError(f"no persisted data flow for {identity}")
 
     names = build_name_context(project, function, flow)
-    ir = lift_function(project, function, cfg, flow, names)
+    lifted = lift_function(project, function, cfg, flow, names)
+
+    ssa = build_ssa_function(lifted)
+    facts = analyze_value_facts(ssa)
+    if not facts.converged:
+        warning = (
+            "SSA value-facts analysis reached its iteration cap before convergence"
+        )
+        if warning not in ssa.warnings:
+            ssa = replace(ssa, warnings=(*ssa.warnings, warning))
+
+    simplified = simplify_ssa_function(ssa)
+    ir = lower_ssa_function(simplified.function)
     structured = structure_function(ir)
     pseudo_c = render_pseudo_c(structured)
     return DecompilationResult(ir, structured, pseudo_c)
