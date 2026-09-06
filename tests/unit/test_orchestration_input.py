@@ -5,7 +5,9 @@ import pytest
 from nds_disassembly_toolkit.analysis.orchestration.input import (
     DSButton,
     DSPoint,
+    ScreenLayoutProfile,
     ScreenViewport,
+    WindowGeometry,
     TouchDrag,
     TouchFlick,
     TouchTap,
@@ -58,3 +60,35 @@ def test_touch_actions_validate_duration() -> None:
     assert TouchFlick(point, DSPoint(120, 80), duration=0.05).duration == 0.05
     with pytest.raises(ValueError, match="duration"):
         TouchDrag(point, point, duration=0)
+
+
+
+def test_layout_profile_requires_supported_geometry() -> None:
+    geometry = WindowGeometry(x=100, y=50, width=512, height=768)
+    lower = ScreenViewport(x=0, y=384, width=512, height=384)
+
+    profile = ScreenLayoutProfile(
+        window=geometry,
+        lower_screen=lower,
+        rotation=0,
+        separated_screens=False,
+    )
+
+    assert profile.lower_screen == lower
+
+
+def test_layout_profile_rejects_unsupported_rotation_and_out_of_bounds_viewport() -> None:
+    geometry = WindowGeometry(x=0, y=0, width=512, height=768)
+
+    with pytest.raises(ValueError, match="rotation"):
+        ScreenLayoutProfile(
+            window=geometry,
+            lower_screen=ScreenViewport(0, 384, 512, 384),
+            rotation=90,
+        )
+
+    with pytest.raises(ValueError, match="window"):
+        ScreenLayoutProfile(
+            window=geometry,
+            lower_screen=ScreenViewport(1, 384, 512, 384),
+        )
