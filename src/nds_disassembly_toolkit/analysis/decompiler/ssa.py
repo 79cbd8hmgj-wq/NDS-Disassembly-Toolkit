@@ -37,6 +37,14 @@ from nds_disassembly_toolkit.analysis.model import (
 )
 
 _U32_MAX = 0xFFFFFFFF
+_CALL_CLOBBER_REGISTERS = (
+    Register.R0,
+    Register.R1,
+    Register.R2,
+    Register.R3,
+    Register.R12,
+    Register.LR,
+)
 
 
 def _validate_u32(value: int, *, name: str) -> None:
@@ -496,7 +504,7 @@ def _storage_for_target(
 
 def _current_value(
     storage: SSAStorage,
-    stacks: dict[SSAStorage, list[SSAValue]],
+    stacks: dict[SSAStorage, list[SSAValue | None]],
 ) -> SSAValue | None:
     stack = stacks.get(storage)
     return stack[-1] if stack else None
@@ -504,7 +512,7 @@ def _current_value(
 
 def _rename_expression(
     expression: object,
-    stacks: dict[SSAStorage, list[SSAValue]],
+    stacks: dict[SSAStorage, list[SSAValue | None]],
 ) -> SSAExpression:
     if isinstance(expression, ConstantExpression | AddressExpression | UnknownExpression):
         return expression
@@ -570,10 +578,17 @@ def _definition_sites(
         if block.address not in reachable_set:
             continue
         for statement in block.statements:
-            if not isinstance(statement, AssignmentStatement):
+            if isinstance(statement, AssignmentStatement):
+                storage = _storage_for_target(statement.target)
+                sites.setdefault(storage, set()).add(block.address)
                 continue
-            storage = _storage_for_target(statement.target)
-            sites.setdefault(storage, set()).add(block.address)
+            if isinstance(statement, CallStatement):
+                for register in _CALL_CLOBBER_REGISTERS:
+                    storage = SSAStorage(
+                        SSAStorageKind.REGISTER,
+                        register=register,
+                    )
+                    sites.setdefault(storage, set()).add(block.address)
     return sites
 
 
@@ -626,7 +641,7 @@ def _new_value(
 
 def _rename_statement(
     statement: object,
-    stacks: dict[SSAStorage, list[SSAValue]],
+    stacks: dict[SSAStorage, list[SSAValue | None]],
     counters: dict[SSAStorage, int],
     pushed: list[SSAStorage],
 ) -> SSAStatement:
@@ -648,6 +663,13 @@ def _rename_statement(
         call = _rename_expression(statement.call, stacks)
         if not isinstance(call, SSACallExpression):
             raise TypeError("call statement did not produce an SSA call expression")
+        for register in _CALL_CLOBBER_REGISTERS:
+            storage = SSAStorage(
+                SSAStorageKind.REGISTER,
+                register=register,
+            )
+            stacks.setdefault(storage, []).append(None)
+            pushed.append(storage)
         return SSACallStatement(call, statement.source)
     if isinstance(statement, ReturnStatement):
         return_value = (
@@ -684,7 +706,7 @@ def build_ssa_function(function: DecompiledFunction) -> SSAFunction:
     blocks_by_address = {block.address: block for block in function.blocks}
 
     counters: dict[SSAStorage, int] = {}
-    stacks: dict[SSAStorage, list[SSAValue]] = {}
+    stacks: dict[SSAStorage, list[SSAValue | None]] = {}
     entry_definitions: list[SSAValue] = []
     entry_storages: set[SSAStorage] = set()
     for parameter in function.parameters:
@@ -746,7 +768,7 @@ def build_ssa_function(function: DecompiledFunction) -> SSAFunction:
     for block in sorted(function.blocks, key=lambda candidate: candidate.address):
         if block.address in reachable:
             continue
-        local_stacks: dict[SSAStorage, list[SSAValue]] = {}
+        local_stacks: dict[SSAStorage, list[SSAValue | None]] = {}
         local_pushed: list[SSAStorage] = []
         statements: list[SSAStatement] = []
         for statement in block.statements:
