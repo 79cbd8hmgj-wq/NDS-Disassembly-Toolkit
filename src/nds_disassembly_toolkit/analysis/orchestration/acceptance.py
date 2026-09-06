@@ -8,9 +8,19 @@ from typing import Protocol
 
 from nds_disassembly_toolkit.analysis.orchestration.model import MATRIX_SCHEMA_VERSION
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
+    AssertStep,
+    ButtonSequenceStep,
+    ButtonStep,
+    CaptureSnapshotStep,
+    CaptureTraceStep,
     MemoryWriteStep,
     ParameterReference,
+    PredicateDefinition,
     ScenarioDefinition,
+    TouchDragStep,
+    TouchFlickStep,
+    TouchTapStep,
+    WaitStep,
     run_scenario,
 )
 from nds_disassembly_toolkit.errors import RuntimeRecoveryError, RuntimeScenarioError
@@ -171,11 +181,92 @@ def _parameter_bytes(
     return resolved
 
 
+
+def _parameter_string(
+    value: str | ParameterReference,
+    parameters: Mapping[str, object],
+    *,
+    field: str,
+) -> str:
+    if isinstance(value, str):
+        return value
+    if value.name not in parameters:
+        raise RuntimeScenarioError(f"missing acceptance parameter: {value.name}")
+    raw = parameters[value.name]
+    if not isinstance(raw, str) or not raw:
+        raise RuntimeScenarioError(
+            f"acceptance parameter {value.name} for {field} must be a non-empty string"
+        )
+    return raw
+
+
+def _parameter_int(
+    value: int | ParameterReference,
+    parameters: Mapping[str, object],
+    *,
+    field: str,
+) -> int:
+    if isinstance(value, int):
+        return value
+    if value.name not in parameters:
+        raise RuntimeScenarioError(f"missing acceptance parameter: {value.name}")
+    raw = parameters[value.name]
+    if isinstance(raw, bool):
+        raise RuntimeScenarioError(
+            f"acceptance parameter {value.name} for {field} must be an integer"
+        )
+    if isinstance(raw, int):
+        resolved = raw
+    elif isinstance(raw, str):
+        try:
+            resolved = int(raw, 0)
+        except ValueError as exc:
+            raise RuntimeScenarioError(
+                f"acceptance parameter {value.name} for {field} must be an integer"
+            ) from exc
+    else:
+        raise RuntimeScenarioError(
+            f"acceptance parameter {value.name} for {field} must be an integer"
+        )
+    if not 0 <= resolved <= 0xFFFFFFFF:
+        raise RuntimeScenarioError(
+            f"acceptance parameter {value.name} for {field} must fit 32 bits"
+        )
+    return resolved
+
+
+def _resolve_predicate(
+    predicate: PredicateDefinition | None,
+    parameters: Mapping[str, object],
+) -> PredicateDefinition | None:
+    if predicate is None:
+        return None
+    expected = predicate.expected
+    if isinstance(expected, ParameterReference):
+        if predicate.type in {"memory_equals", "memory_masked_equals"}:
+            expected = _parameter_bytes(expected, parameters, field="predicate expected")
+        else:
+            expected = _parameter_int(expected, parameters, field="predicate expected")
+    children = tuple(
+        resolved
+        for child in predicate.children
+        if (resolved := _resolve_predicate(child, parameters)) is not None
+    )
+    return replace(predicate, expected=expected, children=children)
+
+
 def _resolve_case_scenario(
     scenario: ScenarioDefinition,
     parameters: Mapping[str, object],
 ) -> ScenarioDefinition:
     resolved_steps = []
+    action_types = (
+        ButtonStep,
+        ButtonSequenceStep,
+        TouchTapStep,
+        TouchDragStep,
+        TouchFlickStep,
+    )
     for step in scenario.steps:
         if isinstance(step, MemoryWriteStep):
             replacement = _parameter_bytes(
@@ -198,7 +289,33 @@ def _resolve_case_scenario(
                 step,
                 replacement=replacement,
                 expected_before=expected_before,
+                precondition=_resolve_predicate(step.precondition, parameters),
+                postcondition=_resolve_predicate(step.postcondition, parameters),
             )
+        elif isinstance(step, action_types):
+            step = replace(
+                step,
+                precondition=_resolve_predicate(step.precondition, parameters),
+                postcondition=_resolve_predicate(step.postcondition, parameters),
+            )
+        elif isinstance(step, WaitStep):
+            condition = _resolve_predicate(step.condition, parameters)
+            if condition is None:
+                raise RuntimeScenarioError("wait condition could not be resolved")
+            step = replace(step, condition=condition)
+        elif isinstance(step, AssertStep):
+            condition = _resolve_predicate(step.condition, parameters)
+            if condition is None:
+                raise RuntimeScenarioError("assert condition could not be resolved")
+            step = replace(step, condition=condition)
+        elif isinstance(step, CaptureSnapshotStep):
+            label = step.label
+            if isinstance(label, ParameterReference):
+                label = _parameter_string(label, parameters, field="snapshot label")
+            step = replace(step, label=label)
+        elif isinstance(step, CaptureTraceStep):
+            output = _parameter_string(step.output, parameters, field="trace output")
+            step = replace(step, output=output)
         resolved_steps.append(step)
     return replace(scenario, steps=tuple(resolved_steps))
 
