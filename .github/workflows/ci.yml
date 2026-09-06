@@ -554,7 +554,7 @@ jobs:
               timeout=2.0,
           )
           try:
-              baseline = bytes.fromhex('11223344')
+              baseline = bytes.fromhex('44332211')
               for _ in range(50):
                   session.run_host_action(lambda: time.sleep(0.05))
                   if session.read_memory(0x02000100, 4) == baseline:
@@ -599,7 +599,7 @@ jobs:
                       'condition': {
                           'type': 'memory_equals',
                           'address': '0x02000100',
-                          'bytes': '11223344',
+                          'bytes': '44332211',
                       },
                       'timeout': 2.0,
                   },
@@ -610,7 +610,7 @@ jobs:
                       'postcondition': {
                           'type': 'memory_equals',
                           'address': '0x02000100',
-                          'bytes': 'aabbccdd',
+                          'bytes': 'ddccbbaa',
                       },
                       'timeout': 2.0,
                   },
@@ -644,7 +644,7 @@ jobs:
               timeout=2.0,
           )
           try:
-              assert session.read_memory(0x02000100, 4) == bytes.fromhex('aabbccdd')
+              assert session.read_memory(0x02000100, 4) == bytes.fromhex('ddccbbaa')
           finally:
               session.close()
           PY
@@ -667,7 +667,7 @@ jobs:
               timeout=2.0,
           )
           try:
-              assert session.read_memory(0x02000100, 4) == bytes.fromhex('11223344')
+              assert session.read_memory(0x02000100, 4) == bytes.fromhex('44332211')
           finally:
               session.close()
           PY
