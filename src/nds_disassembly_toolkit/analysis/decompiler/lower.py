@@ -25,6 +25,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     MemoryWriteStatement,
     RegisterExpression,
     ReturnStatement,
+    SourceRef,
     UnaryExpression,
     UnknownExpression,
     UnknownStatement,
@@ -178,7 +179,7 @@ def _typed_field_address(
     address: SSAExpression,
     *,
     width: int,
-    source: tuple,
+    source: tuple[SourceRef, ...],
     context: _LoweringContext,
 ) -> FieldAddressExpression | None:
     environment = context.type_environment
