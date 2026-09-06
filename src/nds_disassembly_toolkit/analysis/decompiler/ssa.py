@@ -964,3 +964,21 @@ def build_def_use_index(function: SSAFunction) -> DefUseIndex:
         use_records=tuple(uses),
         phi_records=tuple(phi_records),
     )
+
+
+
+def used_resolved_call_results(
+    function: SSAFunction,
+) -> tuple[SSAValue, ...]:
+    index = build_def_use_index(function)
+    output: list[SSAValue] = []
+    for block in sorted(function.blocks, key=lambda item: item.address):
+        for statement in block.statements:
+            if (
+                isinstance(statement, SSACallStatement)
+                and statement.result is not None
+                and statement.call.target_component is not None
+                and index.uses(statement.result)
+            ):
+                output.append(statement.result)
+    return tuple(output)
