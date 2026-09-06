@@ -1265,8 +1265,8 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             def case_context(_case: AcceptanceCase) -> _ManagedScenarioContext:
                 return scenario_context
 
-            result = run_acceptance_matrix(case_context, matrix, scenario)
-        _write_json(_matrix_result_json(result), arguments.output)
+            matrix_result = run_acceptance_matrix(case_context, matrix, scenario)
+        _write_json(_matrix_result_json(matrix_result), arguments.output)
         return 0
 
     if command == "scenario":
