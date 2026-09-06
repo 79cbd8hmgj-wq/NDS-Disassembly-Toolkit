@@ -123,6 +123,16 @@ def test_phase_7h3_orchestration_public_exports_are_available() -> None:
         "RuntimeCheckpointError",
         "RuntimeScenarioError",
         "RuntimeRecoveryError",
+        "EmulatorBackend",
+        "MelonDSBackend",
+        "DeSmuMEBackend",
+        "discover_emulator_executable",
+        "run_doctor",
+        "create_session",
+        "load_session",
+        "process_is_owned",
+        "spawn_owned_process",
+        "stop_owned_process",
     )
     for name in required:
         assert hasattr(orchestration, name), name
