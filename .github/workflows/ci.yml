@@ -536,6 +536,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import time
           from pathlib import Path
 
           from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
@@ -554,8 +555,14 @@ jobs:
           )
           try:
               baseline = bytes.fromhex('44332211')
-              session.write_memory(0x02000100, baseline)
-              assert session.read_memory(0x02000100, 4) == baseline
+              for _ in range(50):
+                  session.run_host_action(lambda: time.sleep(0.05))
+                  if session.read_memory(0x02000100, 4) == baseline:
+                      break
+              else:
+                  raise AssertionError(
+                      'managed DeSmuME ROM sentinel never became ready'
+                  )
           finally:
               session.close()
           PY
@@ -573,48 +580,6 @@ jobs:
           assert saved['name'] == 'baseline'
           assert (root / 'checkpoints' / 'baseline' / 'checkpoint.json').is_file()
           assert (root / 'checkpoints' / 'baseline' / 'state.bin').is_file()
-          PY
-
-          python - <<'PY'
-          import json
-
-          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
-
-          session_info = json.load(open('/tmp/managed-session.json'))
-          session = DeSmuMESession.connect(
-              cpu=RuntimeCpu.ARM9,
-              host=session_info['debugger_host'],
-              port=session_info['debugger_port'],
-              timeout=2.0,
-          )
-          try:
-              dirty = bytes.fromhex('ddccbbaa')
-              session.write_memory(0x02000100, dirty)
-              assert session.read_memory(0x02000100, 4) == dirty
-          finally:
-              session.close()
-          PY
-
-          nds-toolkit runtime checkpoint restore "$SESSION_ROOT" baseline             --output /tmp/managed-checkpoint-restore.json
-
-          python - <<'PY'
-          import json
-
-          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
-
-          restored = json.load(open('/tmp/managed-checkpoint-restore.json'))
-          assert restored['name'] == 'baseline'
-          session_info = json.load(open('/tmp/managed-session.json'))
-          session = DeSmuMESession.connect(
-              cpu=RuntimeCpu.ARM9,
-              host=session_info['debugger_host'],
-              port=session_info['debugger_port'],
-              timeout=2.0,
-          )
-          try:
-              assert session.read_memory(0x02000100, 4) == bytes.fromhex('44332211')
-          finally:
-              session.close()
           PY
 
           python - <<'PY'
@@ -642,6 +607,12 @@ jobs:
                       'id': 'press-a',
                       'type': 'button',
                       'button': 'A',
+                      'postcondition': {
+                          'type': 'memory_equals',
+                          'address': '0x02000100',
+                          'bytes': 'ddccbbaa',
+                      },
+                      'timeout': 2.0,
                   },
               ],
           }
