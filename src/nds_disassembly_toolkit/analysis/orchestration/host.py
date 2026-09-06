@@ -23,6 +23,18 @@ class HostAutomationDriver(Protocol):
 
     def window_geometry(self, session: RuntimeSessionRecord) -> WindowGeometry: ...
 
+    def key_down(
+        self,
+        session: RuntimeSessionRecord,
+        host_key: str,
+    ) -> None: ...
+
+    def key_up(
+        self,
+        session: RuntimeSessionRecord,
+        host_key: str,
+    ) -> None: ...
+
     def send_key(
         self,
         session: RuntimeSessionRecord,
