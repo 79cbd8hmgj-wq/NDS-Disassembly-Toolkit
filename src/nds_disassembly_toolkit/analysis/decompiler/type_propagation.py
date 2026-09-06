@@ -7,6 +7,7 @@ from nds_disassembly_toolkit.analysis.decompiler.access_paths import (
     collect_field_accesses,
     normalize_access_path,
 )
+from nds_disassembly_toolkit.analysis.decompiler.model import SourceRef
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAAssignmentStatement,
     SSABinaryExpression,
@@ -32,8 +33,8 @@ from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
 from nds_disassembly_toolkit.analysis.decompiler.type_model import (
     IntegerType,
     PointerType,
-    RecoveredStructField,
     RecoveredSignedness,
+    RecoveredStructField,
     RecoveredType,
     TypeEvidence,
     TypeEvidenceKind,
@@ -42,7 +43,7 @@ from nds_disassembly_toolkit.analysis.decompiler.value_facts import (
     ValueFactsAnalysis,
     analyze_value_facts,
 )
-from nds_disassembly_toolkit.analysis.model import ConditionCode
+from nds_disassembly_toolkit.analysis.model import ConditionCode, InstructionSet
 
 _SIGNED_CONDITIONS = frozenset(
     {
@@ -578,7 +579,7 @@ def build_render_type_context(
 class FunctionTypeIdentity:
     component: str
     address: int
-    instruction_set: object
+    instruction_set: InstructionSet
 
     def __post_init__(self) -> None:
         if not self.component:
@@ -648,7 +649,7 @@ def _root_key_sort_key(key: _RootKey) -> tuple[object, ...]:
     return (
         identity.component,
         identity.address,
-        identity.instruction_set.value,  # type: ignore[attr-defined]
+        identity.instruction_set.value,
         *_value_sort_key(value),
     )
 
