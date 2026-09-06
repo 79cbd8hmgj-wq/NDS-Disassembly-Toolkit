@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from nds_disassembly_toolkit.analysis.orchestration.input import (
+    DSButton,
+    ScreenLayoutProfile,
+    WindowGeometry,
+)
 from nds_disassembly_toolkit.analysis.orchestration.model import (
     EmulatorCapabilities,
     EmulatorKind,
@@ -42,3 +47,7 @@ class EmulatorBackend(Protocol):
     def save_state(self, destination: Path) -> None: ...
 
     def load_state(self, source: Path) -> None: ...
+
+    def host_key_for(self, button: DSButton) -> str: ...
+
+    def layout_profile(self, geometry: WindowGeometry) -> ScreenLayoutProfile: ...
