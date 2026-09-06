@@ -14,10 +14,22 @@ from nds_disassembly_toolkit.analysis.decompiler.simplify import (
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAFunction,
     build_ssa_function,
+    used_resolved_call_results,
+)
+from nds_disassembly_toolkit.analysis.decompiler.type_model import (
+    IntegerType,
+    PointerType,
+    RecoveredSignedness,
+    RecoveredStructType,
+    RecoveredType,
+    UnknownType,
+    VoidType,
 )
 from nds_disassembly_toolkit.analysis.decompiler.type_propagation import (
     FunctionTypeIdentity,
     LocalTypeEnvironment,
+    RenderTypeContext,
+    build_render_type_context,
     infer_local_types,
 )
 from nds_disassembly_toolkit.analysis.model import FunctionCandidate
@@ -170,4 +182,109 @@ def recover_project_prototypes(
         functions=tuple(analyzed_functions),
         environments=tuple(environments),
         diagnostics=tuple(diagnostics),
+    )
+
+
+
+def _recovered_c_type(
+    recovered: RecoveredType,
+    *,
+    allow_void: bool = False,
+) -> str | None:
+    if isinstance(recovered, UnknownType):
+        return None
+    if isinstance(recovered, VoidType):
+        return "void" if allow_void else None
+    if isinstance(recovered, IntegerType):
+        prefix = (
+            "int"
+            if recovered.signedness is RecoveredSignedness.SIGNED
+            else "uint"
+        )
+        return f"{prefix}{recovered.width_bytes * 8}_t"
+    if isinstance(recovered, PointerType):
+        if recovered.pointee_name is not None:
+            return f"struct {recovered.pointee_name} *"
+        return "void *"
+    if isinstance(recovered, RecoveredStructType):
+        return f"struct {recovered.name}"
+    return None
+
+
+def _pointer_struct_name(
+    recovered: RecoveredType,
+) -> str | None:
+    if isinstance(recovered, PointerType):
+        return recovered.pointee_name
+    return None
+
+
+def build_project_render_type_context(
+    analysis: ProjectPrototypeAnalysis,
+    identity: FunctionTypeIdentity,
+) -> RenderTypeContext:
+    function = analysis.ssa_for(identity)
+    environment = analysis.environment_for(identity)
+    prototype = analysis.propagation.prototype_for(identity)
+    if function is None or environment is None or prototype is None:
+        return RenderTypeContext()
+
+    local_context = build_render_type_context(
+        function,
+        environment,
+    )
+    parameter_types = dict(local_context.parameter_types)
+    forward_structs: set[str] = set(local_context.forward_structs)
+
+    for parameter in prototype.parameters:
+        type_name = _recovered_c_type(parameter.recovered_type)
+        if type_name is not None:
+            parameter_types[parameter.name] = type_name
+        struct_name = _pointer_struct_name(
+            parameter.recovered_type
+        )
+        if struct_name is not None:
+            forward_structs.add(struct_name)
+
+    local_types = dict(local_context.local_types)
+    for index, result in enumerate(
+        used_resolved_call_results(function)
+    ):
+        recovered = analysis.propagation.type_for_value(
+            identity,
+            result,
+        )
+        if recovered is None:
+            continue
+        type_name = _recovered_c_type(recovered)
+        if type_name is not None:
+            local_types[f"call_result_{index}"] = type_name
+        struct_name = _pointer_struct_name(recovered)
+        if struct_name is not None:
+            forward_structs.add(struct_name)
+
+    return_type = _recovered_c_type(
+        prototype.return_type,
+        allow_void=True,
+    )
+    return_struct = _pointer_struct_name(prototype.return_type)
+    if return_struct is not None:
+        forward_structs.add(return_struct)
+
+    defined_structures = {
+        structure.name
+        for structure in local_context.structures
+    }
+    return RenderTypeContext(
+        parameter_types=tuple(
+            (parameter.name, parameter_types[parameter.name])
+            for parameter in function.parameters
+            if parameter.name in parameter_types
+        ),
+        local_types=tuple(sorted(local_types.items())),
+        structures=local_context.structures,
+        forward_structs=tuple(
+            sorted(forward_structs - defined_structures)
+        ),
+        return_type=return_type,
     )
