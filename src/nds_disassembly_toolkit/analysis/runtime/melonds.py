@@ -232,6 +232,14 @@ class MelonDSSession:
         self._client.wait_for_stop()
         return result
 
+    def begin_continue(self) -> None:
+        self._client.begin_continue()
+
+    def wait_for_stop(self) -> RuntimeSnapshot:
+        reply = self._client.wait_for_stop()
+        stop_kind = StopReasonKind.SIGNAL if reply.signal is not None else StopReasonKind.UNKNOWN
+        return self.snapshot(self._stop_from_reply(reply, stop_kind))
+
     def continue_execution(self) -> RuntimeSnapshot:
         reply = self._client.continue_execution()
         stop_kind = StopReasonKind.SIGNAL if reply.signal is not None else StopReasonKind.UNKNOWN
