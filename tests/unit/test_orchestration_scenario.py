@@ -126,3 +126,72 @@ def test_failed_step_collects_managed_failure_bundle(tmp_path: Path) -> None:
     assert payload["step_id"] == "first"
     assert payload["scenario_name"] == "state-aware-actions"
     assert payload["error_type"] == "RuntimeScenarioError"
+
+
+
+def test_run_scenario_restores_initial_checkpoint_before_actions(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class CheckpointContext(FakeScenarioContext):
+        events: list[str] = field(default_factory=list)
+
+        def restore_checkpoint(self, name: str) -> None:
+            self.events.append(f"restore:{name}")
+
+        def press_button(self, button: DSButton) -> None:
+            self.events.append(f"button:{button.value}")
+
+    context = CheckpointContext()
+    definition = ScenarioDefinition(
+        schema_version=1,
+        name="initial-baseline",
+        backend=EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=(),
+        checkpoint="baseline",
+        steps=(ButtonStep(id="press", button=DSButton.A),),
+    )
+
+    result = run_scenario(
+        context,
+        definition,
+        journal_path=tmp_path / "journal.json",
+    )
+
+    assert result.status == "passed"
+    assert context.events == ["restore:baseline", "button:a"]
+
+
+def test_run_scenario_checkpoint_restore_failure_prevents_first_step(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class FailingCheckpointContext(FakeScenarioContext):
+        actions: list[str] = field(default_factory=list)
+
+        def restore_checkpoint(self, name: str) -> None:
+            raise RuntimeCheckpointError(f"cannot restore {name}")
+
+        def press_button(self, button: DSButton) -> None:
+            self.actions.append(button.value)
+
+    context = FailingCheckpointContext()
+    definition = ScenarioDefinition(
+        schema_version=1,
+        name="initial-baseline",
+        backend=EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=(),
+        checkpoint="baseline",
+        steps=(ButtonStep(id="press", button=DSButton.A),),
+    )
+
+    with pytest.raises(RuntimeRecoveryError, match="baseline"):
+        run_scenario(
+            context,
+            definition,
+            journal_path=tmp_path / "journal.json",
+        )
+
+    assert context.actions == []
