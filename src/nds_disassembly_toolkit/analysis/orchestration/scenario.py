@@ -41,6 +41,15 @@ class JournalStepState(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ParameterReference:
+    name: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("parameter reference name must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class PredicateDefinition:
     type: str
     address: int | None = None
@@ -119,8 +128,8 @@ class TouchFlickStep:
 class MemoryWriteStep:
     id: str
     address: int
-    replacement: bytes
-    expected_before: bytes | None = None
+    replacement: bytes | ParameterReference
+    expected_before: bytes | ParameterReference | None = None
     verify_after: bool = True
     precondition: PredicateDefinition | None = None
     postcondition: PredicateDefinition | None = None
@@ -844,6 +853,13 @@ def _execute_step(context: object, step: ScenarioStep) -> None:
         )
         return
     if isinstance(step, MemoryWriteStep):
+        if isinstance(step.replacement, ParameterReference) or isinstance(
+            step.expected_before,
+            ParameterReference,
+        ):
+            raise RuntimeScenarioError(
+                "scenario contains unresolved memory-write parameter reference"
+            )
         apply_guarded_write(
             context,  # type: ignore[arg-type]
             RuntimeMemoryWrite(
