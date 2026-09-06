@@ -30,6 +30,7 @@ from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAValue,
     build_def_use_index,
 )
+from nds_disassembly_toolkit.analysis.decompiler.value_facts import analyze_value_facts
 
 _MASK32 = 0xFFFFFFFF
 
@@ -332,6 +333,8 @@ def _propagation_pass(function: SSAFunction) -> SSAFunction:
     replacements: dict[SSAValue, SSAExpression] = {}
     removed_assignments: set[SSAValue] = set()
 
+    fact_analysis = analyze_value_facts(function)
+
     for block in function.blocks:
         for statement in block.statements:
             if not isinstance(statement, SSAAssignmentStatement):
@@ -344,6 +347,20 @@ def _propagation_pass(function: SSAFunction) -> SSAFunction:
                 use.phi_predecessor_address is not None
                 for use in uses
             )
+
+            target_facts = fact_analysis.facts_for(statement.target)
+            if not has_phi_use and target_facts.address is not None:
+                value = AddressExpression(
+                    target_facts.address,
+                    target_facts.component,
+                    statement.source,
+                )
+            elif not has_phi_use and target_facts.exact_value is not None:
+                value = ConstantExpression(
+                    target_facts.exact_value,
+                    statement.source,
+                )
+
             is_copy = (
                 isinstance(value, SSAReferenceExpression)
                 and value.value is not None
