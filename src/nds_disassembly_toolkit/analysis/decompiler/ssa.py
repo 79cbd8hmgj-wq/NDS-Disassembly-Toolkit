@@ -8,6 +8,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     AddressExpression,
     AssignmentStatement,
     BinaryExpression,
+    BinaryOperator,
     BranchStatement,
     CallExpression,
     CallStatement,
@@ -22,6 +23,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     ReturnStatement,
     SourceRef,
     UnaryExpression,
+    UnaryOperator,
     UnknownExpression,
     UnknownStatement,
     VariableExpression,
@@ -29,6 +31,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
 from nds_disassembly_toolkit.analysis.model import (
     CFGEdge,
     CFGEdgeKind,
+    ConditionCode,
     InstructionSet,
     Register,
 )
@@ -294,14 +297,14 @@ class SSAReferenceExpression:
 
 @dataclass(frozen=True, slots=True)
 class SSAUnaryExpression:
-    operator: object
+    operator: UnaryOperator
     operand: SSAExpression
     source: tuple[SourceRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class SSABinaryExpression:
-    operator: object
+    operator: BinaryOperator
     left: SSAExpression
     right: SSAExpression
     source: tuple[SourceRef, ...] = ()
@@ -309,7 +312,7 @@ class SSABinaryExpression:
 
 @dataclass(frozen=True, slots=True)
 class SSACompareExpression:
-    condition: object
+    condition: ConditionCode
     left: SSAExpression
     right: SSAExpression
     source: tuple[SourceRef, ...] = ()
