@@ -74,8 +74,6 @@ def test_runtime_errors_share_toolkit_error_boundary() -> None:
 
 
 def test_phase_7h3_orchestration_public_exports_are_available() -> None:
-    import nds_disassembly_toolkit.analysis.orchestration as orchestration
-
     required = (
         "SESSION_SCHEMA_VERSION",
         "CHECKPOINT_SCHEMA_VERSION",
