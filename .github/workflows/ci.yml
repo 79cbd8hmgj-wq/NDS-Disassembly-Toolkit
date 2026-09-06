@@ -468,6 +468,32 @@ jobs:
           set -euxo pipefail
           rm -rf /tmp/nds-managed-runtime
           mkdir -p /tmp/nds-managed-runtime
+          export PATH="/tmp/desmume/desmume/src/frontend/posix/build/cli:$PATH"
+
+          nds-toolkit runtime doctor \
+            --emulator desmume \
+            --rom /tmp/rsp-smoke.nds \
+            --require managed_launch \
+            --require window_input \
+            --require touchscreen_input \
+            --require save_state \
+            --output /tmp/managed-doctor.json
+
+          python - <<'PY'
+          import json
+          doctor = json.load(open('/tmp/managed-doctor.json'))
+          assert doctor['passed'] is True
+          required = {check['name']: check for check in doctor['checks']}
+          for name in (
+              'capability:managed_launch',
+              'capability:window_input',
+              'capability:touchscreen_input',
+              'capability:save_state',
+              'xvfb',
+              'xdotool',
+          ):
+              assert required[name]['passed'] is True, required[name]
+          PY
 
           nds-toolkit runtime launch /tmp/rsp-smoke.nds \
             --emulator desmume \
