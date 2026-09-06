@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
     AddressExpression,
@@ -9,9 +9,16 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAExpression,
     SSAFunction,
+    SSACallExpression,
+    SSACallStatement,
     SSAMemoryReadExpression,
     SSAReferenceExpression,
     SSAReturnStatement,
+    SSAValue,
+    build_def_use_index,
+)
+from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
+    canonical_pointer_root,
 )
 from nds_disassembly_toolkit.analysis.decompiler.type_model import (
     IntegerType,
@@ -264,4 +271,622 @@ def recover_local_prototype(
         parameters=tuple(parameters),
         return_type=return_type,
         conflicts=conflicts,
+    )
+
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypePropagationResult:
+    prototypes: tuple[FunctionPrototype, ...]
+    value_types: tuple[
+        tuple[FunctionTypeIdentity, SSAValue, RecoveredType],
+        ...,
+    ]
+    converged: bool
+    iterations: int
+    warnings: tuple[str, ...] = ()
+
+    def prototype_for(
+        self,
+        identity: FunctionTypeIdentity,
+    ) -> FunctionPrototype | None:
+        for prototype in self.prototypes:
+            if prototype.identity == identity:
+                return prototype
+        return None
+
+    def type_for_value(
+        self,
+        identity: FunctionTypeIdentity,
+        value: SSAValue,
+    ) -> RecoveredType | None:
+        for candidate_identity, candidate, recovered in self.value_types:
+            if candidate_identity == identity and candidate == value:
+                return recovered
+        return None
+
+
+_ValueKey = tuple[FunctionTypeIdentity, SSAValue]
+_ParameterKey = tuple[FunctionTypeIdentity, int]
+
+
+def _identity_sort_key(
+    identity: FunctionTypeIdentity,
+) -> tuple[object, ...]:
+    return (
+        identity.component,
+        identity.address,
+        identity.instruction_set.value,
+    )
+
+
+def _value_sort_key(value: SSAValue) -> tuple[object, ...]:
+    storage = value.storage
+    return (
+        storage.kind.value,
+        storage.register.value if storage.register is not None else "",
+        storage.stack_offset if storage.stack_offset is not None else 0,
+        storage.temporary_name or "",
+        value.version,
+    )
+
+
+def _value_key_sort_key(key: _ValueKey) -> tuple[object, ...]:
+    identity, value = key
+    return (*_identity_sort_key(identity), *_value_sort_key(value))
+
+
+def _parameter_key_sort_key(
+    key: _ParameterKey,
+) -> tuple[object, ...]:
+    identity, position = key
+    return (*_identity_sort_key(identity), position)
+
+
+def _function_identity(
+    function: SSAFunction,
+) -> FunctionTypeIdentity:
+    return FunctionTypeIdentity(
+        function.component,
+        function.address,
+        function.instruction_set,
+    )
+
+
+def _resolve_call_target_identity(
+    call: SSACallExpression,
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction],
+) -> FunctionTypeIdentity | None:
+    if call.target_component is not None:
+        candidate = FunctionTypeIdentity(
+            call.target_component,
+            call.target_address,
+            call.target_instruction_set,
+        )
+        return candidate if candidate in functions_by_identity else None
+
+    matches = tuple(
+        identity
+        for identity in functions_by_identity
+        if (
+            identity.address == call.target_address
+            and identity.instruction_set == call.target_instruction_set
+        )
+    )
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+@dataclass(frozen=True, slots=True)
+class _ArgumentConstraint:
+    caller_identity: FunctionTypeIdentity
+    caller_value: SSAValue
+    callee_identity: FunctionTypeIdentity
+    parameter_position: int
+    callee_value: SSAValue
+
+
+@dataclass(frozen=True, slots=True)
+class _CallReturnConstraint:
+    callee_identity: FunctionTypeIdentity
+    caller_identity: FunctionTypeIdentity
+    caller_result: SSAValue
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalReturnConstraint:
+    identity: FunctionTypeIdentity
+    returned_value: SSAValue
+
+
+def _build_constraints(
+    functions: tuple[SSAFunction, ...],
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction],
+) -> tuple[
+    tuple[_ArgumentConstraint, ...],
+    tuple[_CallReturnConstraint, ...],
+    tuple[_LocalReturnConstraint, ...],
+]:
+    arguments: list[_ArgumentConstraint] = []
+    call_returns: list[_CallReturnConstraint] = []
+    local_returns: list[_LocalReturnConstraint] = []
+
+    for function in functions:
+        identity = _function_identity(function)
+        index = build_def_use_index(function)
+
+        for block in sorted(function.blocks, key=lambda item: item.address):
+            for statement in block.statements:
+                if isinstance(statement, SSAReturnStatement):
+                    if (
+                        isinstance(statement.value, SSAReferenceExpression)
+                        and statement.value.value is not None
+                    ):
+                        local_returns.append(
+                            _LocalReturnConstraint(
+                                identity=identity,
+                                returned_value=canonical_pointer_root(
+                                    function,
+                                    statement.value.value,
+                                    index=index,
+                                ),
+                            )
+                        )
+                    continue
+
+                if not isinstance(statement, SSACallStatement):
+                    continue
+                target_identity = _resolve_call_target_identity(
+                    statement.call,
+                    functions_by_identity,
+                )
+                if target_identity is None:
+                    continue
+                callee = functions_by_identity[target_identity]
+                callee_index = build_def_use_index(callee)
+
+                for position, argument in enumerate(
+                    statement.call.arguments
+                ):
+                    if (
+                        position >= len(callee.entry_definitions)
+                        or not isinstance(argument, SSAReferenceExpression)
+                        or argument.value is None
+                    ):
+                        continue
+                    arguments.append(
+                        _ArgumentConstraint(
+                            caller_identity=identity,
+                            caller_value=canonical_pointer_root(
+                                function,
+                                argument.value,
+                                index=index,
+                            ),
+                            callee_identity=target_identity,
+                            parameter_position=position,
+                            callee_value=canonical_pointer_root(
+                                callee,
+                                callee.entry_definitions[position],
+                                index=callee_index,
+                            ),
+                        )
+                    )
+
+                if statement.result is not None:
+                    call_returns.append(
+                        _CallReturnConstraint(
+                            callee_identity=target_identity,
+                            caller_identity=identity,
+                            caller_result=statement.result,
+                        )
+                    )
+
+    arguments.sort(
+        key=lambda item: (
+            *_identity_sort_key(item.caller_identity),
+            *_value_sort_key(item.caller_value),
+            *_identity_sort_key(item.callee_identity),
+            item.parameter_position,
+            *_value_sort_key(item.callee_value),
+        )
+    )
+    call_returns.sort(
+        key=lambda item: (
+            *_identity_sort_key(item.callee_identity),
+            *_identity_sort_key(item.caller_identity),
+            *_value_sort_key(item.caller_result),
+        )
+    )
+    local_returns.sort(
+        key=lambda item: (
+            *_identity_sort_key(item.identity),
+            *_value_sort_key(item.returned_value),
+        )
+    )
+    return tuple(arguments), tuple(call_returns), tuple(local_returns)
+
+
+def _merge_pair(
+    left: RecoveredType,
+    right: RecoveredType,
+) -> tuple[RecoveredType, tuple[str, ...]]:
+    return merge_recovered_types(left, right)
+
+
+def _record_conflicts(
+    conflicts: dict[FunctionTypeIdentity, set[str]],
+    identities: tuple[FunctionTypeIdentity, ...],
+    prefix: str,
+    messages: tuple[str, ...],
+) -> None:
+    if not messages:
+        return
+    for identity in identities:
+        target = conflicts.setdefault(identity, set())
+        target.update(f"{prefix}: {message}" for message in messages)
+
+
+def propagate_prototypes(
+    functions: tuple[SSAFunction, ...],
+    environments: tuple[LocalTypeEnvironment, ...],
+    *,
+    iteration_cap: int = 32,
+) -> PrototypePropagationResult:
+    if iteration_cap <= 0:
+        raise ValueError("prototype propagation iteration cap must be positive")
+    if len(functions) != len(environments):
+        raise ValueError("functions and type environments must align")
+
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction] = {}
+    environments_by_identity: dict[
+        FunctionTypeIdentity,
+        LocalTypeEnvironment,
+    ] = {}
+    prototypes_by_identity: dict[
+        FunctionTypeIdentity,
+        FunctionPrototype,
+    ] = {}
+
+    for function, environment in zip(
+        functions,
+        environments,
+        strict=True,
+    ):
+        identity = _function_identity(function)
+        if identity in functions_by_identity:
+            raise ValueError("duplicate function prototype identity")
+        functions_by_identity[identity] = function
+        environments_by_identity[identity] = environment
+        prototypes_by_identity[identity] = recover_local_prototype(
+            function,
+            environment,
+        )
+
+    ordered_functions = tuple(
+        functions_by_identity[identity]
+        for identity in sorted(
+            functions_by_identity,
+            key=_identity_sort_key,
+        )
+    )
+    (
+        argument_constraints,
+        call_return_constraints,
+        local_return_constraints,
+    ) = _build_constraints(
+        ordered_functions,
+        functions_by_identity,
+    )
+
+    parameter_types: dict[_ParameterKey, RecoveredType] = {}
+    return_types: dict[FunctionTypeIdentity, RecoveredType] = {}
+    value_types: dict[_ValueKey, RecoveredType] = {}
+    conflicts: dict[FunctionTypeIdentity, set[str]] = {
+        identity: set(prototype.conflicts)
+        for identity, prototype in prototypes_by_identity.items()
+    }
+    locked_return_conflicts = {
+        identity
+        for identity, prototype in prototypes_by_identity.items()
+        if prototype.conflicts
+    }
+
+    for identity, prototype in prototypes_by_identity.items():
+        return_types[identity] = prototype.return_type
+        function = functions_by_identity[identity]
+        for parameter in prototype.parameters:
+            key = (identity, parameter.position)
+            parameter_types[key] = parameter.recovered_type
+            if parameter.position < len(function.entry_definitions):
+                value_types[
+                    (identity, function.entry_definitions[parameter.position])
+                ] = parameter.recovered_type
+
+    for identity, environment in environments_by_identity.items():
+        for binding in environment.value_bindings:
+            key = (identity, binding.value)
+            current = value_types.get(key, UnknownType())
+            merged, messages = _merge_pair(
+                current,
+                binding.recovered_type,
+            )
+            value_types[key] = (
+                UnknownType() if messages else merged
+            )
+            _record_conflicts(
+                conflicts,
+                (identity,),
+                "local value",
+                messages,
+            )
+
+    for constraint in call_return_constraints:
+        value_types.setdefault(
+            (
+                constraint.caller_identity,
+                constraint.caller_result,
+            ),
+            UnknownType(),
+        )
+
+    for constraint in local_return_constraints:
+        value_types.setdefault(
+            (constraint.identity, constraint.returned_value),
+            UnknownType(),
+        )
+
+    for iteration in range(1, iteration_cap + 1):
+        next_parameters = dict(parameter_types)
+        next_returns = dict(return_types)
+        next_values = dict(value_types)
+        next_conflicts = {
+            identity: set(messages)
+            for identity, messages in conflicts.items()
+        }
+
+        # Keep each parameter slot and its entry SSA value equivalent.
+        for identity, function in functions_by_identity.items():
+            for position in range(
+                min(
+                    len(function.parameters),
+                    len(function.entry_definitions),
+                )
+            ):
+                parameter_key = (identity, position)
+                value_key = (
+                    identity,
+                    function.entry_definitions[position],
+                )
+                left = parameter_types.get(
+                    parameter_key,
+                    UnknownType(),
+                )
+                right = value_types.get(
+                    value_key,
+                    UnknownType(),
+                )
+                merged, messages = _merge_pair(left, right)
+                resolved = UnknownType() if messages else merged
+                next_parameters[parameter_key] = resolved
+                next_values[value_key] = resolved
+                _record_conflicts(
+                    next_conflicts,
+                    (identity,),
+                    f"parameter {position}",
+                    messages,
+                )
+
+        # Returned SSA values constrain the function return type.
+        for constraint in local_return_constraints:
+            if constraint.identity in locked_return_conflicts:
+                continue
+            return_type = return_types.get(
+                constraint.identity,
+                UnknownType(),
+            )
+            value_key = (
+                constraint.identity,
+                constraint.returned_value,
+            )
+            value_type = value_types.get(
+                value_key,
+                UnknownType(),
+            )
+            merged, messages = _merge_pair(
+                return_type,
+                value_type,
+            )
+            resolved = UnknownType() if messages else merged
+            next_returns[constraint.identity] = resolved
+            next_values[value_key] = resolved
+            _record_conflicts(
+                next_conflicts,
+                (constraint.identity,),
+                "return value",
+                messages,
+            )
+
+        # Caller argument values and callee parameter slots are equivalent.
+        for constraint in argument_constraints:
+            caller_key = (
+                constraint.caller_identity,
+                constraint.caller_value,
+            )
+            parameter_key = (
+                constraint.callee_identity,
+                constraint.parameter_position,
+            )
+            caller_type = value_types.get(
+                caller_key,
+                UnknownType(),
+            )
+            callee_type = parameter_types.get(
+                parameter_key,
+                UnknownType(),
+            )
+            merged, messages = _merge_pair(
+                caller_type,
+                callee_type,
+            )
+            resolved = UnknownType() if messages else merged
+            next_values[caller_key] = resolved
+            next_parameters[parameter_key] = resolved
+            next_values[
+                (
+                    constraint.callee_identity,
+                    constraint.callee_value,
+                )
+            ] = resolved
+            _record_conflicts(
+                next_conflicts,
+                (
+                    constraint.caller_identity,
+                    constraint.callee_identity,
+                ),
+                f"call parameter {constraint.parameter_position}",
+                messages,
+            )
+
+        # Callee return type and caller r0 call-result definition are equivalent.
+        for constraint in call_return_constraints:
+            if constraint.callee_identity in locked_return_conflicts:
+                continue
+            caller_key = (
+                constraint.caller_identity,
+                constraint.caller_result,
+            )
+            callee_type = return_types.get(
+                constraint.callee_identity,
+                UnknownType(),
+            )
+            caller_type = value_types.get(
+                caller_key,
+                UnknownType(),
+            )
+            merged, messages = _merge_pair(
+                callee_type,
+                caller_type,
+            )
+            resolved = UnknownType() if messages else merged
+            next_returns[constraint.callee_identity] = resolved
+            next_values[caller_key] = resolved
+            _record_conflicts(
+                next_conflicts,
+                (
+                    constraint.callee_identity,
+                    constraint.caller_identity,
+                ),
+                "call return",
+                messages,
+            )
+
+        if (
+            next_parameters == parameter_types
+            and next_returns == return_types
+            and next_values == value_types
+            and next_conflicts == conflicts
+        ):
+            return _prototype_propagation_result(
+                functions_by_identity,
+                prototypes_by_identity,
+                next_parameters,
+                next_returns,
+                next_values,
+                next_conflicts,
+                converged=True,
+                iterations=iteration,
+            )
+
+        parameter_types = next_parameters
+        return_types = next_returns
+        value_types = next_values
+        conflicts = next_conflicts
+
+    return _prototype_propagation_result(
+        functions_by_identity,
+        prototypes_by_identity,
+        parameter_types,
+        return_types,
+        value_types,
+        conflicts,
+        converged=False,
+        iterations=iteration_cap,
+        warnings=(
+            f"prototype propagation reached iteration cap "
+            f"{iteration_cap}",
+        ),
+    )
+
+
+def _prototype_propagation_result(
+    functions_by_identity: dict[FunctionTypeIdentity, SSAFunction],
+    prototypes_by_identity: dict[
+        FunctionTypeIdentity,
+        FunctionPrototype,
+    ],
+    parameter_types: dict[_ParameterKey, RecoveredType],
+    return_types: dict[FunctionTypeIdentity, RecoveredType],
+    value_types: dict[_ValueKey, RecoveredType],
+    conflicts: dict[FunctionTypeIdentity, set[str]],
+    *,
+    converged: bool,
+    iterations: int,
+    warnings: tuple[str, ...] = (),
+) -> PrototypePropagationResult:
+    prototypes: list[FunctionPrototype] = []
+    for identity in sorted(
+        prototypes_by_identity,
+        key=_identity_sort_key,
+    ):
+        prototype = prototypes_by_identity[identity]
+        parameters = tuple(
+            replace(
+                parameter,
+                recovered_type=parameter_types.get(
+                    (identity, parameter.position),
+                    parameter.recovered_type,
+                ),
+            )
+            for parameter in prototype.parameters
+        )
+        prototypes.append(
+            replace(
+                prototype,
+                parameters=parameters,
+                return_type=return_types.get(
+                    identity,
+                    prototype.return_type,
+                ),
+                conflicts=tuple(
+                    sorted(
+                        set(
+                            (
+                                *prototype.conflicts,
+                                *conflicts.get(identity, set()),
+                            )
+                        )
+                    )
+                ),
+            )
+        )
+
+    value_records = tuple(
+        (
+            identity,
+            value,
+            value_types[(identity, value)],
+        )
+        for identity, value in sorted(
+            value_types,
+            key=_value_key_sort_key,
+        )
+    )
+
+    return PrototypePropagationResult(
+        prototypes=tuple(prototypes),
+        value_types=value_records,
+        converged=converged,
+        iterations=iterations,
+        warnings=warnings,
     )
