@@ -190,8 +190,17 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
         def send_key(self, session: object, host_key: str) -> None:
             self.keys.append(("key", host_key))
 
+    class Debugger:
+        def __init__(self) -> None:
+            self.host_actions = 0
+
+        def run_host_action(self, action: object) -> object:
+            self.host_actions += 1
+            return action()
+
     host = Host()
-    backend.bind_managed_session(record, host)
+    debugger = Debugger()
+    backend.bind_managed_session(record, host, debugger)
 
     destination = tmp_path / "checkpoint-state.bin"
     backend.save_state(destination)
@@ -203,6 +212,7 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
         ("up", "F1"),
         ("up", "Shift_R"),
     ]
+    assert debugger.host_actions == 1
 
     destination.write_bytes(b"restored-state")
     backend.load_state(destination)
@@ -219,6 +229,7 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
         ("up", "Shift_R"),
         ("key", "F1"),
     ]
+    assert debugger.host_actions == 3
 
 
 def test_desmume_state_requires_bound_managed_session(tmp_path: Path) -> None:
