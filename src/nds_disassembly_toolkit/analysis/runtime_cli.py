@@ -12,6 +12,12 @@ from typing import Any, cast
 
 from nds_disassembly_toolkit.analysis.model import CrossReference, FunctionCandidate, Symbol
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind, RuntimeSessionRecord
+from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
+    AcceptanceCase,
+    AcceptanceMatrixResult,
+    load_matrix,
+    run_acceptance_matrix,
+)
 from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
     CheckpointContext,
     CheckpointMetadata,
@@ -941,6 +947,22 @@ def _run_until(
 
 
 
+def _matrix_result_json(result: AcceptanceMatrixResult) -> dict[str, object]:
+    return {
+        "cases": [
+            {
+                "completed_steps": list(case.completed_steps),
+                "error": case.error,
+                "id": case.id,
+                "parameters": dict(case.parameters),
+                "status": case.status,
+            }
+            for case in result.cases
+        ],
+        "status": result.status,
+    }
+
+
 def _scenario_result_json(result: ScenarioResult) -> dict[str, object]:
     return {
         "completed_steps": list(result.completed_steps),
@@ -1226,6 +1248,26 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             return 0
         raise ValueError("runtime checkpoint requires save or restore")
 
+
+    if command == "matrix":
+        if arguments.runtime_matrix_command != "run":
+            raise ValueError("runtime matrix requires run")
+        matrix_path = arguments.matrix.expanduser().resolve()
+        matrix = load_matrix(matrix_path)
+        scenario = load_scenario(matrix_path.parent / matrix.scenario)
+        session_root = (
+            matrix_path.parent
+            if arguments.session_root is None
+            else arguments.session_root
+        )
+        record = load_session(session_root)
+        with _scenario_context(record, scenario) as scenario_context:
+            def case_context(_case: AcceptanceCase) -> _ManagedScenarioContext:
+                return scenario_context
+
+            result = run_acceptance_matrix(case_context, matrix, scenario)
+        _write_json(_matrix_result_json(result), arguments.output)
+        return 0
 
     if command == "scenario":
         if arguments.runtime_scenario_command != "run":
