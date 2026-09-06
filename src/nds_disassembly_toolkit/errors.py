@@ -68,3 +68,39 @@ class RuntimeTraceFormatError(RuntimeTraceError):
 
 class RuntimeTraceMismatchError(RuntimeTraceError):
     """Raised when two known trace targets cannot be compared safely."""
+
+
+class RuntimeOrchestrationError(RuntimeAnalysisError):
+    """Raised when managed runtime orchestration cannot complete safely."""
+
+
+class RuntimeEnvironmentError(RuntimeOrchestrationError):
+    """Raised when the host runtime environment cannot satisfy an experiment."""
+
+
+class RuntimeLaunchError(RuntimeOrchestrationError):
+    """Raised when a managed emulator process cannot be launched safely."""
+
+
+class RuntimeOwnershipError(RuntimeOrchestrationError):
+    """Raised when ownership of a managed runtime resource cannot be proven."""
+
+
+class RuntimeDisplayError(RuntimeOrchestrationError):
+    """Raised when a managed display or emulator window cannot be used safely."""
+
+
+class RuntimeInputError(RuntimeOrchestrationError):
+    """Raised when normalized Nintendo DS input cannot be injected safely."""
+
+
+class RuntimeCheckpointError(RuntimeOrchestrationError):
+    """Raised when a runtime checkpoint cannot be created, validated, or restored."""
+
+
+class RuntimeScenarioError(RuntimeOrchestrationError):
+    """Raised when a runtime scenario cannot be executed safely."""
+
+
+class RuntimeRecoveryError(RuntimeOrchestrationError):
+    """Raised when a managed runtime session cannot be resumed safely."""

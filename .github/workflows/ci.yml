@@ -62,6 +62,71 @@ jobs:
             .github/smoke/headless_nds.cpp .github/smoke/headless_platform.cpp \
             "$BUILD/libcore.a" "$BUILD/teakra/src/libteakra.a" \
             -lm -lpthread -ldl -o /tmp/headless-nds
+      - name: Exercise managed runtime session
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import time
+          from pathlib import Path
+
+          from nds_disassembly_toolkit.analysis.orchestration import (
+              EmulatorKind,
+              LaunchSpec,
+              RuntimeLifecycleState,
+          )
+          from nds_disassembly_toolkit.analysis.orchestration.process import (
+              create_session,
+              process_is_owned,
+              spawn_owned_process,
+              stop_owned_process,
+          )
+          from nds_disassembly_toolkit.analysis.runtime import MelonDSSession, RuntimeCpu
+
+          root = Path('/tmp/managed-runtime')
+          rom = Path('/tmp/managed-fixture.nds')
+          rom.write_bytes(b'NDS managed smoke')
+          session = create_session(
+              root,
+              emulator=EmulatorKind.MELONDS,
+              executable=Path('/tmp/headless-nds'),
+              rom=rom,
+              cpu=RuntimeCpu.ARM9,
+          )
+          running = spawn_owned_process(
+              session,
+              LaunchSpec(argv=('/tmp/headless-nds', str(session.debugger_port))),
+          )
+          assert running.lifecycle is RuntimeLifecycleState.LAUNCHING
+          assert process_is_owned(running)
+          assert running.debugger_port != 3333
+
+          debugger = None
+          last_error = None
+          for _ in range(100):
+              try:
+                  debugger = MelonDSSession.connect(
+                      cpu=RuntimeCpu.ARM9,
+                      port=running.debugger_port,
+                      timeout=1.0,
+                  )
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  time.sleep(0.05)
+          if debugger is None:
+              raise AssertionError(f'managed debugger never became ready: {last_error}')
+          try:
+              snapshot = debugger.snapshot()
+              assert snapshot.pc == 0x02000000
+          finally:
+              debugger.close()
+
+          closed = stop_owned_process(running, grace_seconds=1.0)
+          assert closed.lifecycle is RuntimeLifecycleState.CLOSED
+          assert not process_is_owned(closed)
+          print('Phase 7H3A managed stock-melonDS session smoke passed')
+          PY
       - name: Exercise exact runtime CLI
         shell: bash
         run: |
@@ -268,4 +333,378 @@ jobs:
           assert 'probability' not in json.dumps(diff, sort_keys=True).lower()
 
           print('Phase 7H1/7H2 live stock-melonDS smoke passed')
+          PY
+
+
+  phase-7h3-desmume-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install toolkit and DeSmuME build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install -e .
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build xvfb xdotool \
+            libglib2.0-dev libsdl2-dev libpcap-dev zlib1g-dev \
+            libx11-dev libgl1-mesa-dev
+      - name: Build pinned DeSmuME CLI with GDB stub
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/TASEmulators/desmume.git /tmp/desmume
+          git -C /tmp/desmume checkout release_0_9_13
+          meson setup /tmp/desmume/desmume/src/frontend/posix/build \
+            /tmp/desmume/desmume/src/frontend/posix \
+            --buildtype=release \
+            -Dfrontend-gtk=false \
+            -Dfrontend-cli=true \
+            -Dgdb-stub=true
+          ninja -C /tmp/desmume/desmume/src/frontend/posix/build
+      - name: Build disposable minimal NDS ROM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          import struct
+          from pathlib import Path
+
+          rom = bytearray(0x20000)
+          rom[0x00:0x0C] = b'RSP SMOKE\0\0\0'
+          rom[0x0C:0x10] = b'RSP0'
+          rom[0x10:0x12] = b'00'
+          rom[0x12] = 0
+          rom[0x14] = 0
+          arm9 = bytes.fromhex(
+              '20009fe5'  # ldr r0, [pc, #32] -> sentinel address
+              '20109fe5'  # ldr r1, [pc, #32] -> baseline value
+              '001080e5'  # str r1, [r0]
+              '1c209fe5'  # ldr r2, [pc, #28] -> KEYINPUT
+              '1c409fe5'  # ldr r4, [pc, #28] -> dirty value
+              'b030d2e1'  # ldrh r3, [r2]
+              '010013e3'  # tst r3, #1 (A is active-low)
+              'fcffff1a'  # bne poll
+              '004080e5'  # str r4, [r0]
+              'faffffea'  # b poll
+              '00010002'  # 0x02000100
+              '44332211'  # 0x11223344
+              '30010004'  # 0x04000130 KEYINPUT
+              'ddccbbaa'  # 0xaabbccdd
+          )
+          struct.pack_into(
+              '<IIII',
+              rom,
+              0x20,
+              0x4000,
+              0x02000000,
+              0x02000000,
+              len(arm9),
+          )
+          struct.pack_into('<IIII', rom, 0x30, 0x8000, 0x03800000, 0x03800000, 4)
+          struct.pack_into('<II', rom, 0x40, 0, 0)
+          struct.pack_into('<II', rom, 0x48, 0, 0)
+          struct.pack_into('<I', rom, 0x80, len(rom))
+          struct.pack_into('<I', rom, 0x84, 0x4000)
+          rom[0x4000:0x4000 + len(arm9)] = arm9
+          rom[0x8000:0x8004] = bytes.fromhex('feffffea')
+
+          def crc16(data: bytes) -> int:
+              value = 0xFFFF
+              for byte in data:
+                  value ^= byte
+                  for _ in range(8):
+                      value = (value >> 1) ^ (0xA001 if value & 1 else 0)
+              return value & 0xFFFF
+
+          struct.pack_into('<H', rom, 0x15C, crc16(bytes(rom[0xC0:0x15C])))
+          struct.pack_into('<H', rom, 0x15E, crc16(bytes(rom[:0x15E])))
+          Path('/tmp/rsp-smoke.nds').write_bytes(rom)
+          PY
+      - name: Verify DeSmuME direct-RSP dialect under Xvfb
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PORT=39491
+          GDBSTUB_DEBUG=1 xvfb-run -a \
+            /tmp/desmume/desmume/src/frontend/posix/build/cli/desmume-cli \
+            --arm9gdb "$PORT" --disable-sound --nojoy \
+            /tmp/rsp-smoke.nds \
+            >/tmp/desmume-smoke.out 2>/tmp/desmume-smoke.err &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true' EXIT
+          sleep 1
+          echo "---- listener diagnostics before attach ----"
+          ss -ltnp || true
+          cat /tmp/desmume-smoke.out || true
+          cat /tmp/desmume-smoke.err || true
+          set +e
+          python - <<'PY'
+          import time
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          session = None
+          last_error = None
+          for _ in range(100):
+              try:
+                  session = DeSmuMESession.connect(
+                      cpu=RuntimeCpu.ARM9,
+                      port=39491,
+                      timeout=1.0,
+                  )
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  time.sleep(0.1)
+          if session is None:
+              raise AssertionError(f'DeSmuME GDB stub never became ready: {last_error}')
+          try:
+              snapshot = session.snapshot()
+              assert snapshot.registers.value('pc') is not None
+              assert snapshot.registers.value('cpsr') is not None
+              assert session.capabilities is not None
+          finally:
+              session.close()
+          print('Phase 7H3A DeSmuME direct-RSP smoke passed')
+          PY
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "---- DeSmuME stdout ----"
+            cat /tmp/desmume-smoke.out || true
+            echo "---- DeSmuME stderr ----"
+            cat /tmp/desmume-smoke.err || true
+            echo "---- process state ----"
+            ps -ef | grep -E '[d]esmume|[X]vfb' || true
+            exit "$STATUS"
+          fi
+
+      - name: Verify managed DeSmuME window input through public CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf /tmp/nds-managed-runtime
+          mkdir -p /tmp/nds-managed-runtime
+          export PATH="/tmp/desmume/desmume/src/frontend/posix/build/cli:$PATH"
+
+          nds-toolkit runtime doctor \
+            --emulator desmume \
+            --rom /tmp/rsp-smoke.nds \
+            --require managed_launch \
+            --require window_input \
+            --require touchscreen_input \
+            --require save_state \
+            --output /tmp/managed-doctor.json
+
+          python - <<'PY'
+          import json
+          doctor = json.load(open('/tmp/managed-doctor.json'))
+          assert doctor['passed'] is True
+          required = {check['name']: check for check in doctor['checks']}
+          for name in (
+              'capability:managed_launch',
+              'capability:window_input',
+              'capability:touchscreen_input',
+              'capability:save_state',
+              'xvfb',
+              'xdotool',
+          ):
+              assert required[name]['passed'] is True, required[name]
+          PY
+
+          nds-toolkit runtime launch /tmp/rsp-smoke.nds \
+            --emulator desmume \
+            --cpu arm9 \
+            --session-root /tmp/nds-managed-runtime \
+            --executable /tmp/desmume/desmume/src/frontend/posix/build/cli/desmume-cli \
+            --output /tmp/managed-session.json
+
+          SESSION_ROOT="$(python - <<'PY'
+          import json
+          print(json.load(open('/tmp/managed-session.json'))['session_root'])
+          PY
+          )"
+          export SESSION_ROOT
+
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from pathlib import Path
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          payload = json.load(open('/tmp/managed-session.json'))
+          assert payload['display'].startswith(':')
+          assert payload['window_id']
+          root = Path(os.environ['SESSION_ROOT'])
+          assert (root / 'display.json').is_file()
+
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=payload['debugger_host'],
+              port=payload['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              baseline = bytes.fromhex('44332211')
+              for _ in range(50):
+                  session.run_host_action(lambda: time.sleep(0.05))
+                  if session.read_memory(0x02000100, 4) == baseline:
+                      break
+              else:
+                  raise AssertionError(
+                      'managed DeSmuME ROM sentinel never became ready'
+                  )
+          finally:
+              session.close()
+          PY
+
+          nds-toolkit runtime checkpoint save "$SESSION_ROOT" baseline \
+            --output /tmp/managed-checkpoint-save.json
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          saved = json.load(open('/tmp/managed-checkpoint-save.json'))
+          root = Path(os.environ['SESSION_ROOT'])
+          assert saved['name'] == 'baseline'
+          assert (root / 'checkpoints' / 'baseline' / 'checkpoint.json').is_file()
+          assert (root / 'checkpoints' / 'baseline' / 'state.bin').is_file()
+          PY
+
+          python - <<'PY'
+          import json
+
+          scenario = {
+              'schema_version': 1,
+              'name': 'managed-checkpoint-input-smoke',
+              'backend': 'desmume',
+              'cpu': 'arm9',
+              'required_capabilities': ['save_state', 'window_input'],
+              'checkpoint': 'baseline',
+              'steps': [
+                  {
+                      'id': 'verify-restored-baseline',
+                      'type': 'assert',
+                      'condition': {
+                          'type': 'memory_equals',
+                          'address': '0x02000100',
+                          'bytes': '44332211',
+                      },
+                      'timeout': 2.0,
+                  },
+                  {
+                      'id': 'press-a',
+                      'type': 'button',
+                      'button': 'A',
+                      'postcondition': {
+                          'type': 'memory_equals',
+                          'address': '0x02000100',
+                          'bytes': 'ddccbbaa',
+                      },
+                      'timeout': 2.0,
+                  },
+              ],
+          }
+          with open('/tmp/managed-checkpoint-scenario.json', 'w') as handle:
+              json.dump(scenario, handle)
+          PY
+
+          nds-toolkit runtime scenario run \
+            "$SESSION_ROOT" /tmp/managed-checkpoint-scenario.json \
+            --output /tmp/managed-checkpoint-scenario-result.json
+
+          python - <<'PY'
+          import json
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          result = json.load(open('/tmp/managed-checkpoint-scenario-result.json'))
+          assert result['status'] == 'passed'
+          assert result['completed_steps'] == [
+              'verify-restored-baseline',
+              'press-a',
+          ]
+
+          session_info = json.load(open('/tmp/managed-session.json'))
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=session_info['debugger_host'],
+              port=session_info['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              assert session.read_memory(0x02000100, 4) == bytes.fromhex('ddccbbaa')
+          finally:
+              session.close()
+          PY
+
+          nds-toolkit runtime checkpoint restore "$SESSION_ROOT" baseline \
+            --output /tmp/managed-checkpoint-restore.json
+
+          python - <<'PY'
+          import json
+
+          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+
+          restored = json.load(open('/tmp/managed-checkpoint-restore.json'))
+          assert restored['name'] == 'baseline'
+          session_info = json.load(open('/tmp/managed-session.json'))
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=session_info['debugger_host'],
+              port=session_info['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              assert session.read_memory(0x02000100, 4) == bytes.fromhex('44332211')
+          finally:
+              session.close()
+          PY
+
+          cat >/tmp/managed-touch-scenario.json <<'JSON'
+          {
+            "schema_version": 1,
+            "name": "managed-touch-smoke",
+            "backend": "desmume",
+            "cpu": "arm9",
+            "required_capabilities": ["touchscreen_input"],
+            "steps": [
+              {"id": "touch-center", "type": "touch_tap", "point": [128, 96]}
+            ]
+          }
+          JSON
+
+          nds-toolkit runtime scenario run \
+            "$SESSION_ROOT" /tmp/managed-touch-scenario.json \
+            --output /tmp/managed-touch-result.json
+
+          python - <<'PY'
+          import json
+          result = json.load(open('/tmp/managed-touch-result.json'))
+          assert result['status'] == 'passed'
+          assert result['completed_steps'] == ['touch-center']
+          PY
+
+          nds-toolkit runtime session stop "$SESSION_ROOT" \
+            --output /tmp/managed-stopped.json
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          stopped = json.load(open('/tmp/managed-stopped.json'))
+          assert stopped['lifecycle'] == 'closed'
+          assert not (Path(os.environ['SESSION_ROOT']) / 'display.json').exists()
           PY

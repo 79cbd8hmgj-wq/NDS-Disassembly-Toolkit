@@ -1,11 +1,64 @@
-# Runtime debugging and trace analysis with melonDS
+# Runtime debugging, trace analysis, and managed orchestration
 
-Phase 7H provides a game-neutral runtime-analysis bridge for Nintendo DS targets exposed through melonDS's GDB Remote Serial Protocol (RSP) debugger interface.
+Phase 7H provides a game-neutral runtime-analysis layer for Nintendo DS targets exposed through emulator GDB Remote Serial Protocol (RSP) debugger interfaces.
 
-- **Phase 7H1** provides bounded interactive inspection: probe, snapshots, memory reads, temporary break/watch conditions, and single-step.
+- **Phase 7H1** provides bounded attach-only inspection: probe, snapshots, memory reads, temporary break/watch conditions, and single-step.
 - **Phase 7H2** adds bounded persisted `.ndstrace` capture, BEFORE/AFTER memory evidence, read-only `.ndsre` correlation, trace inspection, behavioral differentials, and transparent function ranking.
+- **Phase 7H3** adds a separate managed orchestration path: owned emulator processes, isolated session directories, dynamic loopback ports, validated checkpoints, finite runtime predicates, guarded memory writes, normalized Nintendo DS input records, durable scenarios/safe resume, failure evidence, and deterministic acceptance matrices.
 
-The toolkit attaches to an already configured debugger stub. It does not launch melonDS, reset the emulated system, load a ROM, or guess game-specific meaning.
+The existing Phase 7H1/7H2 commands remain attach-only and backward compatible. They do not launch or reset an emulator. Phase 7H3 commands are explicitly managed commands and never infer game-specific meaning.
+
+## Managed Phase 7H3 workflow
+
+A typical managed workflow is:
+
+```text
+runtime doctor
+→ runtime launch
+→ runtime checkpoint save/restore
+→ runtime scenario run
+→ runtime session resume when recovery is safe
+→ runtime matrix run for repeated isolated cases
+→ runtime session stop
+```
+
+Examples:
+
+```bash
+nds-toolkit runtime doctor --emulator desmume
+nds-toolkit runtime launch GAME.nds \
+  --emulator desmume \
+  --cpu arm9 \
+  --session-root runtime
+
+nds-toolkit runtime checkpoint save runtime/SESSION baseline
+nds-toolkit runtime scenario run runtime/SESSION scenario.json
+nds-toolkit runtime session resume runtime/SESSION scenario.json
+nds-toolkit runtime matrix run matrix.json --session-root runtime/SESSION
+nds-toolkit runtime session stop runtime/SESSION
+```
+
+### Current managed emulator capability profile
+
+The Phase 7H3 Linux managed profiles are capability-specific rather than assumed equivalent:
+
+| Managed backend | Debugger | Owned X11 window | DS buttons/touch | Checkpoint save/restore |
+| --- | --- | --- | --- | --- |
+| DeSmuME CLI `release_0_9_13` | ARM9, direct RSP | supported | supported for the verified 256×384 vertical CLI layout | supported through the isolated slot-1 savestate path |
+| stock melonDS live-gate build | ARM9/ARM7, initial-ACK RSP | not guaranteed by the current managed profile | unsupported | unsupported |
+
+`runtime doctor --require ...` reports these capability boundaries before an experiment. The toolkit does not guess a window layout or savestate mechanism for a backend that has not been verified.
+
+Managed sessions own their process identity, debugger endpoint, logs, checkpoints, traces, case results, journal, and failure directory. Cleanup re-proves PID/start-time/executable/process-group ownership before signaling a process. Debugger ports default to loopback and are dynamically allocated for managed sessions.
+
+Scenario JSON is versioned and intentionally constrained. It supports finite waits, Nintendo DS button/touch actions, guarded memory writes, snapshot/trace capture, assertions, and checkpoint save/restore. It does **not** support arbitrary shell commands or image/OCR state recognition. Input/mutation actions may declare generic runtime preconditions and postconditions, and all waits are finite.
+
+A step journal distinguishes `PENDING`, `STARTED`, `COMPLETED`, and `FAILED`. If execution is interrupted after a non-idempotent step starts, resume restores the latest safe checkpoint anchor and replays from that boundary rather than assuming the partially executed action is safe to repeat in place.
+
+Acceptance matrices apply typed case parameters to explicit scenario fields, restore the same verified baseline before each case, preserve deterministic case order, and persist resumable result identities. A failed case cannot contaminate the next case; a baseline restore failure aborts remaining cases.
+
+When a managed scenario fails, the toolkit attempts a bounded best-effort failure bundle under the session `failure/` directory. Evidence collection is secondary: it never replaces the primary scenario exception.
+
 
 ## melonDS setup
 

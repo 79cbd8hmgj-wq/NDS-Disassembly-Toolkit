@@ -3,12 +3,68 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from nds_disassembly_toolkit.analysis.model import CrossReference, FunctionCandidate, Symbol
+from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind, RuntimeSessionRecord
+from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
+    AcceptanceCase,
+    AcceptanceMatrixResult,
+    load_matrix,
+    run_acceptance_matrix,
+)
+from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
+    CheckpointContext,
+    CheckpointMetadata,
+    create_checkpoint,
+    restore_checkpoint,
+    validate_checkpoint,
+)
+from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmuMEBackend
+from nds_disassembly_toolkit.analysis.orchestration.doctor import (
+    discover_emulator_executable,
+    run_doctor,
+)
+from nds_disassembly_toolkit.analysis.orchestration.input import (
+    DSButton,
+    DSPoint,
+    ScreenLayoutProfile,
+    WindowGeometry,
+    map_touch_point,
+)
+from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import MelonDSBackend
+from nds_disassembly_toolkit.analysis.orchestration.process import (
+    create_session,
+    load_session,
+    process_is_owned,
+    spawn_owned_process,
+    stop_owned_process,
+    store_session,
+)
+from nds_disassembly_toolkit.analysis.orchestration.scenario import (
+    CaptureTraceStep,
+    ParameterReference,
+    ScenarioDefinition,
+    ScenarioResult,
+    load_scenario,
+    resume_scenario,
+    run_scenario,
+)
+from nds_disassembly_toolkit.analysis.orchestration.x11 import (
+    X11HostDriver,
+    find_x11_helpers,
+    load_x11_display_lease,
+    remove_x11_display_lease,
+    start_x11_display,
+    stop_x11_display,
+    store_x11_display_lease,
+)
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, LocationAnnotation
 from nds_disassembly_toolkit.analysis.runtime import (
     BreakpointKind,
@@ -37,6 +93,7 @@ from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     TraceSummary,
 )
 from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
+from nds_disassembly_toolkit.errors import RuntimeRecoveryError, RuntimeScenarioError
 
 _MAX_STEP_COUNT = 256
 _MAX_TRACE_STEPS = 100000
@@ -207,6 +264,83 @@ def add_runtime_parser(subparsers: Any) -> None:
 
     _add_trace_parsers(commands)
 
+    doctor = commands.add_parser("doctor", help="diagnose managed runtime capabilities")
+    doctor.add_argument("--emulator", choices=[kind.value for kind in EmulatorKind], required=True)
+    doctor.add_argument("--rom", type=Path)
+    doctor.add_argument("--require", action="append", default=[])
+    _add_output_argument(doctor)
+
+    launch = commands.add_parser("launch", help="launch an isolated managed emulator")
+    launch.add_argument("rom", type=Path)
+    launch.add_argument("--emulator", choices=[kind.value for kind in EmulatorKind], required=True)
+    launch.add_argument("--cpu", type=_cpu, required=True)
+    launch.add_argument("--session-root", type=Path, required=True)
+    launch.add_argument("--executable", type=Path)
+    launch.add_argument("--display")
+    _add_output_argument(launch)
+
+    session = commands.add_parser("session", help="inspect or stop a managed runtime session")
+    session_commands = session.add_subparsers(dest="runtime_session_command")
+    info = session_commands.add_parser("info", help="inspect a managed runtime session")
+    info.add_argument("session", type=Path)
+    _add_output_argument(info)
+    stop = session_commands.add_parser("stop", help="stop an owned managed runtime session")
+    stop.add_argument("session", type=Path)
+    _add_output_argument(stop)
+    resume = session_commands.add_parser(
+        "resume",
+        help="resume a guarded runtime scenario from a safe boundary",
+    )
+    resume.add_argument("session", type=Path)
+    resume.add_argument("scenario", type=Path)
+    _add_output_argument(resume)
+
+    scenario = commands.add_parser(
+        "scenario",
+        help="run a guarded runtime scenario",
+    )
+    scenario_commands = scenario.add_subparsers(dest="runtime_scenario_command")
+    scenario_run = scenario_commands.add_parser(
+        "run",
+        help="run a guarded runtime scenario",
+    )
+    scenario_run.add_argument("session", type=Path)
+    scenario_run.add_argument("scenario", type=Path)
+    _add_output_argument(scenario_run)
+
+    matrix = commands.add_parser(
+        "matrix",
+        help="run a deterministic runtime acceptance matrix",
+    )
+    matrix_commands = matrix.add_subparsers(dest="runtime_matrix_command")
+    matrix_run = matrix_commands.add_parser(
+        "run",
+        help="run a deterministic runtime acceptance matrix",
+    )
+    matrix_run.add_argument("matrix", type=Path)
+    matrix_run.add_argument("--session-root", type=Path)
+    _add_output_argument(matrix_run)
+
+    checkpoint = commands.add_parser(
+        "checkpoint",
+        help="save or restore a managed runtime checkpoint",
+    )
+    checkpoint_commands = checkpoint.add_subparsers(dest="runtime_checkpoint_command")
+    checkpoint_save = checkpoint_commands.add_parser(
+        "save",
+        help="save a managed runtime checkpoint",
+    )
+    checkpoint_save.add_argument("session", type=Path)
+    checkpoint_save.add_argument("name")
+    _add_output_argument(checkpoint_save)
+    checkpoint_restore = checkpoint_commands.add_parser(
+        "restore",
+        help="restore a managed runtime checkpoint",
+    )
+    checkpoint_restore.add_argument("session", type=Path)
+    checkpoint_restore.add_argument("name")
+    _add_output_argument(checkpoint_restore)
+
     diff = commands.add_parser("diff", help="compare two completed runtime traces")
     diff.add_argument("baseline", type=Path)
     diff.add_argument("target", type=Path)
@@ -235,6 +369,66 @@ def _write_json(payload: object, output: Path | None) -> None:
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(rendered, encoding="utf-8")
     temporary.replace(output)
+
+
+def _managed_backend(kind: EmulatorKind) -> MelonDSBackend | DeSmuMEBackend:
+    if kind is EmulatorKind.MELONDS:
+        return MelonDSBackend()
+    return DeSmuMEBackend()
+
+
+def _session_json(record: RuntimeSessionRecord) -> dict[str, object]:
+    return {
+        "schema_version": record.schema_version,
+        "session_id": record.session_id,
+        "lifecycle": record.lifecycle.value,
+        "emulator": record.emulator.value,
+        "emulator_executable": str(record.emulator_executable),
+        "emulator_sha256": record.emulator_sha256,
+        "emulator_version": record.emulator_version,
+        "rom_path": str(record.rom_path),
+        "rom_sha256": record.rom_sha256,
+        "cpu": record.cpu.value,
+        "pid": record.pid,
+        "process_group": record.process_group,
+        "process_start_identity": record.process_start_identity,
+        "debugger_host": record.debugger_host,
+        "debugger_port": record.debugger_port,
+        "display": record.display,
+        "window_id": record.window_id,
+        "session_root": str(record.session_root),
+        "last_completed_step": record.last_completed_step,
+        "last_completed_case": record.last_completed_case,
+    }
+
+
+def _checkpoint_metadata_json(metadata: CheckpointMetadata, path: Path) -> dict[str, object]:
+    return {
+        "schema_version": metadata.schema_version,
+        "name": metadata.name,
+        "emulator": metadata.emulator.value,
+        "rom_sha256": metadata.rom_sha256,
+        "state_filename": metadata.state_filename,
+        "state_sha256": metadata.state_sha256,
+        "battery_save_filename": metadata.battery_save_filename,
+        "battery_save_sha256": metadata.battery_save_sha256,
+        "path": str(path),
+    }
+
+
+def _doctor_json(report: object) -> dict[str, object]:
+    from nds_disassembly_toolkit.analysis.orchestration.model import DoctorReport
+
+    if not isinstance(report, DoctorReport):
+        raise TypeError("doctor report has unexpected type")
+    return {
+        "emulator": report.emulator.value,
+        "passed": report.passed,
+        "checks": [
+            {"name": check.name, "passed": check.passed, "detail": check.detail}
+            for check in report.checks
+        ],
+    }
 
 
 def _capabilities_json(capabilities: RSPCapabilities) -> dict[str, object]:
@@ -766,10 +960,487 @@ def _run_until(
     }
 
 
+
+
+def _matrix_result_json(result: AcceptanceMatrixResult) -> dict[str, object]:
+    return {
+        "cases": [
+            {
+                "completed_steps": list(case.completed_steps),
+                "error": case.error,
+                "id": case.id,
+                "parameters": dict(case.parameters),
+                "status": case.status,
+            }
+            for case in result.cases
+        ],
+        "status": result.status,
+    }
+
+
+def _scenario_result_json(result: ScenarioResult) -> dict[str, object]:
+    return {
+        "completed_steps": list(result.completed_steps),
+        "scenario_name": result.scenario_name,
+        "status": result.status,
+    }
+
+
+def _scenario_capabilities(definition: ScenarioDefinition) -> frozenset[str]:
+    required = set(definition.required_capabilities)
+    if definition.checkpoint is not None:
+        required.add("save_state")
+    for step in definition.steps:
+        kind = step.type
+        if kind in {"button", "button_sequence"}:
+            required.add("window_input")
+        elif kind in {"touch_tap", "touch_drag", "touch_flick"}:
+            required.add("touchscreen_input")
+        elif kind in {"checkpoint_save", "checkpoint_restore"}:
+            required.add("save_state")
+    return frozenset(required)
+
+
+class _ManagedScenarioContext:
+    def __init__(
+        self,
+        record: RuntimeSessionRecord,
+        backend: Any,
+        debugger: Any,
+        *,
+        host_driver: Any | None = None,
+    ) -> None:
+        self.record = record
+        self.backend = backend
+        self.debugger = debugger
+        self.host_driver = host_driver
+        self.session_root = record.session_root
+
+    def snapshot(self) -> RuntimeSnapshot:
+        return cast(RuntimeSnapshot, self.debugger.snapshot())
+
+    def read_memory(self, address: int, length: int) -> bytes:
+        return cast(bytes, self.debugger.read_memory(address, length))
+
+    def write_memory(self, address: int, data: bytes) -> None:
+        self.debugger.write_memory(address, data)
+
+    def process_alive(self) -> bool:
+        return process_is_owned(self.record)
+
+    def debugger_reachable(self) -> bool:
+        return True
+
+    def window_ready(self) -> bool:
+        return self.record.window_id is not None and self.record.display is not None
+
+    def _require_host_driver(self) -> Any:
+        if self.host_driver is None:
+            raise RuntimeScenarioError(
+                "managed host input is unavailable for this backend/session"
+            )
+        return self.host_driver
+
+    def _mapped_touch_point(self, point: DSPoint) -> tuple[int, int]:
+        driver = self._require_host_driver()
+        geometry = cast(WindowGeometry, driver.window_geometry(self.record))
+        profile = cast(ScreenLayoutProfile, self.backend.layout_profile(geometry))
+        return map_touch_point(point, profile.lower_screen)
+
+    def press_button(self, button: DSButton) -> None:
+        driver = self._require_host_driver()
+        host_key = cast(str, self.backend.host_key_for(button))
+
+        def action() -> None:
+            driver.send_key(self.record, host_key)
+            time.sleep(0.05)
+
+        self.debugger.run_host_action(action)
+
+    def touch_tap(self, point: DSPoint) -> None:
+        driver = self._require_host_driver()
+        x, y = self._mapped_touch_point(point)
+
+        def action() -> None:
+            driver.move_pointer(self.record, x, y)
+            driver.pointer_down(self.record)
+            try:
+                time.sleep(0.05)
+            finally:
+                driver.pointer_up(self.record)
+
+        self.debugger.run_host_action(action)
+
+    def _touch_motion(
+        self,
+        start: DSPoint,
+        end: DSPoint,
+        duration: float,
+    ) -> None:
+        if duration <= 0:
+            raise RuntimeScenarioError("touch gesture duration must be positive")
+        driver = self._require_host_driver()
+        start_x, start_y = self._mapped_touch_point(start)
+        end_x, end_y = self._mapped_touch_point(end)
+
+        def action() -> None:
+            driver.move_pointer(self.record, start_x, start_y)
+            driver.pointer_down(self.record)
+            try:
+                time.sleep(duration)
+                driver.move_pointer(self.record, end_x, end_y)
+            finally:
+                driver.pointer_up(self.record)
+
+        self.debugger.run_host_action(action)
+
+    def touch_drag(self, start: DSPoint, end: DSPoint, duration: float) -> None:
+        self._touch_motion(start, end, duration)
+
+    def touch_flick(self, start: DSPoint, end: DSPoint, duration: float) -> None:
+        self._touch_motion(start, end, duration)
+
+    def _checkpoint_context(self) -> CheckpointContext:
+        return CheckpointContext(
+            checkpoint_root=self.session_root / "checkpoints",
+            emulator=self.record.emulator,
+            rom_sha256=self.record.rom_sha256,
+            backend=self.backend,
+        )
+
+    def save_checkpoint(self, name: str) -> None:
+        create_checkpoint(self._checkpoint_context(), name)
+
+    def restore_checkpoint(self, name: str) -> None:
+        context = self._checkpoint_context()
+        restore_checkpoint(context, context.checkpoint_root / name)
+
+    def capture_snapshot(self, label: str | None) -> None:
+        resolved = "snapshot" if label is None else label
+        if Path(resolved).name != resolved or resolved in {"", ".", ".."}:
+            raise RuntimeScenarioError("snapshot label must be one safe path component")
+        snapshot = self.snapshot()
+        _write_json(
+            _snapshot_json(snapshot, None),
+            self.session_root / "traces" / f"{resolved}.json",
+        )
+
+    def capture_trace(self, step: CaptureTraceStep) -> None:
+        if isinstance(step.output, ParameterReference):
+            raise RuntimeScenarioError(
+                "trace output parameter reference was not resolved"
+            )
+        output = Path(step.output)
+        if output.is_absolute() or output.name != step.output or step.output in {"", ".", ".."}:
+            raise RuntimeScenarioError("trace output must be one safe path component")
+        regions = tuple(
+            TraceMemoryRegion(index, address, length)
+            for index, (address, length) in enumerate(step.memory)
+        )
+        if step.break_address is not None:
+            config = TraceCaptureConfig(
+                cpu=self.record.cpu,
+                mode=TraceCaptureMode.BREAKPOINT,
+                limit=1,
+                timeout=5.0,
+                condition_kind=BreakpointKind.CODE,
+                condition_address=step.break_address,
+                condition_length=4,
+                memory_regions=regions,
+                label=step.id,
+            )
+        else:
+            limit = step.steps if step.steps is not None else step.events
+            if limit is None:
+                raise RuntimeScenarioError("trace step is missing a bounded limit")
+            config = TraceCaptureConfig(
+                cpu=self.record.cpu,
+                mode=TraceCaptureMode.STEP,
+                limit=limit,
+                timeout=5.0,
+                memory_regions=regions,
+                label=step.id,
+            )
+        capture_trace(self.debugger, config, self.session_root / "traces" / step.output)
+
+
+def _owned_x11_driver(record: RuntimeSessionRecord) -> X11HostDriver:
+    helpers = find_x11_helpers()
+    if helpers.xdotool is None:
+        raise RuntimeScenarioError(
+            "managed X11 window operation requires xdotool"
+        )
+    driver = X11HostDriver(
+        xdotool=helpers.xdotool,
+        display=record.display,
+    )
+    if not driver.window_is_owned(record):
+        raise RuntimeScenarioError(
+            "managed emulator window ownership could not be proven"
+        )
+    return driver
+
+
+def _bind_managed_backend_runtime(
+    backend: object,
+    record: RuntimeSessionRecord,
+    driver: X11HostDriver,
+    debugger: object | None = None,
+) -> None:
+    bind = getattr(backend, "bind_managed_session", None)
+    if callable(bind):
+        bind(record, driver, debugger)
+
+
+@contextmanager
+def _scenario_context(
+    record: RuntimeSessionRecord,
+    definition: ScenarioDefinition,
+) -> Iterator[_ManagedScenarioContext]:
+    if record.emulator is not definition.backend:
+        raise RuntimeScenarioError("scenario backend does not match managed session")
+    if record.cpu is not definition.cpu:
+        raise RuntimeScenarioError("scenario CPU does not match managed session")
+    if not process_is_owned(record):
+        raise RuntimeScenarioError("managed emulator process ownership could not be proven")
+    backend = _managed_backend(record.emulator)
+    capabilities = backend.capabilities
+    required_capabilities = _scenario_capabilities(definition)
+    host_driver: X11HostDriver | None = None
+    for capability in sorted(required_capabilities):
+        if not hasattr(capabilities, capability):
+            raise RuntimeScenarioError(f"unknown required capability: {capability}")
+        if not bool(getattr(capabilities, capability)):
+            raise RuntimeScenarioError(
+                f"managed backend does not provide required capability: {capability}"
+            )
+    needs_x11 = bool(
+        {"window_input", "touchscreen_input"} & required_capabilities
+        or (
+            record.emulator is EmulatorKind.DESMUME
+            and "save_state" in required_capabilities
+        )
+    )
+    if needs_x11:
+        host_driver = _owned_x11_driver(record)
+    debugger = backend.connect_debugger(
+        cpu=record.cpu,
+        host=record.debugger_host,
+        port=record.debugger_port,
+        timeout=5.0,
+    )
+    if host_driver is not None:
+        _bind_managed_backend_runtime(backend, record, host_driver, debugger)
+    try:
+        yield _ManagedScenarioContext(
+            record,
+            backend,
+            debugger,
+            host_driver=host_driver,
+        )
+    finally:
+        close = getattr(debugger, "close", None)
+        if callable(close):
+            close()
+
+
 def run_runtime_command(arguments: argparse.Namespace) -> int:
     command = arguments.runtime_command
     if command is None:
         raise ValueError("a runtime subcommand is required")
+
+    if command == "doctor":
+        kind = EmulatorKind(arguments.emulator)
+        backend = _managed_backend(kind)
+        report = run_doctor(
+            backend,
+            rom=arguments.rom,
+            require=frozenset(arguments.require),
+        )
+        _write_json(_doctor_json(report), arguments.output)
+        return 0
+
+    if command == "launch":
+        kind = EmulatorKind(arguments.emulator)
+        backend = _managed_backend(kind)
+        executable = arguments.executable
+        if executable is None:
+            executable = discover_emulator_executable(kind)
+        if executable is None:
+            raise ValueError(f"{kind.value} executable was not found")
+        session_record = create_session(
+            arguments.session_root,
+            emulator=kind,
+            executable=executable,
+            rom=arguments.rom,
+            cpu=arguments.cpu,
+        )
+        display_lease = None
+        running: RuntimeSessionRecord | None = None
+        display = arguments.display
+        try:
+            if backend.capabilities.window_input and display is None:
+                display_lease = start_x11_display()
+                display = display_lease.display
+                store_x11_display_lease(session_record.session_root, display_lease)
+
+            if display is not None:
+                session_record = replace(session_record, display=display)
+                store_session(session_record)
+
+            launch = backend.build_launch_spec(
+                executable=session_record.emulator_executable,
+                rom=session_record.rom_path,
+                cpu=session_record.cpu,
+                debugger_host=session_record.debugger_host,
+                debugger_port=session_record.debugger_port,
+                session_root=session_record.session_root,
+                display=display,
+            )
+            running = spawn_owned_process(session_record, launch)
+
+            if backend.capabilities.window_input:
+                helpers = find_x11_helpers()
+                if helpers.xdotool is None:
+                    raise RuntimeScenarioError(
+                        "managed window input requires xdotool"
+                    )
+                driver = X11HostDriver(
+                    xdotool=helpers.xdotool,
+                    display=display,
+                )
+                window_id = driver.wait_for_window(running, timeout=5.0)
+                running = replace(running, window_id=window_id)
+                store_session(running)
+
+            _write_json(_session_json(running), arguments.output)
+            return 0
+        except BaseException:
+            if running is not None:
+                with suppress(Exception):
+                    stop_owned_process(running)
+            if display_lease is not None:
+                with suppress(Exception):
+                    stop_x11_display(display_lease)
+                remove_x11_display_lease(session_record.session_root)
+            raise
+
+    if command == "session":
+        if arguments.runtime_session_command is None:
+            raise ValueError("runtime session requires info or stop")
+        record = load_session(arguments.session)
+        if arguments.runtime_session_command == "info":
+            _write_json(_session_json(record), arguments.output)
+            return 0
+        if arguments.runtime_session_command == "stop":
+            stopped = stop_owned_process(record)
+            display_lease = load_x11_display_lease(record.session_root)
+            if display_lease is not None:
+                stop_x11_display(display_lease)
+                remove_x11_display_lease(record.session_root)
+            _write_json(_session_json(stopped), arguments.output)
+            return 0
+        if arguments.runtime_session_command == "resume":
+            definition = load_scenario(arguments.scenario)
+            try:
+                with _scenario_context(record, definition) as scenario_context:
+                    result = resume_scenario(
+                        scenario_context,
+                        definition,
+                        journal_path=record.session_root / "journal.json",
+                    )
+            except RuntimeScenarioError as exc:
+                raise RuntimeRecoveryError(
+                    "managed runtime session could not be safely adopted"
+                ) from exc
+            _write_json(_scenario_result_json(result), arguments.output)
+            return 0
+        raise ValueError("runtime session requires info, stop, or resume")
+
+    if command == "checkpoint":
+        if arguments.runtime_checkpoint_command is None:
+            raise ValueError("runtime checkpoint requires save or restore")
+        record = load_session(arguments.session)
+        if not process_is_owned(record):
+            raise RuntimeScenarioError(
+                "managed emulator process ownership could not be proven"
+            )
+        backend = _managed_backend(record.emulator)
+        debugger: object | None = None
+        if record.emulator is EmulatorKind.DESMUME:
+            driver = _owned_x11_driver(record)
+            debugger = backend.connect_debugger(
+                cpu=record.cpu,
+                host=record.debugger_host,
+                port=record.debugger_port,
+                timeout=5.0,
+            )
+            _bind_managed_backend_runtime(backend, record, driver, debugger)
+        try:
+            context = CheckpointContext(
+                checkpoint_root=record.session_root / "checkpoints",
+                emulator=record.emulator,
+                rom_sha256=record.rom_sha256,
+                backend=backend,
+            )
+            checkpoint_path = context.checkpoint_root / arguments.name
+            if arguments.runtime_checkpoint_command == "save":
+                checkpoint_path = create_checkpoint(context, arguments.name)
+                metadata = validate_checkpoint(checkpoint_path, context)
+                _write_json(
+                    _checkpoint_metadata_json(metadata, checkpoint_path),
+                    arguments.output,
+                )
+                return 0
+            if arguments.runtime_checkpoint_command == "restore":
+                restore_checkpoint(context, checkpoint_path)
+                metadata = validate_checkpoint(checkpoint_path, context)
+                _write_json(
+                    _checkpoint_metadata_json(metadata, checkpoint_path),
+                    arguments.output,
+                )
+                return 0
+            raise ValueError("runtime checkpoint requires save or restore")
+        finally:
+            if debugger is not None:
+                close = getattr(debugger, "close", None)
+                if callable(close):
+                    close()
+
+
+    if command == "matrix":
+        if arguments.runtime_matrix_command != "run":
+            raise ValueError("runtime matrix requires run")
+        matrix_path = arguments.matrix.expanduser().resolve()
+        matrix = load_matrix(matrix_path)
+        scenario = load_scenario(matrix_path.parent / matrix.scenario)
+        session_root = (
+            matrix_path.parent
+            if arguments.session_root is None
+            else arguments.session_root
+        )
+        record = load_session(session_root)
+        with _scenario_context(record, scenario) as scenario_context:
+            def case_context(_case: AcceptanceCase) -> _ManagedScenarioContext:
+                return scenario_context
+
+            matrix_result = run_acceptance_matrix(case_context, matrix, scenario)
+        _write_json(_matrix_result_json(matrix_result), arguments.output)
+        return 0
+
+    if command == "scenario":
+        if arguments.runtime_scenario_command != "run":
+            raise ValueError("runtime scenario requires run")
+        record = load_session(arguments.session)
+        definition = load_scenario(arguments.scenario)
+        with _scenario_context(record, definition) as scenario_context:
+            result = run_scenario(
+                scenario_context,
+                definition,
+                journal_path=record.session_root / "journal.json",
+            )
+        _write_json(_scenario_result_json(result), arguments.output)
+        return 0
 
     if command == "trace":
         trace_command = arguments.runtime_trace_command

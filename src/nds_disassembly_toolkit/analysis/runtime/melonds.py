@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import suppress
-from typing import Protocol, Self
+from typing import Protocol, Self, TypeVar
 
 from nds_disassembly_toolkit.analysis.runtime.model import (
     BreakpointKind,
@@ -55,6 +56,8 @@ _BREAKPOINT_KIND_TO_RSP = {
     BreakpointKind.ACCESS: 4,
 }
 _TRAP_SIGNAL = 5
+_T = TypeVar("_T")
+_HostActionResult = TypeVar("_HostActionResult")
 _EXPECTED_TRAP_KINDS = frozenset(
     {
         StopReasonKind.BREAKPOINT,
@@ -73,9 +76,15 @@ class _RSPClientLike(Protocol):
 
     def read_memory(self, address: int, length: int) -> bytes: ...
 
+    def write_memory(self, address: int, data: bytes) -> None: ...
+
     def insert_breakpoint(self, kind: int, address: int, length: int) -> None: ...
 
     def remove_breakpoint(self, kind: int, address: int, length: int) -> None: ...
+
+    def begin_continue(self) -> None: ...
+
+    def wait_for_stop(self) -> RSPStopReply: ...
 
     def continue_execution(self) -> RSPStopReply: ...
 
@@ -188,6 +197,9 @@ class MelonDSSession:
     def read_memory(self, address: int, length: int) -> bytes:
         return self._client.read_memory(address, length)
 
+    def write_memory(self, address: int, data: bytes) -> None:
+        self._client.write_memory(address, data)
+
     def add_breakpoint(
         self,
         kind: BreakpointKind,
@@ -205,6 +217,30 @@ class MelonDSSession:
         length: int = 4,
     ) -> None:
         self._client.remove_breakpoint(_BREAKPOINT_KIND_TO_RSP[kind], address, length)
+
+    def run_host_action(
+        self,
+        action: Callable[[], _HostActionResult],
+    ) -> _HostActionResult:
+        self._client.begin_continue()
+        try:
+            result = action()
+        except BaseException:
+            with suppress(Exception):
+                self._client.interrupt()
+                self._client.wait_for_stop()
+            raise
+        self._client.interrupt()
+        self._client.wait_for_stop()
+        return result
+
+    def begin_continue(self) -> None:
+        self._client.begin_continue()
+
+    def wait_for_stop(self) -> RuntimeSnapshot:
+        reply = self._client.wait_for_stop()
+        stop_kind = StopReasonKind.SIGNAL if reply.signal is not None else StopReasonKind.UNKNOWN
+        return self.snapshot(self._stop_from_reply(reply, stop_kind))
 
     def continue_execution(self) -> RuntimeSnapshot:
         reply = self._client.continue_execution()

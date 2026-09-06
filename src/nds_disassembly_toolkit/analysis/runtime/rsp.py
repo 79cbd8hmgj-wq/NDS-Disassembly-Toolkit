@@ -282,6 +282,28 @@ class RSPClient:
             consumed += chunk_length
         return b"".join(chunks)
 
+    def write_memory(self, address: int, data: bytes) -> None:
+        if address < 0:
+            raise ValueError("memory address must be non-negative")
+        if not data:
+            return
+        consumed = 0
+        while consumed < len(data):
+            chunk = data[consumed : consumed + _MEMORY_CHUNK_SIZE]
+            chunk_address = address + consumed
+            response = self.command(
+                f"M{chunk_address:x},{len(chunk):x}:{chunk.hex()}"
+            )
+            if response == "OK":
+                consumed += len(chunk)
+                continue
+            if response == "":
+                verified = self.read_memory(chunk_address, len(chunk))
+                if verified == chunk:
+                    consumed += len(chunk)
+                    continue
+            raise RuntimeProtocolError("runtime debugger rejected memory write")
+
     @staticmethod
     def _validate_breakpoint(kind: int, address: int, length: int) -> None:
         if kind not in range(5):
@@ -338,8 +360,19 @@ class RSPClient:
 
         raise RuntimeProtocolError(f"runtime debugger returned invalid stop reply: {response}")
 
+    def begin_continue(self) -> None:
+        self._send(self._frame("c"))
+        if not self._no_ack:
+            self._read_ack()
+
+    def wait_for_stop(self) -> RSPStopReply:
+        response = self._receive_packet()
+        self._raise_peer_error(response)
+        return self._parse_stop(response)
+
     def continue_execution(self) -> RSPStopReply:
-        return self._parse_stop(self.command("c"))
+        self.begin_continue()
+        return self.wait_for_stop()
 
     def step(self) -> RSPStopReply:
         return self._parse_stop(self.command("s"))

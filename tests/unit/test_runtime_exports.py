@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import nds_disassembly_toolkit.analysis.orchestration as orchestration
 import nds_disassembly_toolkit.analysis.runtime as runtime
 from nds_disassembly_toolkit.analysis.runtime import (
     BreakpointKind,
@@ -14,8 +15,17 @@ from nds_disassembly_toolkit.analysis.runtime import (
 from nds_disassembly_toolkit.errors import (
     NdsToolkitError,
     RuntimeAnalysisError,
+    RuntimeCheckpointError,
     RuntimeConnectionError,
+    RuntimeDisplayError,
+    RuntimeEnvironmentError,
+    RuntimeInputError,
+    RuntimeLaunchError,
+    RuntimeOrchestrationError,
+    RuntimeOwnershipError,
     RuntimeProtocolError,
+    RuntimeRecoveryError,
+    RuntimeScenarioError,
     RuntimeTargetStateError,
     RuntimeTimeoutError,
 )
@@ -61,3 +71,117 @@ def test_runtime_errors_share_toolkit_error_boundary() -> None:
     assert issubclass(RuntimeProtocolError, RuntimeAnalysisError)
     assert issubclass(RuntimeTimeoutError, RuntimeAnalysisError)
     assert issubclass(RuntimeTargetStateError, RuntimeAnalysisError)
+
+
+
+def test_phase_7h3_orchestration_public_exports_are_available() -> None:
+    required = (
+        "SESSION_SCHEMA_VERSION",
+        "CHECKPOINT_SCHEMA_VERSION",
+        "SCENARIO_SCHEMA_VERSION",
+        "JOURNAL_SCHEMA_VERSION",
+        "MATRIX_SCHEMA_VERSION",
+        "EmulatorKind",
+        "RuntimeSessionRecord",
+        "DSButton",
+        "DSPoint",
+        "TouchTap",
+        "TouchDrag",
+        "TouchFlick",
+        "CheckpointContext",
+        "CheckpointMetadata",
+        "create_checkpoint",
+        "validate_checkpoint",
+        "restore_checkpoint",
+        "PredicateObservation",
+        "PcEquals",
+        "PcInRange",
+        "RegisterEquals",
+        "MemoryEquals",
+        "MemoryMaskedEquals",
+        "RuntimeMemoryWrite",
+        "apply_guarded_write",
+        "ParameterReference",
+        "ScenarioDefinition",
+        "ScenarioJournal",
+        "JournalStepState",
+        "load_scenario",
+        "run_scenario",
+        "resume_scenario",
+        "AcceptanceCase",
+        "AcceptanceMatrix",
+        "AcceptanceCaseResult",
+        "AcceptanceMatrixResult",
+        "load_matrix",
+        "run_acceptance_matrix",
+        "RuntimeOrchestrationError",
+        "RuntimeEnvironmentError",
+        "RuntimeLaunchError",
+        "RuntimeOwnershipError",
+        "RuntimeDisplayError",
+        "RuntimeInputError",
+        "RuntimeCheckpointError",
+        "RuntimeScenarioError",
+        "RuntimeRecoveryError",
+        "EmulatorBackend",
+        "MelonDSBackend",
+        "DeSmuMEBackend",
+        "discover_emulator_executable",
+        "run_doctor",
+        "create_session",
+        "load_session",
+        "process_is_owned",
+        "spawn_owned_process",
+        "stop_owned_process",
+    )
+    for name in required:
+        assert hasattr(orchestration, name), name
+
+    assert not hasattr(orchestration, "X11HostDriver")
+
+
+
+def test_phase_7h3_orchestration_exports_are_available() -> None:
+    for name in (
+        "SESSION_SCHEMA_VERSION",
+        "CHECKPOINT_SCHEMA_VERSION",
+        "SCENARIO_SCHEMA_VERSION",
+        "JOURNAL_SCHEMA_VERSION",
+        "MATRIX_SCHEMA_VERSION",
+        "DSButton",
+        "DSPoint",
+        "CheckpointContext",
+        "CheckpointMetadata",
+        "create_checkpoint",
+        "validate_checkpoint",
+        "restore_checkpoint",
+        "RuntimePredicate",
+        "RuntimeMemoryWrite",
+        "wait_for_predicate",
+        "ScenarioDefinition",
+        "ScenarioResult",
+        "load_scenario",
+        "run_scenario",
+        "resume_scenario",
+        "AcceptanceMatrix",
+        "AcceptanceCase",
+        "AcceptanceCaseResult",
+        "AcceptanceMatrixResult",
+        "load_matrix",
+        "run_acceptance_matrix",
+    ):
+        assert hasattr(orchestration, name), name
+
+
+def test_phase_7h3_errors_share_runtime_orchestration_boundary() -> None:
+    for error_type in (
+        RuntimeEnvironmentError,
+        RuntimeLaunchError,
+        RuntimeOwnershipError,
+        RuntimeDisplayError,
+        RuntimeInputError,
+        RuntimeCheckpointError,
+        RuntimeScenarioError,
+        RuntimeRecoveryError,
+    ):
+        assert issubclass(error_type, RuntimeOrchestrationError)
