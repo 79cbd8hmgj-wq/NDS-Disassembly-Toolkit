@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
     BinaryOperator,
@@ -8,9 +9,19 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     SourceRef,
 )
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
+    SSAAssignmentStatement,
     SSABinaryExpression,
+    SSABranchStatement,
+    SSACallExpression,
+    SSACallStatement,
+    SSACompareExpression,
     SSAExpression,
+    SSAFunction,
+    SSAMemoryReadExpression,
+    SSAMemoryWriteStatement,
     SSAReferenceExpression,
+    SSAReturnStatement,
+    SSAUnaryExpression,
     SSAValue,
 )
 
@@ -160,3 +171,147 @@ def normalize_access_path(expression: SSAExpression) -> AccessPath | None:
         scale=scale,
         source=expression.source,
     )
+
+
+
+class FieldAccessKind(StrEnum):
+    READ = "read"
+    WRITE = "write"
+
+
+@dataclass(frozen=True, slots=True)
+class FieldAccessEvidence:
+    kind: FieldAccessKind
+    root: SSAValue
+    byte_offset: int
+    width_bytes: int
+    index: SSAValue | None = None
+    scale: int | None = None
+    source: tuple[SourceRef, ...] = ()
+
+    @property
+    def is_direct_field(self) -> bool:
+        return self.index is None
+
+
+def _value_sort_key(value: SSAValue | None) -> tuple[object, ...]:
+    if value is None:
+        return ("", "", 0, "", -1)
+    storage = value.storage
+    return (
+        storage.kind.value,
+        storage.register.value if storage.register is not None else "",
+        storage.stack_offset if storage.stack_offset is not None else 0,
+        storage.temporary_name or "",
+        value.version,
+    )
+
+
+def _evidence_sort_key(
+    evidence: FieldAccessEvidence,
+) -> tuple[object, ...]:
+    source_key = tuple(
+        (item.address, item.instruction_set.value)
+        for item in evidence.source
+    )
+    return (
+        source_key,
+        evidence.kind.value,
+        _value_sort_key(evidence.root),
+        evidence.byte_offset,
+        evidence.width_bytes,
+        _value_sort_key(evidence.index),
+        evidence.scale if evidence.scale is not None else 0,
+    )
+
+
+def _record_access(
+    output: list[FieldAccessEvidence],
+    *,
+    kind: FieldAccessKind,
+    address: SSAExpression,
+    width: int,
+    source: tuple[SourceRef, ...],
+) -> None:
+    path = normalize_access_path(address)
+    if path is None or path.byte_offset < 0:
+        return
+    output.append(
+        FieldAccessEvidence(
+            kind=kind,
+            root=path.root,
+            byte_offset=path.byte_offset,
+            width_bytes=width,
+            index=path.index,
+            scale=path.scale,
+            source=source,
+        )
+    )
+
+
+def _collect_expression(
+    expression: SSAExpression,
+    output: list[FieldAccessEvidence],
+) -> None:
+    if isinstance(expression, SSAMemoryReadExpression):
+        _record_access(
+            output,
+            kind=FieldAccessKind.READ,
+            address=expression.address,
+            width=expression.width,
+            source=expression.source,
+        )
+        _collect_expression(expression.address, output)
+        return
+
+    if isinstance(expression, SSAUnaryExpression):
+        _collect_expression(expression.operand, output)
+        return
+
+    if isinstance(expression, SSABinaryExpression | SSACompareExpression):
+        _collect_expression(expression.left, output)
+        _collect_expression(expression.right, output)
+        return
+
+    if isinstance(expression, SSACallExpression):
+        for argument in expression.arguments:
+            _collect_expression(argument, output)
+
+
+def collect_field_accesses(
+    function: SSAFunction,
+) -> tuple[FieldAccessEvidence, ...]:
+    output: list[FieldAccessEvidence] = []
+
+    for block in sorted(function.blocks, key=lambda candidate: candidate.address):
+        for statement in block.statements:
+            if isinstance(statement, SSAAssignmentStatement):
+                _collect_expression(statement.value, output)
+                continue
+
+            if isinstance(statement, SSAMemoryWriteStatement):
+                _record_access(
+                    output,
+                    kind=FieldAccessKind.WRITE,
+                    address=statement.address,
+                    width=statement.width,
+                    source=statement.source,
+                )
+                _collect_expression(statement.address, output)
+                _collect_expression(statement.value, output)
+                continue
+
+            if isinstance(statement, SSACallStatement):
+                _collect_expression(statement.call, output)
+                continue
+
+            if isinstance(statement, SSAReturnStatement):
+                if statement.value is not None:
+                    _collect_expression(statement.value, output)
+                continue
+
+            if isinstance(statement, SSABranchStatement):
+                if statement.condition is not None:
+                    _collect_expression(statement.condition, output)
+
+    return tuple(sorted(output, key=_evidence_sort_key))
