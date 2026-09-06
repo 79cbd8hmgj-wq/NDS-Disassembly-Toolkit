@@ -964,6 +964,14 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
         def pointer_up(self, record: object, *, button: int = 1) -> None:
             self.events.append(("up", button))
 
+    class Debugger:
+        def __init__(self) -> None:
+            self.host_actions = 0
+
+        def run_host_action(self, action: object) -> object:
+            self.host_actions += 1
+            return action()
+
     record = SimpleNamespace(
         session_root=tmp_path,
         emulator=runtime_cli.EmulatorKind.DESMUME,
@@ -973,16 +981,18 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
         display=":104",
     )
     host = Host()
+    debugger = Debugger()
     context = runtime_cli._ManagedScenarioContext(
         record,
         Backend(),
-        object(),
+        debugger,
         host_driver=host,
     )
 
     context.press_button(DSButton.A)
     context.touch_tap(DSPoint(255, 191))
 
+    assert debugger.host_actions == 2
     assert host.events == [
         ("key", "x"),
         ("move", 255, 383),
