@@ -331,7 +331,52 @@ class LoopNode:
     post_test: bool = False
 
 
-StructuredNode: TypeAlias = StatementNode | LabelNode | GotoNode | IfNode | LoopNode
+@dataclass(frozen=True, slots=True)
+class SwitchCase:
+    values: tuple[int, ...]
+    body: tuple[StructuredNode, ...]
+
+    def __post_init__(self) -> None:
+        if not self.values:
+            raise ValueError("switch case requires at least one value")
+        normalized = tuple(sorted(set(self.values)))
+        for value in normalized:
+            _validate_u32(value, name="switch case value")
+        object.__setattr__(self, "values", normalized)
+
+
+@dataclass(frozen=True, slots=True)
+class SwitchNode:
+    expression: DecompilerExpression
+    cases: tuple[SwitchCase, ...]
+    default_body: tuple[StructuredNode, ...] = ()
+
+    def __post_init__(self) -> None:
+        ordered = tuple(
+            sorted(
+                self.cases,
+                key=lambda case: (case.values[0], case.values),
+            )
+        )
+        seen: set[int] = set()
+        for case in ordered:
+            for value in case.values:
+                if value in seen:
+                    raise ValueError(
+                        f"duplicate switch case value: {value}"
+                    )
+                seen.add(value)
+        object.__setattr__(self, "cases", ordered)
+
+
+StructuredNode: TypeAlias = (
+    StatementNode
+    | LabelNode
+    | GotoNode
+    | IfNode
+    | LoopNode
+    | SwitchNode
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,18 +2,29 @@ from __future__ import annotations
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
     BranchStatement,
+    CompareExpression,
+    ConstantExpression,
     DecompiledBlock,
     DecompiledFunction,
+    DecompilerExpression,
     GotoNode,
     IfNode,
     LabelNode,
     LoopNode,
+    RegisterExpression,
     ReturnStatement,
     StatementNode,
     StructuredFunction,
     StructuredNode,
+    SwitchCase,
+    SwitchNode,
+    VariableExpression,
 )
-from nds_disassembly_toolkit.analysis.model import CFGEdge, CFGEdgeKind
+from nds_disassembly_toolkit.analysis.model import (
+    CFGEdge,
+    CFGEdgeKind,
+    ConditionCode,
+)
 
 _LOCAL_EDGE_KINDS = frozenset({CFGEdgeKind.BRANCH, CFGEdgeKind.FALLTHROUGH})
 
@@ -301,6 +312,221 @@ def _try_posttest_loop(
     )
 
 
+def _switch_subject_key(
+    expression: DecompilerExpression,
+) -> tuple[str, object] | None:
+    if isinstance(expression, VariableExpression):
+        return ("variable", expression.variable)
+    if isinstance(expression, RegisterExpression):
+        return ("register", expression.register)
+    return None
+
+
+def _switch_comparison(
+    block: DecompiledBlock,
+) -> tuple[
+    DecompilerExpression,
+    tuple[str, object],
+    int,
+    ConditionCode,
+] | None:
+    branch = _branch_statement(block)
+    if branch is None or not isinstance(
+        branch.condition,
+        CompareExpression,
+    ):
+        return None
+    comparison = branch.condition
+    if comparison.condition not in {
+        ConditionCode.EQ,
+        ConditionCode.NE,
+    }:
+        return None
+
+    if isinstance(comparison.left, ConstantExpression):
+        subject = comparison.right
+        value = comparison.left.value
+    elif isinstance(comparison.right, ConstantExpression):
+        subject = comparison.left
+        value = comparison.right.value
+    else:
+        return None
+
+    subject_key = _switch_subject_key(subject)
+    if subject_key is None:
+        return None
+    return (
+        subject,
+        subject_key,
+        value,
+        comparison.condition,
+    )
+
+
+def _switch_arm(
+    block: DecompiledBlock,
+    blocks: dict[int, DecompiledBlock],
+) -> tuple[tuple[StructuredNode, ...], int | None] | None:
+    branch = _branch_statement(block)
+    if branch is not None and branch.condition is not None:
+        return None
+    edges = _local_edges(block, blocks)
+    if not edges:
+        if not _terminates_in_return(block):
+            return None
+        return (_statement_nodes(block), None)
+    if len(edges) != 1:
+        return None
+    return (_statement_nodes(block), edges[0].target_address)
+
+
+def _try_switch(
+    block: DecompiledBlock,
+    blocks: dict[int, DecompiledBlock],
+    predecessors: dict[int, frozenset[int]],
+) -> tuple[SwitchNode, int | None, frozenset[int]] | None:
+    first = _switch_comparison(block)
+    if first is None:
+        return None
+
+    subject, subject_key, _, _ = first
+    comparison_addresses: list[int] = []
+    case_sources: dict[int, set[int]] = {}
+    case_values: dict[int, list[int]] = {}
+    seen_values: set[int] = set()
+    current = block
+    default_target: int | None = None
+
+    while True:
+        parsed = _switch_comparison(current)
+        if parsed is None:
+            return None
+        current_subject, current_key, value, condition = parsed
+        del current_subject
+        if current_key != subject_key or value in seen_values:
+            return None
+        if comparison_addresses and _statement_nodes(current):
+            return None
+
+        edges = _local_edges(current, blocks)
+        if len(edges) != 2:
+            return None
+        taken = _edge_of_kind(edges, CFGEdgeKind.BRANCH)
+        fallthrough = _edge_of_kind(edges, CFGEdgeKind.FALLTHROUGH)
+        if taken is None or fallthrough is None:
+            return None
+
+        if condition is ConditionCode.EQ:
+            case_target = taken.target_address
+            continuation = fallthrough.target_address
+        else:
+            case_target = fallthrough.target_address
+            continuation = taken.target_address
+
+        comparison_addresses.append(current.address)
+        seen_values.add(value)
+        case_sources.setdefault(case_target, set()).add(current.address)
+        case_values.setdefault(case_target, []).append(value)
+
+        next_block = blocks.get(continuation)
+        next_comparison = (
+            None
+            if next_block is None
+            else _switch_comparison(next_block)
+        )
+        if (
+            next_block is not None
+            and next_comparison is not None
+            and next_comparison[1] == subject_key
+            and predecessors[next_block.address]
+            == frozenset({current.address})
+            and not _statement_nodes(next_block)
+        ):
+            current = next_block
+            continue
+
+        default_target = continuation
+        break
+
+    if len(seen_values) < 2 or default_target is None:
+        return None
+
+    comparison_region = frozenset(comparison_addresses)
+    if (
+        default_target in comparison_region
+        or default_target in case_sources
+        or default_target not in blocks
+    ):
+        return None
+    if any(
+        target in comparison_region or target not in blocks
+        for target in case_sources
+    ):
+        return None
+
+    for target, sources in case_sources.items():
+        if predecessors[target] != frozenset(sources):
+            return None
+    if predecessors[default_target] != frozenset(
+        {comparison_addresses[-1]}
+    ):
+        return None
+
+    cases: list[SwitchCase] = []
+    nonterminal_sources: set[int] = set()
+    joins: set[int] = set()
+    consumed = set(comparison_addresses)
+
+    for target in sorted(case_sources):
+        arm = _switch_arm(blocks[target], blocks)
+        if arm is None:
+            return None
+        arm_body, join = arm
+        consumed.add(target)
+        if join is not None:
+            joins.add(join)
+            nonterminal_sources.add(target)
+        cases.append(
+            SwitchCase(
+                tuple(sorted(case_values[target])),
+                arm_body,
+            )
+        )
+
+    default_arm = _switch_arm(
+        blocks[default_target],
+        blocks,
+    )
+    if default_arm is None:
+        return None
+    default_body, default_join = default_arm
+    consumed.add(default_target)
+    if default_join is not None:
+        joins.add(default_join)
+        nonterminal_sources.add(default_target)
+
+    if len(joins) > 1:
+        return None
+    next_address = next(iter(joins), None)
+    if next_address is not None:
+        if next_address in consumed or next_address not in blocks:
+            return None
+        if predecessors[next_address] != frozenset(
+            nonterminal_sources
+        ):
+            return None
+
+    return (
+        SwitchNode(
+            subject,
+            tuple(cases),
+            default_body,
+        ),
+        next_address,
+        frozenset(consumed),
+    )
+
+
 def _try_early_return(
     block: DecompiledBlock,
     blocks: dict[int, DecompiledBlock],
@@ -433,6 +659,23 @@ def structure_function(function: DecompiledFunction) -> StructuredFunction:
             continue
 
         if branch is not None and branch.condition is not None:
+            switch = _try_switch(
+                block,
+                blocks,
+                predecessors,
+            )
+            if switch is not None:
+                switch_node, switch_next, region = switch
+                if consumed.intersection(region):
+                    return _fallback_function(function)
+                body.extend(prefix)
+                body.append(switch_node)
+                consumed.update(region)
+                if switch_next is None:
+                    break
+                current = switch_next
+                continue
+
             structured = (
                 _try_early_return(block, blocks, incoming)
                 or _try_if_else(block, blocks, incoming)
