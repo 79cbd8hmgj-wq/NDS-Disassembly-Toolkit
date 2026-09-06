@@ -1152,9 +1152,9 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             return 0
         if arguments.runtime_session_command == "resume":
             definition = load_scenario(arguments.scenario)
-            with _scenario_context(record, definition) as context:
+            with _scenario_context(record, definition) as scenario_context:
                 result = resume_scenario(
-                    context,
+                    scenario_context,
                     definition,
                     journal_path=record.session_root / "journal.json",
                 )
@@ -1198,9 +1198,9 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             raise ValueError("runtime scenario requires run")
         record = load_session(arguments.session)
         definition = load_scenario(arguments.scenario)
-        with _scenario_context(record, definition) as context:
+        with _scenario_context(record, definition) as scenario_context:
             result = run_scenario(
-                context,
+                scenario_context,
                 definition,
                 journal_path=record.session_root / "journal.json",
             )
