@@ -489,3 +489,89 @@ return arg0 + 4;
 while conflicting PHIs, calls, memory effects, unsupported operations, and ambiguous overlay ownership remain conservative.
 
 Phase 7K is derived on demand. It does not change the `.ndsre` schema, persist SSA, introduce another decoder, or add Ghidra/LLVM/RetDec/Miasm/angr as runtime dependencies.
+
+
+## Phase 7L type, pointer, and structure recovery
+
+Phase 7L runs after the Phase 7K SSA/value-fact simplification stage and before final source-like
+lowering/rendering. It remains a derived, read-only analysis layer: no Phase 7L type or structure
+record is written into `.ndsre`.
+
+The local pipeline is:
+
+```text
+persisted analysis
+    ↓
+Phase 7I lift
+    ↓
+Phase 7K SSA
+    ↓
+Phase 7K value facts + simplification
+    ↓
+Phase 7L access-path normalization
+    ↓
+pointer/type/field evidence
+    ↓
+local structure candidates
+    ↓
+typed source-like lowering
+    ↓
+existing control-flow structurer
+    ↓
+typed pseudo-C
+```
+
+Memory addresses are normalized from toolkit-owned SSA expressions rather than assembly display
+strings. The first supported forms are a unique SSA root plus a constant byte offset and,
+optionally, one scaled index. Expressions with multiple equally plausible roots remain unresolved.
+
+A direct non-negative `root + offset` dereference supplies pointer-use and field evidence. Access
+width supplies the initial fixed-width integer field type. Signed/unsigned comparison use can
+refine signedness; conflicting signedness widens back to unknown. Exact value-fact addresses may
+supply pointer/component evidence, but a numeric constant is not promoted to a pointer merely
+because its value resembles Nintendo DS RAM.
+
+Local structure recovery groups compatible direct field accesses by canonical pointer root.
+Exact SSA copies and PHIs whose inputs resolve to one unique root share that root. Conflicting
+PHIs remain independent. Same-offset width conflicts or overlapping incompatible fields prevent
+typed rendering and preserve the existing raw-memory form.
+
+The default renderer only emits a synthetic structure when evidence passes a conservative
+threshold: at least two distinct compatible fields, repeated accesses to one field from distinct
+sites, or compatible interprocedural support. Synthetic names such as `struct_func_arg0` and
+`field_18` are deterministic evidence labels, not claims about original source identifiers.
+
+When a candidate qualifies, the decompiler can render:
+
+```c
+struct struct_update_arg0 {
+    uint32_t field_04;
+    uint16_t field_18;
+};
+
+uint32_t update(struct struct_update_arg0 *arg0) {
+    return arg0->field_04;
+}
+```
+
+instead of:
+
+```c
+uint32_t update(uint32_t arg0) {
+    return *(uint32_t *)(arg0 + 4);
+}
+```
+
+The old conservative memory rendering remains the fallback for insufficient, indexed, negative,
+overlapping, or otherwise ambiguous evidence.
+
+Phase 7L also provides a bounded interprocedural propagation service over direct call edges.
+Propagation requires a unique target identity `(component, runtime_address, instruction_set)`.
+A component-less call whose numeric target matches multiple overlays is not propagated. Compatible
+caller/callee root layouts converge through deterministic fixed-point iteration; incompatible
+field widths remain conflicts instead of being silently unified.
+
+The current public `decompile_function(...)` service automatically uses local Phase 7L recovery
+after Phase 7K simplification. Interprocedural propagation is available as an analysis service but
+is not persisted into the project database. Phase 7L adds no decoder, no schema migration, no
+runtime/emulator dependency, and no game-specific semantics.
