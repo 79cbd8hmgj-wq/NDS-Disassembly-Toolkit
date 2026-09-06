@@ -356,9 +356,9 @@ class X11HostDriver:
     def key_down(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
-        self._focus_owned_window(session)
+        window_id = self._focus_owned_window(session)
         subprocess.run(
-            [str(self.xdotool), "keydown", host_key],
+            [str(self.xdotool), "keydown", "--window", window_id, host_key],
             check=True,
             env=self._display_environment(session),
         )
@@ -366,9 +366,9 @@ class X11HostDriver:
     def key_up(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
-        self._focus_owned_window(session)
+        window_id = self._focus_owned_window(session)
         subprocess.run(
-            [str(self.xdotool), "keyup", host_key],
+            [str(self.xdotool), "keyup", "--window", window_id, host_key],
             check=True,
             env=self._display_environment(session),
         )
@@ -376,9 +376,9 @@ class X11HostDriver:
     def send_key(self, session: RuntimeSessionRecord, host_key: str) -> None:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
-        self._focus_owned_window(session)
+        window_id = self._focus_owned_window(session)
         subprocess.run(
-            [str(self.xdotool), "key", host_key],
+            [str(self.xdotool), "key", "--window", window_id, host_key],
             check=True,
             env=self._display_environment(session),
         )
