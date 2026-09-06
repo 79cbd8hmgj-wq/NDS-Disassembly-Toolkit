@@ -20,6 +20,33 @@ class HostAutomationDriver(Protocol):
 
     def bind_window(self, session: RuntimeSessionRecord, window_id: str) -> None: ...
 
+    def send_key(
+        self,
+        session: RuntimeSessionRecord,
+        host_key: str,
+    ) -> None: ...
+
+    def move_pointer(
+        self,
+        session: RuntimeSessionRecord,
+        x: int,
+        y: int,
+    ) -> None: ...
+
+    def pointer_down(
+        self,
+        session: RuntimeSessionRecord,
+        *,
+        button: int = 1,
+    ) -> None: ...
+
+    def pointer_up(
+        self,
+        session: RuntimeSessionRecord,
+        *,
+        button: int = 1,
+    ) -> None: ...
+
     def capture_window(
         self,
         session: RuntimeSessionRecord,
