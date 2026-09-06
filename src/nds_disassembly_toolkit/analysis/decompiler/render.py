@@ -261,7 +261,16 @@ def render_pseudo_c(
 ) -> str:
     structured = value.structured if isinstance(value, DecompilationResult) else value
     function = structured.function
-    return_type = "uint32_t" if _contains_value_return(structured.body) else "void"
+    fallback_return_type = (
+        "uint32_t"
+        if _contains_value_return(structured.body)
+        else "void"
+    )
+    return_type = (
+        fallback_return_type
+        if type_context is None or type_context.return_type is None
+        else type_context.return_type
+    )
 
     parameter_types = (
         {}
@@ -280,6 +289,21 @@ def render_pseudo_c(
 
     lines: list[str] = []
     if type_context is not None:
+        defined_structures = {
+            structure.name
+            for structure in type_context.structures
+        }
+        forward_structs = tuple(
+            name
+            for name in type_context.forward_structs
+            if name not in defined_structures
+        )
+        if forward_structs:
+            lines.extend(
+                f"struct {name};"
+                for name in forward_structs
+            )
+            lines.append("")
         for structure in type_context.structures:
             lines.append(f"struct {structure.name} {{")
             lines.extend(
