@@ -152,6 +152,23 @@ class MemoryReadExpression:
 
 
 @dataclass(frozen=True, slots=True)
+class FieldAddressExpression:
+    base: DecompilerExpression
+    structure_name: str
+    field_name: str
+    offset: int
+    width: int
+    source: tuple[SourceRef, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_name(self.structure_name, name="field structure name")
+        _validate_name(self.field_name, name="field name")
+        if self.offset < 0:
+            raise ValueError("field offset must be non-negative")
+        _validate_width(self.width)
+
+
+@dataclass(frozen=True, slots=True)
 class CallExpression:
     name: str
     target_address: int
@@ -185,6 +202,7 @@ DecompilerExpression: TypeAlias = (
     | BinaryExpression
     | CompareExpression
     | MemoryReadExpression
+    | FieldAddressExpression
     | CallExpression
     | UnknownExpression
 )
