@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import suppress
-from typing import Callable, Protocol, Self, TypeVar
+from typing import Protocol, Self, TypeVar
 
 from nds_disassembly_toolkit.analysis.runtime.model import (
     BreakpointKind,
