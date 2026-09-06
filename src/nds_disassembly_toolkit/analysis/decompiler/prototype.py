@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+
 from nds_disassembly_toolkit.analysis.decompiler.model import (
     AddressExpression,
     ConstantExpression,
