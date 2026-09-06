@@ -5,6 +5,8 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     BinaryExpression,
     BinaryOperator,
     BranchStatement,
+    CallExpression,
+    CallStatement,
     ConstantExpression,
     DecompiledBlock,
     DecompiledFunction,
@@ -226,3 +228,88 @@ def test_unreachable_definition_does_not_force_reachable_phi() -> None:
     result = build_ssa_function(_function(entry, exit_block, dead))
 
     assert result.block(exit_address).phis == ()
+
+
+
+def _call(address: int) -> CallStatement:
+    source = _source(address)
+    return CallStatement(
+        CallExpression(
+            "unknown_call",
+            0x02004000,
+            InstructionSet.ARM,
+            None,
+            (),
+            source,
+        ),
+        source,
+    )
+
+
+def test_call_clobbers_caller_saved_register_value_in_same_block() -> None:
+    block = _block(
+        BASE,
+        (
+            _assign(BASE, Register.R0, ConstantExpression(7, _source(BASE))),
+            _call(BASE + 4),
+            _return_register(BASE + 8, Register.R0),
+        ),
+    )
+
+    result = build_ssa_function(_function(block))
+    returned = result.blocks[0].statements[-1]
+
+    assert isinstance(returned, SSAReturnStatement)
+    assert isinstance(returned.value, SSAReferenceExpression)
+    assert returned.value.storage.register is Register.R0
+    assert returned.value.value is None
+
+
+def test_call_clobber_path_forces_phi_with_explicit_unknown_incoming() -> None:
+    call_block = BASE + 4
+    clean_block = BASE + 8
+    join = BASE + 12
+    entry = _block(
+        BASE,
+        (_assign(BASE, Register.R0, ConstantExpression(7, _source(BASE))),),
+        _edge(BASE, call_block, CFGEdgeKind.BRANCH),
+        _edge(BASE, clean_block),
+    )
+    called = _block(
+        call_block,
+        (_call(call_block),),
+        _edge(call_block, join),
+    )
+    clean = _block(clean_block, (), _edge(clean_block, join))
+    joined = _block(join, (_return_register(join, Register.R0),))
+
+    result = build_ssa_function(_function(entry, called, clean, joined))
+    phi = result.block(join).phis[0]
+
+    assert phi.output.storage.register is Register.R0
+    assert tuple(item.predecessor_address for item in phi.inputs) == (
+        call_block,
+        clean_block,
+    )
+    assert phi.inputs[0].value is None
+    assert phi.inputs[1].value is not None
+
+
+def test_call_does_not_clobber_callee_saved_register() -> None:
+    block = _block(
+        BASE,
+        (
+            _assign(BASE, Register.R4, ConstantExpression(7, _source(BASE))),
+            _call(BASE + 4),
+            _return_register(BASE + 8, Register.R4),
+        ),
+    )
+
+    result = build_ssa_function(_function(block))
+    assigned = result.blocks[0].statements[0]
+    returned = result.blocks[0].statements[-1]
+
+    assert isinstance(assigned, SSAAssignmentStatement)
+    assert isinstance(returned, SSAReturnStatement)
+    assert isinstance(returned.value, SSAReferenceExpression)
+    assert returned.value.value == assigned.target
