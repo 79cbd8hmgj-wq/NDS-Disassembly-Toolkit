@@ -975,7 +975,7 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
         host_driver=host,
     )
 
-    context.press_button(runtime_cli.DSButton.A)
+    context.press_button(DSButton.A)
     context.touch_tap(DSPoint(255, 191))
 
     assert host.events == [
@@ -1049,7 +1049,7 @@ def test_runtime_launch_desmume_owns_display_and_binds_window(
         calls.append(("spawn-display", launch_record.display))
         return replace(
             launch_record,
-            lifecycle=runtime_cli.RuntimeLifecycleState.LAUNCHING,
+            lifecycle=RuntimeLifecycleState.LAUNCHING,
             pid=1234,
             process_group=1234,
             process_start_identity="emu-start",
@@ -1102,9 +1102,9 @@ def test_runtime_session_stop_releases_owned_display_after_emulator(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    record = runtime_cli.replace(
+    record = replace(
         _managed_record(tmp_path),
-        lifecycle=runtime_cli.RuntimeLifecycleState.LAUNCHING,
+        lifecycle=RuntimeLifecycleState.LAUNCHING,
         pid=1234,
         process_group=1234,
         process_start_identity="emu-start",
@@ -1112,11 +1112,11 @@ def test_runtime_session_stop_releases_owned_display_after_emulator(
         window_id="0xabc",
     )
     record.session_root.mkdir()
-    closed = runtime_cli.replace(
+    closed = replace(
         record,
-        lifecycle=runtime_cli.RuntimeLifecycleState.CLOSED,
+        lifecycle=RuntimeLifecycleState.CLOSED,
     )
-    lease = runtime_cli.X11DisplayLease(
+    lease = X11DisplayLease(
         display_number=104,
         pid=9001,
         process_group=9001,
