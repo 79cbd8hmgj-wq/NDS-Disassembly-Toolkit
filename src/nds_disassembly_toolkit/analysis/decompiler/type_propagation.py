@@ -316,15 +316,15 @@ def infer_local_types(
             if signedness is RecoveredSignedness.SIGNED
             else TypeEvidenceKind.UNSIGNED_COMPARE
         )
-        evidence = TypeEvidence(
+        compare_evidence = TypeEvidence(
             kind,
             compare.source,
             f"condition {compare.condition.value}",
         )
         if isinstance(compare.left, SSAReferenceExpression):
-            classify_reference(compare.left, signedness, evidence)
+            classify_reference(compare.left, signedness, compare_evidence)
         if isinstance(compare.right, SSAReferenceExpression):
-            classify_reference(compare.right, signedness, evidence)
+            classify_reference(compare.right, signedness, compare_evidence)
 
     field_bindings: list[FieldTypeBinding] = []
     for candidate in structure_result.candidates:
@@ -333,8 +333,8 @@ def infer_local_types(
             signedness = _merge_signedness(
                 field_signedness.get(key, set())
             )
-            evidence = list(field_evidence.get(key, ()))
-            evidence.extend(
+            binding_evidence = list(field_evidence.get(key, ()))
+            binding_evidence.extend(
                 TypeEvidence(
                     (
                         TypeEvidenceKind.MEMORY_READ
@@ -355,7 +355,7 @@ def infer_local_types(
                         field.width_bytes,
                         signedness,
                     ),
-                    evidence=_unique_evidence(evidence),
+                    evidence=_unique_evidence(binding_evidence),
                 )
             )
 
@@ -388,7 +388,7 @@ def infer_local_types(
     )
     for value in sorted(all_values, key=_value_sort_key):
         if value in pointer_evidence:
-            candidate = candidate_by_root.get(value)
+            structure_candidate = candidate_by_root.get(value)
             components = pointer_components.get(value, set())
             component: str | None = None
             if len(components) == 1:
@@ -398,8 +398,8 @@ def infer_local_types(
                     value=value,
                     recovered_type=PointerType(
                         pointee_name=(
-                            candidate.name
-                            if candidate is not None
+                            structure_candidate.name
+                            if structure_candidate is not None
                             else None
                         ),
                         component=component,
