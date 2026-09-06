@@ -1,6 +1,6 @@
 # Provenance and third-party reference audit
 
-Audit updated: 2026-09-02
+Audit updated: 2026-09-06
 
 This document records the provenance boundary for external Nintendo DS and reverse-engineering tools that informed `NDS-Disassembly-Toolkit` and its predecessor work in `Bakugan-DS-`.
 
@@ -32,6 +32,10 @@ This is an engineering provenance record, not a substitute for legal advice.
 | pret DS disassembly tools | https://github.com/pret/ds_disassembly_tools | **No explicit license found** during audit | Workflow concepts such as module parameters, overlay layout, labelled regions, and disassembly comparison | Implementation source is treated as unavailable for copying |
 | Capstone | https://github.com/capstone-engine/capstone | BSD 3-Clause-style license (`LICENSES/LICENSE.TXT` in supplied archive) | ARM/Thumb decoding and semantic instruction metadata | `capstone>=5,<7` is a runtime dependency; no Capstone source is vendored |
 | angr | https://github.com/angr/angr | BSD 2-Clause-style license (`LICENSE` in supplied archive) | Reference architecture for function recovery, CFGs, data flow, symbolic analysis, persistence, decompiler-stage separation, and evidence-oriented RE workflow design | Reference only through Phase 7J; no angr runtime dependency or source incorporation |
+| Ghidra | https://github.com/NationalSecurityAgency/ghidra | Apache License 2.0 | Phase 7K architecture reference for SSA heritage, storage-vs-value identity, PHI/rename staging, transform pools, and decompiler type-system organization | Reference only; no Ghidra source copied, translated, vendored, linked, or imported |
+| Miasm | supplied source archive / https://github.com/cea-sec/miasm | GNU GPL v2 | Phase 7K behavioral/architectural comparison for graph SSA, PHI placement/renaming, fixed-point simplification, and conservative treatment of memory | GPL reference-only; no implementation source incorporated into the MIT toolkit |
+| RetDec | supplied source archive / https://github.com/avast/retdec | MIT plus repository third-party notices | Phase 7K reference for def-use/reaching-definitions, HLL optimization, alias-analysis boundaries, and type/composite-type architecture | Reference only in Phase 7K; no RetDec implementation source incorporated |
+| LLVM ValueTracking | supplied `ValueTracking.cpp` / https://github.com/llvm/llvm-project | Apache-2.0 WITH LLVM-exception | Phase 7K concept reference for known-zero/known-one bits, ranges, nonzero facts, PHI/select reasoning, and conservative value tracking | Concepts only; no LLVM implementation source copied or ported |
 | melonDS | https://github.com/melonDS-emu/melonDS | GNU GPL v3 | Nintendo DS runtime behavior and GDB-RSP interoperability | External GPL process/build only; no melonDS implementation is copied, linked, translated, or vendored into the MIT toolkit |
 
 ### Archive-origin caveats
@@ -140,6 +144,20 @@ Phase 7J is independently authored toolkit code that combines existing toolkit-o
 The investigation engine uses deterministic fixed weights and preserves component-aware `(component, runtime_address, instruction_set)` identity. Typed constants are read from toolkit-owned semantic operands rather than assembly display strings. One-hop call-neighbor evidence is propagated only when a call target has a unique persisted `(runtime address, instruction set)` identity, so overlapping Nintendo DS overlays are not guessed.
 
 Phase 7J is read-only: it adds no `.ndsre` or `.ndstrace` schema migration, persists no rankings or pseudo-C, opens analysis projects read-only, and establishes no melonDS connection. It introduces no new third-party dependency and incorporates no source from angr, Ghidra, RetDec, melonDS, or another reverse-engineering implementation.
+
+## Phase 7K SSA/decompiler refinement boundary
+
+Phase 7K is independently authored toolkit code inserted between the existing Phase 7I source-like lift and its existing structurer/renderer. It adds deterministic SSA construction, dominance/frontier analysis, PHI placement and renaming, def-use indexing, partial value facts, fixed-point simplification, and lowering back to the Phase 7I source-like IR.
+
+The external sources above were used only as architecture/concept references:
+
+- **Ghidra** informed high-level SSA heritage staging, storage-vs-definition identity, conservative alias boundaries, repeated transform architecture, and decompiler type-system organization.
+- **Miasm** provided an independent comparison point for graph SSA, PHI handling, and repeated simplification. Its GPL implementation is not copied.
+- **RetDec** informed the separation of def-use/reaching-definition, alias-analysis, HLL optimization, and type/composite-type concerns. No RetDec source is incorporated.
+- **LLVM ValueTracking** informed the concept of partial known-bit/range/nonzero facts instead of an all-or-nothing constant lattice. LLVM implementation code is not copied or ported.
+- **angr** remains a future targeted symbolic-analysis reference and is not used by the Phase 7K runtime path.
+
+Phase 7K adds no new third-party runtime dependency, no second decoder, no Capstone use outside the existing decoder boundary, no `.ndsre` schema migration, no SSA persistence, and no game-specific policy. The public decompiler remains a read-only derived view of persisted toolkit analysis.
 
 ## Repository audit observations
 
