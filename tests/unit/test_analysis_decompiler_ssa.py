@@ -17,9 +17,12 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAAssignmentStatement,
     SSABinaryExpression,
+    SSACallStatement,
+    SSADefinitionKind,
     SSAReferenceExpression,
     SSAReturnStatement,
     SSAStorageKind,
+    build_def_use_index,
     build_ssa_function,
 )
 from nds_disassembly_toolkit.analysis.model import (
@@ -246,7 +249,7 @@ def _call(address: int) -> CallStatement:
     )
 
 
-def test_call_clobbers_caller_saved_register_value_in_same_block() -> None:
+def test_call_defines_fresh_r0_result_used_by_subsequent_reference() -> None:
     block = _block(
         BASE,
         (
@@ -257,15 +260,20 @@ def test_call_clobbers_caller_saved_register_value_in_same_block() -> None:
     )
 
     result = build_ssa_function(_function(block))
+    called = result.blocks[0].statements[1]
     returned = result.blocks[0].statements[-1]
 
+    assert isinstance(called, SSACallStatement)
+    assert called.result.storage.kind is SSAStorageKind.REGISTER
+    assert called.result.storage.register is Register.R0
+    assert called.result.version == 1
     assert isinstance(returned, SSAReturnStatement)
     assert isinstance(returned.value, SSAReferenceExpression)
     assert returned.value.storage.register is Register.R0
-    assert returned.value.value is None
+    assert returned.value.value == called.result
 
 
-def test_call_clobber_path_forces_phi_with_explicit_unknown_incoming() -> None:
+def test_call_result_path_forces_phi_with_explicit_r0_definition() -> None:
     call_block = BASE + 4
     clean_block = BASE + 8
     join = BASE + 12
@@ -284,14 +292,16 @@ def test_call_clobber_path_forces_phi_with_explicit_unknown_incoming() -> None:
     joined = _block(join, (_return_register(join, Register.R0),))
 
     result = build_ssa_function(_function(entry, called, clean, joined))
+    call_statement = result.block(call_block).statements[0]
     phi = result.block(join).phis[0]
 
+    assert isinstance(call_statement, SSACallStatement)
     assert phi.output.storage.register is Register.R0
     assert tuple(item.predecessor_address for item in phi.inputs) == (
         call_block,
         clean_block,
     )
-    assert phi.inputs[0].value is None
+    assert phi.inputs[0].value == call_statement.result
     assert phi.inputs[1].value is not None
 
 
@@ -313,3 +323,49 @@ def test_call_does_not_clobber_callee_saved_register() -> None:
     assert isinstance(returned, SSAReturnStatement)
     assert isinstance(returned.value, SSAReferenceExpression)
     assert returned.value.value == assigned.target
+
+
+
+def test_call_still_invalidates_nonreturn_caller_saved_registers() -> None:
+    block = _block(
+        BASE,
+        (
+            _assign(BASE, Register.R1, ConstantExpression(7, _source(BASE))),
+            _call(BASE + 4),
+            _return_register(BASE + 8, Register.R1),
+        ),
+    )
+
+    result = build_ssa_function(_function(block))
+    returned = result.blocks[0].statements[-1]
+
+    assert isinstance(returned, SSAReturnStatement)
+    assert isinstance(returned.value, SSAReferenceExpression)
+    assert returned.value.storage.register is Register.R1
+    assert returned.value.value is None
+
+
+def test_def_use_index_records_call_result_definition() -> None:
+    block = _block(
+        BASE,
+        (
+            _call(BASE),
+            _return_register(BASE + 4, Register.R0),
+        ),
+    )
+
+    result = build_ssa_function(_function(block))
+    called = result.blocks[0].statements[0]
+    assert isinstance(called, SSACallStatement)
+
+    index = build_def_use_index(result)
+    definition = index.definition(called.result)
+
+    assert definition is not None
+    assert definition.kind is SSADefinitionKind.CALL_RESULT
+    assert definition.block_address == BASE
+    assert definition.statement_index == 0
+    uses = index.uses(called.result)
+    assert len(uses) == 1
+    assert uses[0].block_address == BASE
+    assert uses[0].statement_index == 1

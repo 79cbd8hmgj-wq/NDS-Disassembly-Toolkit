@@ -575,3 +575,102 @@ The current public `decompile_function(...)` service automatically uses local Ph
 after Phase 7K simplification. Interprocedural propagation is available as an analysis service but
 is not persisted into the project database. Phase 7L adds no decoder, no schema migration, no
 runtime/emulator dependency, and no game-specific semantics.
+
+
+## Phase 7M interprocedural prototype and return recovery
+
+Phase 7M builds on the persisted Phase 7E ABI summaries, Phase 7K SSA/value-fact layer, and Phase
+7L local type/structure recovery. It remains a derived, read-only decompiler analysis: recovered
+prototypes and call-result types are not written to `.ndsre`.
+
+The pipeline now has an explicit ABI return definition across calls:
+
+```text
+call target
+    ↓
+fresh SSA r0 result
+    ↓
+def-use / PHI / simplification
+    ↓
+local parameter + return prototype seed
+    ↓
+unique direct-call constraints
+    ↓
+bounded interprocedural fixed point
+    ↓
+typed signature / typed used call result
+```
+
+Calls still invalidate non-return caller-saved registers conservatively. Only `r0` receives a
+fresh call-result SSA definition. That definition is value heritage, not an assertion that the
+callee has a meaningful source-level return value.
+
+Local prototype seeds preserve the existing decompiler parameter order and ABI location. Register
+parameters retain r0-r3 evidence; stack parameters retain their entry-SP offset without inventing
+an ABI/source index that Phase 7E did not prove. Unknown parameter types remain unknown analysis
+facts rather than being promoted to `uint32_t` merely because the renderer needs a fallback.
+
+Return recovery examines all SSA return sites:
+
+- all valueless returns recover `void`;
+- numeric constants recover fixed-width integer evidence, not pointer evidence;
+- component-owned address expressions recover pointer evidence;
+- SSA references reuse Phase 7L recovered value types;
+- compatible same-width integer returns merge, widening signedness when necessary;
+- mixed void/value returns or incompatible return types remain explicit conflicts/unknown.
+
+For a uniquely resolved direct call, Phase 7M links:
+
+```text
+caller argument value  <->  callee parameter
+callee return type     <->  caller r0 call-result value
+```
+
+Propagation is bidirectional, deterministic, and bounded. Transitive chains and recursive call
+cycles converge through fixed-point iteration. If the iteration cap is reached, the result records
+non-convergence rather than claiming a stable prototype.
+
+Function identity remains exactly:
+
+```text
+(component, runtime_address, instruction_set)
+```
+
+A component-less call whose target address/mode matches multiple overlays does not participate in
+prototype propagation. Component-qualified overlay calls remain independent even when two
+overlays share the same numeric runtime address.
+
+Source lowering exposes a resolved call result only when later SSA use requires it. For example:
+
+```c
+struct struct_actor;
+
+struct struct_actor * update(struct struct_actor *arg0) {
+    struct struct_actor *call_result_0;
+
+    call_result_0 = find_actor(arg0);
+    return call_result_0;
+}
+```
+
+An unused result remains a plain side-effect call:
+
+```c
+notify();
+```
+
+Unresolved/component-less calls keep the older raw-register fallback even when `r0` is read
+afterward. This prevents a source-like temporary from implying a resolved callee/prototype that
+the project evidence does not support.
+
+The read-only project prototype service enumerates persisted functions deterministically, reuses
+the existing lift -> SSA -> simplification -> Phase 7L pipeline, skips missing CFG/data-flow
+records with deterministic diagnostics, and then runs project-wide prototype propagation. The
+normal `nds-toolkit project decompile` workflow automatically supplies this reusable
+project-prototype context. The lower-level `decompile_function(...)` API remains source
+compatible and accepts the context as an optional keyword for callers that already computed it.
+
+Phase 7M adds no decoder, no second ABI engine, no persistence schema, no runtime/emulator
+dependency, no symbolic executor, and no game-specific calling convention or semantic policy.
+Indirect/function-pointer call recovery, variadic prototypes, library signature matching, and
+full alias analysis remain later work.

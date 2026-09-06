@@ -10,6 +10,9 @@ from nds_disassembly_toolkit.analysis.decompiler import (
     DecompilationResult,
     decompile_function,
 )
+from nds_disassembly_toolkit.analysis.decompiler.prototype_service import (
+    recover_project_prototypes,
+)
 from nds_disassembly_toolkit.analysis.investigation_cli import (
     add_investigate_parser,
     run_investigate_command,
@@ -653,12 +656,22 @@ def _run_function(arguments: argparse.Namespace) -> int:
 
 def _run_decompile(arguments: argparse.Namespace) -> int:
     with AnalysisProject.open(arguments.project, read_only=True) as project:
-        result = decompile_function(
-            project,
-            arguments.component,
-            arguments.address,
-            arguments.mode,
-        )
+        if callable(getattr(project, "functions", None)):
+            prototype_analysis = recover_project_prototypes(project)
+            result = decompile_function(
+                project,
+                arguments.component,
+                arguments.address,
+                arguments.mode,
+                prototype_analysis=prototype_analysis,
+            )
+        else:
+            result = decompile_function(
+                project,
+                arguments.component,
+                arguments.address,
+                arguments.mode,
+            )
     if arguments.format == "text":
         _write_text(result.pseudo_c, arguments.output)
         return 0

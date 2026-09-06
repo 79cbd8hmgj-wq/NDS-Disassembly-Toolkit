@@ -49,6 +49,7 @@ from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAStorageKind,
     SSAUnaryExpression,
     SSAValue,
+    used_resolved_call_results,
 )
 from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
     canonical_pointer_root,
@@ -64,6 +65,7 @@ class _LoweringContext:
     type_environment: LocalTypeEnvironment | None = None
     entry_variables: dict[SSAValue, DecompilerVariable] = field(default_factory=dict)
     storage_variables: dict[SSAStorage, DecompilerVariable] = field(default_factory=dict)
+    value_variables: dict[SSAValue, DecompilerVariable] = field(default_factory=dict)
     extra_locals: list[DecompilerVariable] = field(default_factory=list)
 
 
@@ -112,6 +114,16 @@ def _make_context(
                     temporary_name=variable.name,
                 )
             ] = variable
+
+    for call_result_index, result in enumerate(
+        used_resolved_call_results(function)
+    ):
+        variable = DecompilerVariable(
+            f"call_result_{call_result_index}",
+            DecompilerVariableKind.TEMPORARY,
+        )
+        context.value_variables[result] = variable
+        context.extra_locals.append(variable)
     return context
 
 
@@ -163,6 +175,10 @@ def _reference_expression(
     entry_variable = context.entry_variables.get(reference.value)
     if entry_variable is not None:
         return VariableExpression(entry_variable, reference.source)
+
+    value_variable = context.value_variables.get(reference.value)
+    if value_variable is not None:
+        return VariableExpression(value_variable, reference.source)
 
     storage = reference.value.storage
     if storage.kind is SSAStorageKind.REGISTER:
@@ -331,7 +347,18 @@ def _lower_statement(
         call = _lower_expression(statement.call, context)
         if not isinstance(call, CallExpression):
             raise TypeError("SSA call statement lowered to non-call expression")
-        return CallStatement(call, statement.source)
+        result_variable = (
+            None
+            if statement.result is None
+            else context.value_variables.get(statement.result)
+        )
+        if result_variable is None:
+            return CallStatement(call, statement.source)
+        return AssignmentStatement(
+            VariableExpression(result_variable, statement.source),
+            call,
+            statement.source,
+        )
     if isinstance(statement, SSAReturnStatement):
         return ReturnStatement(
             (
