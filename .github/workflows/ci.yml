@@ -521,6 +521,27 @@ jobs:
           assert (root / 'display.json').is_file()
           PY
 
+          cat >/tmp/managed-seed-scenario.json <<'JSON'
+          {
+            "schema_version": 1,
+            "name": "managed-checkpoint-seed",
+            "backend": "desmume",
+            "cpu": "arm9",
+            "steps": [
+              {
+                "id": "seed-byte",
+                "type": "memory_write",
+                "address": "0x02001000",
+                "replacement": "11"
+              }
+            ]
+          }
+          JSON
+
+          nds-toolkit runtime scenario run \
+            "$SESSION_ROOT" /tmp/managed-seed-scenario.json \
+            --output /tmp/managed-seed-result.json
+
           nds-toolkit runtime checkpoint save "$SESSION_ROOT" baseline             --output /tmp/managed-checkpoint-save.json
 
           python - <<'PY'
@@ -541,6 +562,86 @@ jobs:
           import json
           restored = json.load(open('/tmp/managed-checkpoint-restore.json'))
           assert restored['name'] == 'baseline'
+          PY
+
+          cat >/tmp/managed-verify-scenario.json <<'JSON'
+          {
+            "schema_version": 1,
+            "name": "managed-checkpoint-verify",
+            "backend": "desmume",
+            "cpu": "arm9",
+            "steps": [
+              {
+                "id": "verify-restored-byte",
+                "type": "assert",
+                "condition": {
+                  "type": "memory_equals",
+                  "address": "0x02001000",
+                  "bytes": "11"
+                },
+                "timeout": 2.0
+              }
+            ]
+          }
+          JSON
+
+          nds-toolkit runtime scenario run \
+            "$SESSION_ROOT" /tmp/managed-verify-scenario.json \
+            --output /tmp/managed-checkpoint-verify.json
+
+          cat >/tmp/managed-dirty-scenario.json <<'JSON'
+          {
+            "schema_version": 1,
+            "name": "managed-checkpoint-dirty",
+            "backend": "desmume",
+            "cpu": "arm9",
+            "steps": [
+              {
+                "id": "dirty-byte",
+                "type": "memory_write",
+                "address": "0x02001000",
+                "replacement": "33"
+              }
+            ]
+          }
+          JSON
+
+          nds-toolkit runtime scenario run \
+            "$SESSION_ROOT" /tmp/managed-dirty-scenario.json \
+            --output /tmp/managed-dirty-result.json
+
+          cat >/tmp/managed-checkpoint-scenario.json <<'JSON'
+          {
+            "schema_version": 1,
+            "name": "managed-checkpoint-under-debugger",
+            "backend": "desmume",
+            "cpu": "arm9",
+            "required_capabilities": ["save_state"],
+            "checkpoint": "baseline",
+            "steps": [
+              {
+                "id": "verify-debugger-restored-byte",
+                "type": "assert",
+                "condition": {
+                  "type": "memory_equals",
+                  "address": "0x02001000",
+                  "bytes": "11"
+                },
+                "timeout": 2.0
+              }
+            ]
+          }
+          JSON
+
+          nds-toolkit runtime scenario run \
+            "$SESSION_ROOT" /tmp/managed-checkpoint-scenario.json \
+            --output /tmp/managed-checkpoint-scenario-result.json
+
+          python - <<'PY'
+          import json
+          restored = json.load(open('/tmp/managed-checkpoint-scenario-result.json'))
+          assert restored['status'] == 'passed'
+          assert restored['completed_steps'] == ['verify-debugger-restored-byte']
           PY
 
           cat >/tmp/managed-input-scenario.json <<'JSON'
