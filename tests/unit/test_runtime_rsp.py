@@ -254,3 +254,19 @@ def test_continue_can_be_split_around_host_action() -> None:
 
     assert stopped.signal == 2
     assert sock.sent == [_packet("c"), b"\x03", b"+"]
+
+
+
+def test_write_memory_accepts_verified_empty_ack() -> None:
+    peer = FakePeer(
+        responses=[
+            "$#00",
+            "$44332211#94",
+        ]
+    )
+    client = RSPClient(peer)
+
+    client.write_memory(0x02000100, bytes.fromhex("44332211"))
+
+    assert b"M2000100,4:44332211" in b"".join(peer.sent)
+    assert b"m2000100,4" in b"".join(peer.sent)
