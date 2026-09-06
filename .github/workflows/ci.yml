@@ -352,7 +352,7 @@ jobs:
           python -m pip install -e .
           sudo apt-get update
           sudo apt-get install -y \
-            meson ninja-build xvfb \
+            meson ninja-build xvfb xdotool \
             libglib2.0-dev libsdl2-dev libpcap-dev zlib1g-dev \
             libx11-dev libgl1-mesa-dev
       - name: Build pinned DeSmuME CLI with GDB stub
@@ -360,7 +360,7 @@ jobs:
         run: |
           set -euxo pipefail
           git clone --filter=blob:none https://github.com/TASEmulators/desmume.git /tmp/desmume
-          git -C /tmp/desmume checkout 08b6fade0bc95749acc9820cb9688aaf39d00c87
+          git -C /tmp/desmume checkout release_0_9_13
           meson setup /tmp/desmume/desmume/src/frontend/posix/build \
             /tmp/desmume/desmume/src/frontend/posix \
             --buildtype=release \
