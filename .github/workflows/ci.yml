@@ -534,12 +534,10 @@ jobs:
               timeout=2.0,
           )
           try:
-              address = 0x023FF000
-              baseline = bytes.fromhex('11223344')
-              session.write_memory(address, baseline)
-              assert session.read_memory(address, len(baseline)) == baseline
+              baseline_pc = session.snapshot().pc
           finally:
               session.close()
+          json.dump({'pc': baseline_pc}, open('/tmp/managed-baseline-pc.json', 'w'))
           PY
 
           set +e
@@ -572,9 +570,14 @@ jobs:
           python - <<'PY'
           import json
 
-          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+          from nds_disassembly_toolkit.analysis.runtime import (
+              BreakpointKind,
+              DeSmuMESession,
+              RuntimeCpu,
+          )
 
           session_info = json.load(open('/tmp/managed-session.json'))
+          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
           session = DeSmuMESession.connect(
               cpu=RuntimeCpu.ARM9,
               host=session_info['debugger_host'],
@@ -582,10 +585,9 @@ jobs:
               timeout=2.0,
           )
           try:
-              address = 0x023FF000
-              dirty = bytes.fromhex('aabbccdd')
-              session.write_memory(address, dirty)
-              assert session.read_memory(address, len(dirty)) == dirty
+              advanced_pc = session.step().pc
+              assert advanced_pc != baseline_pc, (hex(baseline_pc), hex(advanced_pc))
+              session.insert_breakpoint(BreakpointKind.CODE, baseline_pc)
           finally:
               session.close()
           PY
@@ -596,11 +598,16 @@ jobs:
           python - <<'PY'
           import json
 
-          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+          from nds_disassembly_toolkit.analysis.runtime import (
+              BreakpointKind,
+              DeSmuMESession,
+              RuntimeCpu,
+          )
 
           restored = json.load(open('/tmp/managed-checkpoint-restore.json'))
           assert restored['name'] == 'baseline'
           session_info = json.load(open('/tmp/managed-session.json'))
+          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
           session = DeSmuMESession.connect(
               cpu=RuntimeCpu.ARM9,
               host=session_info['debugger_host'],
@@ -608,9 +615,8 @@ jobs:
               timeout=2.0,
           )
           try:
-              address = 0x023FF000
-              baseline = bytes.fromhex('11223344')
-              assert session.read_memory(address, len(baseline)) == baseline
+              assert session.snapshot().pc == baseline_pc
+              session.remove_breakpoint(BreakpointKind.CODE, baseline_pc)
           finally:
               session.close()
           PY
@@ -618,9 +624,14 @@ jobs:
           python - <<'PY'
           import json
 
-          from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
+          from nds_disassembly_toolkit.analysis.runtime import (
+              BreakpointKind,
+              DeSmuMESession,
+              RuntimeCpu,
+          )
 
           session_info = json.load(open('/tmp/managed-session.json'))
+          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
           session = DeSmuMESession.connect(
               cpu=RuntimeCpu.ARM9,
               host=session_info['debugger_host'],
@@ -628,10 +639,9 @@ jobs:
               timeout=2.0,
           )
           try:
-              address = 0x023FF000
-              dirty = bytes.fromhex('aabbccdd')
-              session.write_memory(address, dirty)
-              assert session.read_memory(address, len(dirty)) == dirty
+              dirty_pc = session.step().pc
+              assert dirty_pc != baseline_pc
+              session.insert_breakpoint(BreakpointKind.CODE, baseline_pc)
           finally:
               session.close()
 
@@ -644,12 +654,11 @@ jobs:
               'checkpoint': 'baseline',
               'steps': [
                   {
-                      'id': 'verify-debugger-restored-memory',
+                      'id': 'verify-debugger-restored-pc',
                       'type': 'assert',
                       'condition': {
-                          'type': 'memory_equals',
-                          'address': '0x023ff000',
-                          'bytes': '11223344',
+                          'type': 'pc_equals',
+                          'address': hex(baseline_pc),
                       },
                       'timeout': 2.0,
                   }
@@ -665,9 +674,29 @@ jobs:
 
           python - <<'PY'
           import json
+
+          from nds_disassembly_toolkit.analysis.runtime import (
+              BreakpointKind,
+              DeSmuMESession,
+              RuntimeCpu,
+          )
+
           restored = json.load(open('/tmp/managed-checkpoint-scenario-result.json'))
           assert restored['status'] == 'passed'
-          assert restored['completed_steps'] == ['verify-debugger-restored-memory']
+          assert restored['completed_steps'] == ['verify-debugger-restored-pc']
+
+          session_info = json.load(open('/tmp/managed-session.json'))
+          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
+          session = DeSmuMESession.connect(
+              cpu=RuntimeCpu.ARM9,
+              host=session_info['debugger_host'],
+              port=session_info['debugger_port'],
+              timeout=2.0,
+          )
+          try:
+              session.remove_breakpoint(BreakpointKind.CODE, baseline_pc)
+          finally:
+              session.close()
           PY
 
           cat >/tmp/managed-input-scenario.json <<'JSON'
