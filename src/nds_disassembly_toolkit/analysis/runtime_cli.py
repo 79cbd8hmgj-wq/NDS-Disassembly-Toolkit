@@ -35,7 +35,6 @@ from nds_disassembly_toolkit.analysis.orchestration.input import (
     DSButton,
     DSPoint,
     ScreenLayoutProfile,
-    ScreenViewport,
     WindowGeometry,
     map_touch_point,
 )
