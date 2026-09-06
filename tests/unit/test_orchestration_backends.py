@@ -177,12 +177,18 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
 
     class Host:
         def __init__(self) -> None:
-            self.keys: list[str] = []
+            self.keys: list[tuple[str, str]] = []
+
+        def key_down(self, session: object, host_key: str) -> None:
+            self.keys.append(("down", host_key))
+
+        def key_up(self, session: object, host_key: str) -> None:
+            self.keys.append(("up", host_key))
+            if host_key == "F1" and ("down", "Shift_R") in self.keys:
+                slot.write_bytes(b"saved-state")
 
         def send_key(self, session: object, host_key: str) -> None:
-            self.keys.append(host_key)
-            if host_key == "Shift_R+F1":
-                slot.write_bytes(b"saved-state")
+            self.keys.append(("key", host_key))
 
     host = Host()
     backend.bind_managed_session(record, host)
@@ -191,7 +197,12 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
     backend.save_state(destination)
 
     assert destination.read_bytes() == b"saved-state"
-    assert host.keys == ["Shift_R+F1"]
+    assert host.keys == [
+        ("down", "Shift_R"),
+        ("down", "F1"),
+        ("up", "F1"),
+        ("up", "Shift_R"),
+    ]
 
     destination.write_bytes(b"restored-state")
     backend.load_state(destination)
