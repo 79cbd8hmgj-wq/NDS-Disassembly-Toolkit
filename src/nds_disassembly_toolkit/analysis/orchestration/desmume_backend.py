@@ -10,7 +10,7 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
 )
 from nds_disassembly_toolkit.analysis.runtime.desmume import DeSmuMESession
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
-from nds_disassembly_toolkit.errors import RuntimeCheckpointError
+from nds_disassembly_toolkit.errors import RuntimeCheckpointError, RuntimeLaunchError
 
 
 class DeSmuMEBackend:
@@ -43,11 +43,32 @@ class DeSmuMEBackend:
         session_root: Path,
         display: str | None,
     ) -> LaunchSpec:
-        del cpu, debugger_host, debugger_port, session_root
-        environment = () if display is None else (("DISPLAY", display),)
+        if cpu is not RuntimeCpu.ARM9:
+            raise RuntimeLaunchError("DeSmuME managed launch supports ARM9 debugging only")
+        if debugger_host != "127.0.0.1":
+            raise RuntimeLaunchError("managed DeSmuME debugger must use loopback")
+        environment = [
+            ("XDG_CONFIG_HOME", str(session_root / "config")),
+            ("XDG_DATA_HOME", str(session_root / "data")),
+        ]
+        if display is not None:
+            environment.extend(
+                [
+                    ("DISPLAY", display),
+                    ("SDL_VIDEODRIVER", "x11"),
+                ]
+            )
         return LaunchSpec(
-            argv=(str(executable), str(rom)),
-            environment=environment,
+            argv=(
+                str(executable),
+                "--arm9gdb",
+                str(debugger_port),
+                "--disable-sound",
+                "--nojoy",
+                str(rom),
+            ),
+            environment=tuple(environment),
+            cwd=session_root,
         )
 
     def connect_debugger(
