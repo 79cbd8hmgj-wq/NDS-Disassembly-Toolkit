@@ -949,8 +949,11 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
         def __init__(self) -> None:
             self.events: list[object] = []
 
-        def send_key(self, record: object, host_key: str) -> None:
-            self.events.append(("key", host_key))
+        def key_down(self, record: object, host_key: str) -> None:
+            self.events.append(("key-down", host_key))
+
+        def key_up(self, record: object, host_key: str) -> None:
+            self.events.append(("key-up", host_key))
 
         def window_geometry(self, record: object) -> object:
             return WindowGeometry(0, 0, 256, 384)
@@ -994,7 +997,8 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
 
     assert debugger.host_actions == 2
     assert host.events == [
-        ("key", "x"),
+        ("key-down", "x"),
+        ("key-up", "x"),
         ("move", 255, 383),
         ("down", 1),
         ("up", 1),
