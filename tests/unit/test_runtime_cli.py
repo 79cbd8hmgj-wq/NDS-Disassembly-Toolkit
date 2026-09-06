@@ -910,3 +910,66 @@ def test_runtime_matrix_dispatch_uses_relative_scenario_and_managed_session(
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "passed"
     assert [case["id"] for case in payload["cases"]] == ["case-a"]
+
+
+
+def test_managed_scenario_context_routes_ds_input_through_owned_host(
+    tmp_path: Path,
+) -> None:
+    class Backend:
+        def host_key_for(self, button: object) -> str:
+            assert button is runtime_cli.DSButton.A
+            return "x"
+
+        def layout_profile(self, geometry: object) -> object:
+            assert geometry.width == 256
+            assert geometry.height == 384
+            return runtime_cli.ScreenLayoutProfile(
+                window=geometry,
+                lower_screen=runtime_cli.ScreenViewport(0, 192, 256, 192),
+            )
+
+    class Host:
+        def __init__(self) -> None:
+            self.events: list[object] = []
+
+        def send_key(self, record: object, host_key: str) -> None:
+            self.events.append(("key", host_key))
+
+        def window_geometry(self, record: object) -> object:
+            return runtime_cli.WindowGeometry(0, 0, 256, 384)
+
+        def move_pointer(self, record: object, x: int, y: int) -> None:
+            self.events.append(("move", x, y))
+
+        def pointer_down(self, record: object, *, button: int = 1) -> None:
+            self.events.append(("down", button))
+
+        def pointer_up(self, record: object, *, button: int = 1) -> None:
+            self.events.append(("up", button))
+
+    record = SimpleNamespace(
+        session_root=tmp_path,
+        emulator=runtime_cli.EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        rom_sha256="1" * 64,
+        window_id="0xabc",
+        display=":104",
+    )
+    host = Host()
+    context = runtime_cli._ManagedScenarioContext(
+        record,
+        Backend(),
+        object(),
+        host_driver=host,
+    )
+
+    context.press_button(runtime_cli.DSButton.A)
+    context.touch_tap(runtime_cli.DSPoint(255, 191))
+
+    assert host.events == [
+        ("key", "x"),
+        ("move", 255, 383),
+        ("down", 1),
+        ("up", 1),
+    ]
