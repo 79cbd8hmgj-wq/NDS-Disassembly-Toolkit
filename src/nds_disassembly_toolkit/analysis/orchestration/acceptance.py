@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
 from nds_disassembly_toolkit.analysis.orchestration.model import MATRIX_SCHEMA_VERSION
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
+    MemoryWriteStep,
+    ParameterReference,
     ScenarioDefinition,
     run_scenario,
 )
@@ -132,6 +134,75 @@ def load_matrix(path: Path) -> AcceptanceMatrix:
     )
 
 
+
+def _parameter_bytes(
+    value: bytes | ParameterReference,
+    parameters: Mapping[str, object],
+    *,
+    field: str,
+) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if value.name not in parameters:
+        raise RuntimeScenarioError(
+            f"missing acceptance parameter: {value.name}"
+        )
+    raw = parameters[value.name]
+    if isinstance(raw, bytes):
+        if not raw:
+            raise RuntimeScenarioError(
+                f"acceptance parameter {value.name} for {field} must not be empty"
+            )
+        return raw
+    if not isinstance(raw, str) or not raw or len(raw) % 2:
+        raise RuntimeScenarioError(
+            f"acceptance parameter {value.name} for {field} must be hexadecimal bytes"
+        )
+    try:
+        resolved = bytes.fromhex(raw)
+    except ValueError as exc:
+        raise RuntimeScenarioError(
+            f"acceptance parameter {value.name} for {field} must be hexadecimal bytes"
+        ) from exc
+    if not resolved:
+        raise RuntimeScenarioError(
+            f"acceptance parameter {value.name} for {field} must not be empty"
+        )
+    return resolved
+
+
+def _resolve_case_scenario(
+    scenario: ScenarioDefinition,
+    parameters: Mapping[str, object],
+) -> ScenarioDefinition:
+    resolved_steps = []
+    for step in scenario.steps:
+        if isinstance(step, MemoryWriteStep):
+            replacement = _parameter_bytes(
+                step.replacement,
+                parameters,
+                field="replacement",
+            )
+            expected_before = step.expected_before
+            if isinstance(expected_before, ParameterReference):
+                expected_before = _parameter_bytes(
+                    expected_before,
+                    parameters,
+                    field="expected_before",
+                )
+            if expected_before is not None and len(expected_before) != len(replacement):
+                raise RuntimeScenarioError(
+                    "resolved expected_before length must match replacement length"
+                )
+            step = replace(
+                step,
+                replacement=replacement,
+                expected_before=expected_before,
+            )
+        resolved_steps.append(step)
+    return replace(scenario, steps=tuple(resolved_steps))
+
+
 def run_acceptance_matrix(
     context_factory: AcceptanceContextFactory,
     matrix: AcceptanceMatrix,
@@ -146,6 +217,7 @@ def run_acceptance_matrix(
     saw_case_failure = False
 
     for case in matrix.cases:
+        resolved_scenario = _resolve_case_scenario(scenario, case.parameters)
         context = context_factory(case)
         case_root = context.session_root / "cases" / case.id
         case_root.mkdir(parents=True, exist_ok=True)
@@ -166,7 +238,7 @@ def run_acceptance_matrix(
         try:
             scenario_result = run_scenario(
                 context,
-                scenario,
+                resolved_scenario,
                 journal_path=case_root / "journal.json",
             )
         except Exception as exc:
