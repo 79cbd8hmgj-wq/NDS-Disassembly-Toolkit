@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
-    CallExpression,
-    CallStatement,
     DecompilerVariable,
     DecompilerVariableKind,
     SourceRef,
@@ -21,8 +19,8 @@ from nds_disassembly_toolkit.analysis.decompiler.ssa import (
 )
 from nds_disassembly_toolkit.analysis.decompiler.type_propagation import (
     FunctionTypeIdentity,
-    propagate_interprocedural_types,
     infer_local_types,
+    propagate_interprocedural_types,
 )
 from nds_disassembly_toolkit.analysis.model import InstructionSet, Register
 
