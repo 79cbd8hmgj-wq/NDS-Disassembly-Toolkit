@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -19,7 +20,11 @@ from nds_disassembly_toolkit.analysis.runtime import (
 )
 from nds_disassembly_toolkit.analysis.runtime.rsp import RSPCapabilities
 from nds_disassembly_toolkit.cli import build_parser, main
-from nds_disassembly_toolkit.errors import RuntimeConnectionError
+from nds_disassembly_toolkit.errors import (
+    RuntimeConnectionError,
+    RuntimeRecoveryError,
+    RuntimeScenarioError,
+)
 
 
 def _snapshot(
@@ -744,3 +749,67 @@ def test_managed_scenario_snapshot_writes_canonical_runtime_json(
     assert payload["pc"] == "0x02000044"
     registers = {item["name"]: item["value"] for item in payload["registers"]}
     assert registers["pc"] == "0x02000044"
+
+
+
+def test_runtime_resume_rejects_unowned_process_as_recovery_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = SimpleNamespace(
+        session_root=tmp_path,
+        emulator=runtime_cli.EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+    )
+    definition = SimpleNamespace(
+        backend=runtime_cli.EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=(),
+        checkpoint=None,
+        steps=(),
+    )
+    monkeypatch.setattr(runtime_cli, "load_session", lambda path: record)
+    monkeypatch.setattr(runtime_cli, "load_scenario", lambda path: definition)
+    monkeypatch.setattr(runtime_cli, "process_is_owned", lambda loaded: False)
+
+    arguments = build_parser().parse_args(
+        ["runtime", "session", "resume", str(tmp_path), "scenario.json"]
+    )
+    with pytest.raises(RuntimeRecoveryError, match="adopt"):
+        runtime_cli.run_runtime_command(arguments)
+
+
+def test_managed_ui_scenario_requires_owned_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = SimpleNamespace(
+        session_root=tmp_path,
+        emulator=runtime_cli.EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        pid=1234,
+        window_id=None,
+        display=":104",
+        debugger_host="127.0.0.1",
+        debugger_port=39001,
+    )
+    definition = SimpleNamespace(
+        backend=runtime_cli.EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=(),
+        checkpoint=None,
+        steps=(SimpleNamespace(type="button"),),
+    )
+
+    class Backend:
+        capabilities = SimpleNamespace(window_input=True)
+
+        def connect_debugger(self, **kwargs: object) -> object:
+            return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(runtime_cli, "process_is_owned", lambda loaded: True)
+    monkeypatch.setattr(runtime_cli, "_managed_backend", lambda kind: Backend())
+
+    with pytest.raises(RuntimeScenarioError, match="window"):
+        with runtime_cli._scenario_context(record, definition):
+            pass
