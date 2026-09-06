@@ -110,31 +110,48 @@ class DeSmuMEBackend:
             )
         return self._runtime_record, self._host_driver
 
-    def _slot_path(self) -> Path:
+    def _slot_directory(self) -> Path:
         record, _ = self._bound_runtime()
-        return (
-            record.session_root
-            / "config"
-            / "desmume"
-            / f"{Path(record.rom_path).stem}.ds1"
-        )
+        return record.session_root / "config" / "desmume"
 
-    def save_state(self, destination: Path) -> None:
+    @staticmethod
+    def _slot_snapshot(directory: Path) -> dict[Path, tuple[int, int]]:
+        if not directory.exists():
+            return {}
+        return {
+            path: (path.stat().st_mtime_ns, path.stat().st_size)
+            for path in directory.glob("*.ds1")
+            if path.is_file()
+        }
+
+    def _trigger_slot_save(self) -> Path:
         record, host = self._bound_runtime()
-        slot = self._slot_path()
-        slot.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            slot.unlink()
-        except FileNotFoundError:
-            pass
+        directory = self._slot_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        before = self._slot_snapshot(directory)
         host.send_key(record, "Shift_R+F1")
         deadline = time.monotonic() + 5.0
-        while not slot.is_file():
+        while True:
+            after = self._slot_snapshot(directory)
+            changed = sorted(
+                path
+                for path, identity in after.items()
+                if before.get(path) != identity
+            )
+            if len(changed) == 1:
+                return changed[0]
+            if len(changed) > 1:
+                raise RuntimeCheckpointError(
+                    "DeSmuME changed multiple managed save-state slot files"
+                )
             if time.monotonic() >= deadline:
                 raise RuntimeCheckpointError(
-                    "DeSmuME did not create managed save-state slot 1"
+                    "DeSmuME did not create or update managed save-state slot 1"
                 )
             time.sleep(0.01)
+
+    def save_state(self, destination: Path) -> None:
+        slot = self._trigger_slot_save()
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(slot, destination)
 
@@ -142,9 +159,10 @@ class DeSmuMEBackend:
         record, host = self._bound_runtime()
         if not source.is_file():
             raise RuntimeCheckpointError("checkpoint state file does not exist")
-        slot = self._slot_path()
-        slot.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, slot)
+        slot = self._trigger_slot_save()
+        temporary = slot.with_suffix(slot.suffix + ".tmp")
+        shutil.copyfile(source, temporary)
+        temporary.replace(slot)
         host.send_key(record, "F1")
 
 
