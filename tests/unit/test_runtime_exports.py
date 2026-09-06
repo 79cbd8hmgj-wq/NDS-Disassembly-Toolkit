@@ -18,6 +18,15 @@ from nds_disassembly_toolkit.errors import (
     RuntimeProtocolError,
     RuntimeTargetStateError,
     RuntimeTimeoutError,
+    RuntimeCheckpointError,
+    RuntimeDisplayError,
+    RuntimeEnvironmentError,
+    RuntimeInputError,
+    RuntimeLaunchError,
+    RuntimeOrchestrationError,
+    RuntimeOwnershipError,
+    RuntimeRecoveryError,
+    RuntimeScenarioError,
 )
 
 
@@ -120,3 +129,50 @@ def test_phase_7h3_orchestration_public_exports_are_available() -> None:
         assert hasattr(orchestration, name), name
 
     assert not hasattr(orchestration, "X11HostDriver")
+
+
+
+def test_phase_7h3_orchestration_exports_are_available() -> None:
+    for name in (
+        "SESSION_SCHEMA_VERSION",
+        "CHECKPOINT_SCHEMA_VERSION",
+        "SCENARIO_SCHEMA_VERSION",
+        "JOURNAL_SCHEMA_VERSION",
+        "MATRIX_SCHEMA_VERSION",
+        "DSButton",
+        "DSPoint",
+        "CheckpointContext",
+        "CheckpointMetadata",
+        "create_checkpoint",
+        "validate_checkpoint",
+        "restore_checkpoint",
+        "RuntimePredicate",
+        "RuntimeMemoryWrite",
+        "wait_for_predicate",
+        "ScenarioDefinition",
+        "ScenarioResult",
+        "load_scenario",
+        "run_scenario",
+        "resume_scenario",
+        "AcceptanceMatrix",
+        "AcceptanceCase",
+        "AcceptanceCaseResult",
+        "AcceptanceMatrixResult",
+        "load_matrix",
+        "run_acceptance_matrix",
+    ):
+        assert hasattr(orchestration, name), name
+
+
+def test_phase_7h3_errors_share_runtime_orchestration_boundary() -> None:
+    for error_type in (
+        RuntimeEnvironmentError,
+        RuntimeLaunchError,
+        RuntimeOwnershipError,
+        RuntimeDisplayError,
+        RuntimeInputError,
+        RuntimeCheckpointError,
+        RuntimeScenarioError,
+        RuntimeRecoveryError,
+    ):
+        assert issubclass(error_type, RuntimeOrchestrationError)
