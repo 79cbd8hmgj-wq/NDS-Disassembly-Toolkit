@@ -154,8 +154,14 @@ def stop_x11_display(
 class X11HostDriver:
     """Argument-array X11 input bound to one verified emulator window."""
 
-    def __init__(self, *, xdotool: Path) -> None:
+    def __init__(
+        self,
+        *,
+        xdotool: Path,
+        capture_tool: Path | None = None,
+    ) -> None:
         self.xdotool = xdotool
+        self.capture_tool = capture_tool
 
     def _window_pid(self, window_id: str) -> int | None:
         completed = subprocess.run(
@@ -190,5 +196,72 @@ class X11HostDriver:
         window_id = self._require_owned_window(session)
         subprocess.run(
             [str(self.xdotool), "key", "--window", window_id, host_key],
+            check=True,
+        )
+
+
+    def move_pointer(
+        self,
+        session: RuntimeSessionRecord,
+        x: int,
+        y: int,
+    ) -> None:
+        window_id = self._require_owned_window(session)
+        subprocess.run(
+            [
+                str(self.xdotool),
+                "mousemove",
+                "--window",
+                window_id,
+                str(x),
+                str(y),
+            ],
+            check=True,
+        )
+
+    def pointer_down(
+        self,
+        session: RuntimeSessionRecord,
+        *,
+        button: int = 1,
+    ) -> None:
+        self._require_owned_window(session)
+        if button <= 0:
+            raise RuntimeInputError("pointer button must be positive")
+        subprocess.run(
+            [str(self.xdotool), "mousedown", str(button)],
+            check=True,
+        )
+
+    def pointer_up(
+        self,
+        session: RuntimeSessionRecord,
+        *,
+        button: int = 1,
+    ) -> None:
+        self._require_owned_window(session)
+        if button <= 0:
+            raise RuntimeInputError("pointer button must be positive")
+        subprocess.run(
+            [str(self.xdotool), "mouseup", str(button)],
+            check=True,
+        )
+
+    def capture_window(
+        self,
+        session: RuntimeSessionRecord,
+        destination: Path,
+    ) -> None:
+        window_id = self._require_owned_window(session)
+        if self.capture_tool is None:
+            raise RuntimeInputError("X11 capture tool is unavailable")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                str(self.capture_tool),
+                "-window",
+                window_id,
+                str(destination),
+            ],
             check=True,
         )
