@@ -157,3 +157,51 @@ def test_desmume_managed_input_profile_rejects_unknown_geometry() -> None:
 
     with pytest.raises(RuntimeInputError, match="256x384"):
         backend.layout_profile(WindowGeometry(0, 0, 512, 768))
+
+
+
+def test_desmume_bound_backend_saves_and_loads_isolated_slot(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    backend = DeSmuMEBackend()
+    session_root = tmp_path / "session"
+    slot_dir = session_root / "config" / "desmume"
+    slot_dir.mkdir(parents=True)
+    slot = slot_dir / "game.ds1"
+    record = SimpleNamespace(
+        session_root=session_root,
+        rom_path=tmp_path / "game.nds",
+    )
+
+    class Host:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+
+        def send_key(self, session: object, host_key: str) -> None:
+            self.keys.append(host_key)
+            if host_key == "Shift_R+F1":
+                slot.write_bytes(b"saved-state")
+
+    host = Host()
+    backend.bind_managed_session(record, host)
+
+    destination = tmp_path / "checkpoint-state.bin"
+    backend.save_state(destination)
+
+    assert destination.read_bytes() == b"saved-state"
+    assert host.keys == ["Shift_R+F1"]
+
+    destination.write_bytes(b"restored-state")
+    backend.load_state(destination)
+
+    assert slot.read_bytes() == b"restored-state"
+    assert host.keys == ["Shift_R+F1", "F1"]
+
+
+def test_desmume_state_requires_bound_managed_session(tmp_path: Path) -> None:
+    backend = DeSmuMEBackend()
+
+    with pytest.raises(RuntimeInputError, match="bound managed session"):
+        backend.save_state(tmp_path / "state.bin")
