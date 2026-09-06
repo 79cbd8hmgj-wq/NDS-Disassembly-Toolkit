@@ -285,7 +285,6 @@ def test_phi_with_one_unique_canonical_root_collapses_for_structure_identity() -
     left = _reg(Register.R1, 0, BASE + 4)
     right = _reg(Register.R1, 1, BASE + 8)
     joined = _reg(Register.R1, 2, BASE + 12)
-    entry_source = _source(BASE)
     left_source = _source(BASE + 4)
     right_source = _source(BASE + 8)
 
