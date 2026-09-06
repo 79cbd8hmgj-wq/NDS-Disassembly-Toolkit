@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from nds_disassembly_toolkit.analysis.orchestration.input import WindowGeometry
 from nds_disassembly_toolkit.analysis.orchestration.model import RuntimeSessionRecord
 
 
@@ -19,6 +20,8 @@ class HostAutomationDriver(Protocol):
     ) -> str: ...
 
     def bind_window(self, session: RuntimeSessionRecord, window_id: str) -> None: ...
+
+    def window_geometry(self, session: RuntimeSessionRecord) -> WindowGeometry: ...
 
     def send_key(
         self,
