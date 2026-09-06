@@ -820,6 +820,11 @@ def test_managed_ui_scenario_requires_owned_window(
 
     monkeypatch.setattr(runtime_cli, "process_is_owned", lambda loaded: True)
     monkeypatch.setattr(runtime_cli, "_managed_backend", lambda kind: Backend())
+    monkeypatch.setattr(
+        runtime_cli,
+        "find_x11_helpers",
+        lambda: SimpleNamespace(xdotool=Path("/usr/bin/xdotool")),
+    )
 
     with (
         pytest.raises(RuntimeScenarioError, match="window"),
