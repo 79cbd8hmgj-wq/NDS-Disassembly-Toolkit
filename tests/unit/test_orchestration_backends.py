@@ -5,15 +5,15 @@ from pathlib import Path
 import pytest
 
 from nds_disassembly_toolkit.analysis.orchestration import (
-    DSButton,
     DebuggerHandshakeMode,
+    DSButton,
     EmulatorKind,
 )
-from nds_disassembly_toolkit.analysis.orchestration.input import WindowGeometry
-from nds_disassembly_toolkit.errors import RuntimeInputError
 from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmuMEBackend
+from nds_disassembly_toolkit.analysis.orchestration.input import WindowGeometry
 from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import MelonDSBackend
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
+from nds_disassembly_toolkit.errors import RuntimeInputError
 
 
 def test_backends_expose_explicit_debugger_dialects() -> None:
