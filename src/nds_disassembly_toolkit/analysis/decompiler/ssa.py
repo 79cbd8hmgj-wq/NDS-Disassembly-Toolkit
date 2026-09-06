@@ -375,6 +375,7 @@ class SSAMemoryWriteStatement:
 class SSACallStatement:
     call: SSACallExpression
     source: tuple[SourceRef, ...]
+    result: SSAValue | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +434,7 @@ class SSADefinitionKind(StrEnum):
     ENTRY = "entry"
     PHI = "phi"
     ASSIGNMENT = "assignment"
+    CALL_RESULT = "call_result"
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,14 +665,29 @@ def _rename_statement(
         call = _rename_expression(statement.call, stacks)
         if not isinstance(call, SSACallExpression):
             raise TypeError("call statement did not produce an SSA call expression")
+
+        result_storage = SSAStorage(
+            SSAStorageKind.REGISTER,
+            register=Register.R0,
+        )
+        result = _new_value(
+            result_storage,
+            statement.source,
+            counters,
+        )
+        stacks.setdefault(result_storage, []).append(result)
+        pushed.append(result_storage)
+
         for register in _CALL_CLOBBER_REGISTERS:
+            if register is Register.R0:
+                continue
             storage = SSAStorage(
                 SSAStorageKind.REGISTER,
                 register=register,
             )
             stacks.setdefault(storage, []).append(None)
             pushed.append(storage)
-        return SSACallStatement(call, statement.source)
+        return SSACallStatement(call, statement.source, result)
     if isinstance(statement, ReturnStatement):
         return_value = (
             None
@@ -917,6 +934,18 @@ def build_def_use_index(function: SSAFunction) -> DefUseIndex:
                     SSADefinition(
                         value=statement.target,
                         kind=SSADefinitionKind.ASSIGNMENT,
+                        block_address=block.address,
+                        statement_index=statement_index,
+                    )
+                )
+            elif (
+                isinstance(statement, SSACallStatement)
+                and statement.result is not None
+            ):
+                definitions.append(
+                    SSADefinition(
+                        value=statement.result,
+                        kind=SSADefinitionKind.CALL_RESULT,
                         block_address=block.address,
                         statement_index=statement_index,
                     )
