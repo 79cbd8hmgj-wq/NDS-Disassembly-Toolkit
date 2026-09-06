@@ -523,7 +523,6 @@ jobs:
 
           python - <<'PY'
           import json
-          import os
 
           from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
 
@@ -535,10 +534,12 @@ jobs:
               timeout=2.0,
           )
           try:
-              baseline_pc = session.snapshot().pc
+              address = 0x023FF000
+              baseline = bytes.fromhex('11223344')
+              session.write_memory(address, baseline)
+              assert session.read_memory(address, len(baseline)) == baseline
           finally:
               session.close()
-          json.dump({'pc': baseline_pc}, open('/tmp/managed-baseline-pc.json', 'w'))
           PY
 
           set +e
@@ -574,7 +575,6 @@ jobs:
           from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
 
           session_info = json.load(open('/tmp/managed-session.json'))
-          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
           session = DeSmuMESession.connect(
               cpu=RuntimeCpu.ARM9,
               host=session_info['debugger_host'],
@@ -582,8 +582,10 @@ jobs:
               timeout=2.0,
           )
           try:
-              advanced_pc = session.step().pc
-              assert advanced_pc != baseline_pc, (hex(baseline_pc), hex(advanced_pc))
+              address = 0x023FF000
+              dirty = bytes.fromhex('aabbccdd')
+              session.write_memory(address, dirty)
+              assert session.read_memory(address, len(dirty)) == dirty
           finally:
               session.close()
           PY
@@ -599,7 +601,6 @@ jobs:
           restored = json.load(open('/tmp/managed-checkpoint-restore.json'))
           assert restored['name'] == 'baseline'
           session_info = json.load(open('/tmp/managed-session.json'))
-          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
           session = DeSmuMESession.connect(
               cpu=RuntimeCpu.ARM9,
               host=session_info['debugger_host'],
@@ -607,7 +608,9 @@ jobs:
               timeout=2.0,
           )
           try:
-              assert session.snapshot().pc == baseline_pc
+              address = 0x023FF000
+              baseline = bytes.fromhex('11223344')
+              assert session.read_memory(address, len(baseline)) == baseline
           finally:
               session.close()
           PY
@@ -618,7 +621,6 @@ jobs:
           from nds_disassembly_toolkit.analysis.runtime import DeSmuMESession, RuntimeCpu
 
           session_info = json.load(open('/tmp/managed-session.json'))
-          baseline_pc = json.load(open('/tmp/managed-baseline-pc.json'))['pc']
           session = DeSmuMESession.connect(
               cpu=RuntimeCpu.ARM9,
               host=session_info['debugger_host'],
@@ -626,8 +628,10 @@ jobs:
               timeout=2.0,
           )
           try:
-              dirty_pc = session.step().pc
-              assert dirty_pc != baseline_pc
+              address = 0x023FF000
+              dirty = bytes.fromhex('aabbccdd')
+              session.write_memory(address, dirty)
+              assert session.read_memory(address, len(dirty)) == dirty
           finally:
               session.close()
 
@@ -640,11 +644,12 @@ jobs:
               'checkpoint': 'baseline',
               'steps': [
                   {
-                      'id': 'verify-debugger-restored-pc',
+                      'id': 'verify-debugger-restored-memory',
                       'type': 'assert',
                       'condition': {
-                          'type': 'pc_equals',
-                          'address': hex(baseline_pc),
+                          'type': 'memory_equals',
+                          'address': '0x023ff000',
+                          'bytes': '11223344',
                       },
                       'timeout': 2.0,
                   }
@@ -662,7 +667,7 @@ jobs:
           import json
           restored = json.load(open('/tmp/managed-checkpoint-scenario-result.json'))
           assert restored['status'] == 'passed'
-          assert restored['completed_steps'] == ['verify-debugger-restored-pc']
+          assert restored['completed_steps'] == ['verify-debugger-restored-memory']
           PY
 
           cat >/tmp/managed-input-scenario.json <<'JSON'
