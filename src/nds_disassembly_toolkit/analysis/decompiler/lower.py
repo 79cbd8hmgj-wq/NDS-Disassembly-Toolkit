@@ -49,7 +49,7 @@ from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAStorageKind,
     SSAUnaryExpression,
     SSAValue,
-    build_def_use_index,
+    used_resolved_call_results,
 )
 from nds_disassembly_toolkit.analysis.decompiler.structure_recovery import (
     canonical_pointer_root,
@@ -115,24 +115,15 @@ def _make_context(
                 )
             ] = variable
 
-    index = build_def_use_index(function)
-    call_result_index = 0
-    for block in sorted(function.blocks, key=lambda item: item.address):
-        for statement in block.statements:
-            if (
-                not isinstance(statement, SSACallStatement)
-                or statement.result is None
-                or statement.call.target_component is None
-                or not index.uses(statement.result)
-            ):
-                continue
-            variable = DecompilerVariable(
-                f"call_result_{call_result_index}",
-                DecompilerVariableKind.TEMPORARY,
-            )
-            call_result_index += 1
-            context.value_variables[statement.result] = variable
-            context.extra_locals.append(variable)
+    for call_result_index, result in enumerate(
+        used_resolved_call_results(function)
+    ):
+        variable = DecompilerVariable(
+            f"call_result_{call_result_index}",
+            DecompilerVariableKind.TEMPORARY,
+        )
+        context.value_variables[result] = variable
+        context.extra_locals.append(variable)
     return context
 
 
