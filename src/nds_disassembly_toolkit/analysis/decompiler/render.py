@@ -197,9 +197,7 @@ def _statement_line(statement: object) -> str:
 def _node_terminates(node: StructuredNode) -> bool:
     if isinstance(node, StatementNode):
         return isinstance(node.statement, ReturnStatement)
-    if isinstance(node, GotoNode):
-        return True
-    return False
+    return isinstance(node, GotoNode)
 
 
 def _body_terminates(nodes: tuple[StructuredNode, ...]) -> bool:
