@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from itertools import pairwise
 
+from nds_disassembly_toolkit.analysis.decompiler.model import SourceRef
 from nds_disassembly_toolkit.analysis.decompiler.access_paths import (
     FieldAccessEvidence,
     collect_field_accesses,
 )
 from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     DefUseIndex,
+    PhiNode,
     SSAAssignmentStatement,
     SSADefinitionKind,
     SSAFunction,
@@ -37,11 +39,11 @@ def _value_sort_key(value: SSAValue) -> tuple[object, ...]:
     )
 
 
-def _source_sort_key(source: tuple[object, ...]) -> tuple[object, ...]:
+def _source_sort_key(source: tuple[SourceRef, ...]) -> tuple[object, ...]:
     return tuple(
         (
-            item.address,  # type: ignore[attr-defined]
-            item.instruction_set.value,  # type: ignore[attr-defined]
+            item.address,
+            item.instruction_set.value,
         )
         for item in source
     )
@@ -49,7 +51,7 @@ def _source_sort_key(source: tuple[object, ...]) -> tuple[object, ...]:
 
 def _canonical_sources(
     accesses: tuple[FieldAccessEvidence, ...],
-) -> tuple:
+) -> tuple[SourceRef, ...]:
     sources = {
         item
         for access in accesses
@@ -126,7 +128,7 @@ def _phi_for_value(
     function: SSAFunction,
     index: DefUseIndex,
     value: SSAValue,
-):
+) -> PhiNode | None:
     definition = index.definition(value)
     if definition is None or definition.kind is not SSADefinitionKind.PHI:
         return None
