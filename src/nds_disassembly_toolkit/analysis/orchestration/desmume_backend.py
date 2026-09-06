@@ -129,7 +129,12 @@ class DeSmuMEBackend:
         directory = self._slot_directory()
         directory.mkdir(parents=True, exist_ok=True)
         before = self._slot_snapshot(directory)
-        host.send_key(record, "Shift_R+F1")
+        host.key_down(record, "Shift_R")
+        try:
+            host.key_down(record, "F1")
+            host.key_up(record, "F1")
+        finally:
+            host.key_up(record, "Shift_R")
         deadline = time.monotonic() + 5.0
         while True:
             after = self._slot_snapshot(directory)
