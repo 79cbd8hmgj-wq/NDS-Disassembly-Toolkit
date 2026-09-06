@@ -351,6 +351,7 @@ class X11HostDriver:
         subprocess.run(
             [str(self.xdotool), "keydown", "--window", window_id, host_key],
             check=True,
+            env=self._display_environment(session),
         )
 
     def key_up(self, session: RuntimeSessionRecord, host_key: str) -> None:
@@ -360,6 +361,7 @@ class X11HostDriver:
         subprocess.run(
             [str(self.xdotool), "keyup", "--window", window_id, host_key],
             check=True,
+            env=self._display_environment(session),
         )
 
     def send_key(self, session: RuntimeSessionRecord, host_key: str) -> None:
