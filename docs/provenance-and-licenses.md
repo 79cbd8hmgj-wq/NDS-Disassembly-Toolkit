@@ -155,6 +155,41 @@ Phase 7K deliberately does **not** implement general memory SSA or assume arbitr
 
 The SSA/value-fact/simplification state is derived on demand and is not persisted in `.ndsre`. Phase 7K therefore introduces no schema migration, no new runtime dependency, no second decoder, and no external decompiler process.
 
+## Phase 7L type and structure recovery boundary
+
+Phase 7L is independently authored toolkit code over the Phase 7K SSA/value-fact layer. It adds
+canonical SSA access-path normalization, pointer-use/type evidence, local structure candidate
+formation, limited integer width/signedness inference, explicit field-address IR, typed pseudo-C,
+and bounded direct-call type propagation.
+
+External projects and literature were used only as architectural/reference material:
+
+- **Ghidra** informed the high-level separation of machine storage/value identity from datatype
+  identity and the concept of structure components keyed by byte offsets. Its Apache-2.0 source
+  was not copied, translated, or linked into Phase 7L.
+- **Retypd / binary type inference research** informed the general idea of treating recovered
+  types as constraints/evidence rather than one-shot guesses. Phase 7L does not implement or port
+  Retypd's polymorphic subtype solver, and GPL-family implementation source remains reference-only.
+- **Structure-recovery literature** informed the broad base-plus-index-plus-offset evidence model
+  used to identify possible object bases and fields. The toolkit's normalizer, conflict rules,
+  candidate model, synthetic naming, and propagation implementation are independently authored.
+
+Phase 7L deliberately does not perform general alias analysis, arbitrary memory SSA, union or
+bitfield recovery, C++ class/vtable recovery, enum recovery, or unrestricted symbolic execution.
+Ambiguous pointer roots, negative offsets, indexed accesses that do not prove a direct field,
+overlapping incompatible fields, and ambiguous overlay call targets retain conservative fallback
+rather than guessed source semantics.
+
+Recovered structures and types are derived on demand and are not persisted into `.ndsre`.
+Phase 7L therefore adds no schema migration, no new runtime dependency, no second decoder, no
+external decompiler process, and no emulator integration. The public decompiler service continues
+to read persisted toolkit-owned evidence and renders the derived result without writing project
+state.
+
+The Phase 7L branch audit found changes only in decompiler source, decompiler tests, and Phase 7L
+documentation. It did not modify `analysis/decoder.py`, project schema code, runtime/orchestration
+code, dependency metadata, or game-specific policy.
+
 ## Phase 7J investigation/prioritization boundary
 
 Phase 7J is independently authored toolkit code that combines existing toolkit-owned evidence rather than adding a new decoder, emulator integration, symbolic executor, decompiler, or persistence layer. It reads persisted `.ndsre` functions, CFG instruction semantics, strings, xrefs, symbols, and annotations through the public project API; optional runtime evidence is obtained by delegating to the existing Phase 7H2 `.ndstrace` comparison service; optional pseudo-C context is obtained by delegating to the existing Phase 7I decompiler service.
@@ -172,6 +207,7 @@ Phase 7J is read-only: it adds no `.ndsre` or `.ndstrace` schema migration, pers
 - Phase 7I changes neither `.ndsre` schema nor runtime-analysis behavior and persists no generated pseudo-C;
 - Phase 7J changes neither `.ndsre` nor `.ndstrace` schema, persists no investigation ranking, and reuses the existing Phase 7H2 differential and Phase 7I decompiler boundaries;
 - Phase 7K adds derived SSA/value-fact/simplification state only; it changes neither persistence schema nor runtime dependencies and preserves Capstone confinement to the decoder;
+- Phase 7L adds derived type/pointer/structure evidence and typed rendering only; it changes neither persistence schema nor dependencies, and ambiguous layouts/call targets fall back conservatively;
 - the repository contains source, tests, documentation, schemas, and synthetic/headless test harness material, not commercial ROMs or extracted copyrighted game assets;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems.
 
