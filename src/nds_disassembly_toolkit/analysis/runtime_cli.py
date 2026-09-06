@@ -1169,10 +1169,11 @@ def _bind_managed_backend_runtime(
     backend: object,
     record: RuntimeSessionRecord,
     driver: X11HostDriver,
+    debugger: object | None = None,
 ) -> None:
     bind = getattr(backend, "bind_managed_session", None)
     if callable(bind):
-        bind(record, driver)
+        bind(record, driver, debugger)
 
 
 @contextmanager
@@ -1206,13 +1207,14 @@ def _scenario_context(
     )
     if needs_x11:
         host_driver = _owned_x11_driver(record)
-        _bind_managed_backend_runtime(backend, record, host_driver)
     debugger = backend.connect_debugger(
         cpu=record.cpu,
         host=record.debugger_host,
         port=record.debugger_port,
         timeout=5.0,
     )
+    if host_driver is not None:
+        _bind_managed_backend_runtime(backend, record, host_driver, debugger)
     try:
         yield _ManagedScenarioContext(
             record,
@@ -1348,33 +1350,46 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 "managed emulator process ownership could not be proven"
             )
         backend = _managed_backend(record.emulator)
+        debugger: object | None = None
         if record.emulator is EmulatorKind.DESMUME:
             driver = _owned_x11_driver(record)
-            _bind_managed_backend_runtime(backend, record, driver)
-        context = CheckpointContext(
-            checkpoint_root=record.session_root / "checkpoints",
-            emulator=record.emulator,
-            rom_sha256=record.rom_sha256,
-            backend=backend,
-        )
-        checkpoint_path = context.checkpoint_root / arguments.name
-        if arguments.runtime_checkpoint_command == "save":
-            checkpoint_path = create_checkpoint(context, arguments.name)
-            metadata = validate_checkpoint(checkpoint_path, context)
-            _write_json(
-                _checkpoint_metadata_json(metadata, checkpoint_path),
-                arguments.output,
+            debugger = backend.connect_debugger(
+                cpu=record.cpu,
+                host=record.debugger_host,
+                port=record.debugger_port,
+                timeout=5.0,
             )
-            return 0
-        if arguments.runtime_checkpoint_command == "restore":
-            restore_checkpoint(context, checkpoint_path)
-            metadata = validate_checkpoint(checkpoint_path, context)
-            _write_json(
-                _checkpoint_metadata_json(metadata, checkpoint_path),
-                arguments.output,
+            _bind_managed_backend_runtime(backend, record, driver, debugger)
+        try:
+            context = CheckpointContext(
+                checkpoint_root=record.session_root / "checkpoints",
+                emulator=record.emulator,
+                rom_sha256=record.rom_sha256,
+                backend=backend,
             )
-            return 0
-        raise ValueError("runtime checkpoint requires save or restore")
+            checkpoint_path = context.checkpoint_root / arguments.name
+            if arguments.runtime_checkpoint_command == "save":
+                checkpoint_path = create_checkpoint(context, arguments.name)
+                metadata = validate_checkpoint(checkpoint_path, context)
+                _write_json(
+                    _checkpoint_metadata_json(metadata, checkpoint_path),
+                    arguments.output,
+                )
+                return 0
+            if arguments.runtime_checkpoint_command == "restore":
+                restore_checkpoint(context, checkpoint_path)
+                metadata = validate_checkpoint(checkpoint_path, context)
+                _write_json(
+                    _checkpoint_metadata_json(metadata, checkpoint_path),
+                    arguments.output,
+                )
+                return 0
+            raise ValueError("runtime checkpoint requires save or restore")
+        finally:
+            if debugger is not None:
+                close = getattr(debugger, "close", None)
+                if callable(close):
+                    close()
 
 
     if command == "matrix":
