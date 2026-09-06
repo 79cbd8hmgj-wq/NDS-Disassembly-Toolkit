@@ -14,6 +14,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     DecompiledBlock,
     DecompiledFunction,
     DecompilerExpression,
+    DecompilerStatement,
     DecompilerVariable,
     DecompilerVariableKind,
     MemoryReadExpression,
@@ -201,7 +202,7 @@ def _lower_expression(
 def _target_expression(
     target: SSAValue,
     context: _LoweringContext,
-):
+) -> VariableExpression | RegisterExpression:
     storage = target.storage
     if storage.kind is SSAStorageKind.REGISTER:
         assert storage.register is not None
@@ -215,7 +216,7 @@ def _target_expression(
 def _lower_statement(
     statement: SSAStatement,
     context: _LoweringContext,
-):
+) -> DecompilerStatement:
     if isinstance(statement, SSAAssignmentStatement):
         return AssignmentStatement(
             _target_expression(statement.target, context),
