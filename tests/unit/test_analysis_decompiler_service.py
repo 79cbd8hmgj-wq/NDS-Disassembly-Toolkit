@@ -144,3 +144,102 @@ def test_renderer_and_service_are_public_analysis_exports() -> None:
 
     assert public_decompile is decompile_function
     assert callable(public_render)
+
+
+
+def test_decompile_service_runs_ssa_cleanup_before_rendering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nds_disassembly_toolkit.analysis.decompiler.service as service_module
+    from nds_disassembly_toolkit.analysis.decompiler.model import (
+        AssignmentStatement,
+        BinaryExpression,
+        BinaryOperator,
+        ConstantExpression,
+        DecompiledBlock,
+        DecompiledFunction,
+        DecompilerVariable,
+        DecompilerVariableKind,
+        RegisterExpression,
+        ReturnStatement,
+        SourceRef,
+        VariableExpression,
+    )
+    from nds_disassembly_toolkit.analysis.model import Register
+
+    root = tmp_path / "ssa-cleanup.ndsre"
+    _store_project(root)
+
+    arg0 = DecompilerVariable(
+        "arg0",
+        DecompilerVariableKind.ARGUMENT,
+        register=Register.R0,
+    )
+    source0 = (SourceRef(BASE, InstructionSet.ARM),)
+    source1 = (SourceRef(BASE + 4, InstructionSet.ARM),)
+    source2 = (SourceRef(BASE + 8, InstructionSet.ARM),)
+    lifted = DecompiledFunction(
+        "arm9",
+        BASE,
+        InstructionSet.ARM,
+        "UserEntry",
+        (arg0,),
+        (),
+        (
+            DecompiledBlock(
+                BASE,
+                InstructionSet.ARM,
+                (
+                    AssignmentStatement(
+                        RegisterExpression(Register.R1, source0),
+                        VariableExpression(arg0, source0),
+                        source0,
+                    ),
+                    AssignmentStatement(
+                        RegisterExpression(Register.R2, source1),
+                        BinaryExpression(
+                            BinaryOperator.ADD,
+                            RegisterExpression(Register.R1, source1),
+                            ConstantExpression(4, source1),
+                            source1,
+                        ),
+                        source1,
+                    ),
+                    ReturnStatement(
+                        RegisterExpression(Register.R2, source2),
+                        source2,
+                    ),
+                ),
+                (),
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(
+        service_module,
+        "lift_function",
+        lambda project, function, cfg, flow, names: lifted,
+    )
+
+    with AnalysisProject.open(root, read_only=True) as project:
+        result = service_module.decompile_function(
+            project,
+            "arm9",
+            BASE,
+            InstructionSet.ARM,
+        )
+
+    assert len(result.ir.blocks[0].statements) == 1
+    returned = result.ir.blocks[0].statements[0]
+    assert isinstance(returned, ReturnStatement)
+    assert isinstance(returned.value, BinaryExpression)
+    assert isinstance(returned.value.left, VariableExpression)
+    assert returned.value.left.variable.name == "arg0"
+    assert isinstance(returned.value.right, ConstantExpression)
+    assert returned.value.right.value == 4
+    assert result.pseudo_c == (
+        "uint32_t UserEntry(uint32_t arg0) {\n"
+        "    return (arg0 + 4);\n"
+        "}\n"
+    )
