@@ -1084,6 +1084,13 @@ def run_scenario(
     *,
     journal_path: Path,
 ) -> ScenarioResult:
+    if definition.checkpoint is not None:
+        try:
+            _invoke_context(context, "restore_checkpoint", definition.checkpoint)
+        except Exception as exc:
+            raise RuntimeRecoveryError(
+                f"failed to restore initial checkpoint {definition.checkpoint}"
+            ) from exc
     journal = _initial_journal(definition)
     store_journal(journal_path, journal)
     return _run_journaled_steps(
