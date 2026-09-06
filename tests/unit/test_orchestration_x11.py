@@ -128,7 +128,7 @@ def test_x11_driver_uses_argument_arrays_for_key_input(
 
     assert calls == [
         ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
-        ["/usr/bin/xdotool", "key", "z"],
+        ["/usr/bin/xdotool", "key", "--window", "0xabc", "z"],
     ]
 
 
@@ -459,13 +459,13 @@ def test_x11_driver_sends_explicit_owned_key_down_and_up(
 
     assert calls == [
         ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
-        ["/usr/bin/xdotool", "keydown", "Shift_R"],
+        ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "Shift_R"],
         ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
-        ["/usr/bin/xdotool", "keydown", "F1"],
+        ["/usr/bin/xdotool", "keydown", "--window", "0xabc", "F1"],
         ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
-        ["/usr/bin/xdotool", "keyup", "F1"],
+        ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "F1"],
         ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
-        ["/usr/bin/xdotool", "keyup", "Shift_R"],
+        ["/usr/bin/xdotool", "keyup", "--window", "0xabc", "Shift_R"],
     ]
 
 
