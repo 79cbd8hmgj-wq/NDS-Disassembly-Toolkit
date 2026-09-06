@@ -171,12 +171,16 @@ class X11HostDriver:
         except ValueError:
             return None
 
-    def _require_owned_window(self, session: RuntimeSessionRecord) -> str:
+    def window_is_owned(self, session: RuntimeSessionRecord) -> bool:
         pid = session.pid
         window_id = session.window_id
         if pid is None or window_id is None:
-            raise RuntimeInputError("managed session has no owned emulator window")
-        if self._window_pid(window_id) != pid:
+            return False
+        return self._window_pid(window_id) == pid
+
+    def _require_owned_window(self, session: RuntimeSessionRecord) -> str:
+        window_id = session.window_id
+        if window_id is None or not self.window_is_owned(session):
             raise RuntimeInputError("window is not owned by the managed emulator process")
         return window_id
 
