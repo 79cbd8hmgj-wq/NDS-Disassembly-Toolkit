@@ -55,6 +55,7 @@ _BREAKPOINT_KIND_TO_RSP = {
     BreakpointKind.ACCESS: 4,
 }
 _TRAP_SIGNAL = 5
+_T = TypeVar("_T")
 _HostActionResult = TypeVar("_HostActionResult")
 _EXPECTED_TRAP_KINDS = frozenset(
     {
