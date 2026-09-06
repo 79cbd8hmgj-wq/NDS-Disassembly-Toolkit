@@ -61,3 +61,62 @@ def test_runtime_errors_share_toolkit_error_boundary() -> None:
     assert issubclass(RuntimeProtocolError, RuntimeAnalysisError)
     assert issubclass(RuntimeTimeoutError, RuntimeAnalysisError)
     assert issubclass(RuntimeTargetStateError, RuntimeAnalysisError)
+
+
+
+def test_phase_7h3_orchestration_public_exports_are_available() -> None:
+    import nds_disassembly_toolkit.analysis.orchestration as orchestration
+
+    required = (
+        "SESSION_SCHEMA_VERSION",
+        "CHECKPOINT_SCHEMA_VERSION",
+        "SCENARIO_SCHEMA_VERSION",
+        "JOURNAL_SCHEMA_VERSION",
+        "MATRIX_SCHEMA_VERSION",
+        "EmulatorKind",
+        "RuntimeSessionRecord",
+        "DSButton",
+        "DSPoint",
+        "TouchTap",
+        "TouchDrag",
+        "TouchFlick",
+        "CheckpointContext",
+        "CheckpointMetadata",
+        "create_checkpoint",
+        "validate_checkpoint",
+        "restore_checkpoint",
+        "PredicateObservation",
+        "PcEquals",
+        "PcInRange",
+        "RegisterEquals",
+        "MemoryEquals",
+        "MemoryMaskedEquals",
+        "RuntimeMemoryWrite",
+        "apply_guarded_write",
+        "ParameterReference",
+        "ScenarioDefinition",
+        "ScenarioJournal",
+        "JournalStepState",
+        "load_scenario",
+        "run_scenario",
+        "resume_scenario",
+        "AcceptanceCase",
+        "AcceptanceMatrix",
+        "AcceptanceCaseResult",
+        "AcceptanceMatrixResult",
+        "load_matrix",
+        "run_acceptance_matrix",
+        "RuntimeOrchestrationError",
+        "RuntimeEnvironmentError",
+        "RuntimeLaunchError",
+        "RuntimeOwnershipError",
+        "RuntimeDisplayError",
+        "RuntimeInputError",
+        "RuntimeCheckpointError",
+        "RuntimeScenarioError",
+        "RuntimeRecoveryError",
+    )
+    for name in required:
+        assert hasattr(orchestration, name), name
+
+    assert not hasattr(orchestration, "X11HostDriver")
