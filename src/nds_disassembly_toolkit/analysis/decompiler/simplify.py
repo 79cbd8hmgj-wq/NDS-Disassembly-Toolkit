@@ -25,6 +25,7 @@ from nds_disassembly_toolkit.analysis.decompiler.ssa import (
     SSAReferenceExpression,
     SSAReturnStatement,
     SSAStatement,
+    SSAStorage,
     SSAUnaryExpression,
     SSAValue,
     build_def_use_index,
@@ -252,7 +253,7 @@ def _rewrite_statement(
 def _replacement_phi_value(
     value: SSAValue | None,
     replacements: dict[SSAValue, SSAExpression],
-    expected_storage: object,
+    expected_storage: SSAStorage,
 ) -> SSAValue | None:
     if value is None:
         return None
@@ -330,7 +331,6 @@ def _propagation_pass(function: SSAFunction) -> SSAFunction:
     index = build_def_use_index(function)
     replacements: dict[SSAValue, SSAExpression] = {}
     removed_assignments: set[SSAValue] = set()
-    targets_with_phi_uses: set[SSAValue] = set()
 
     for block in function.blocks:
         for statement in block.statements:
@@ -356,9 +356,7 @@ def _propagation_pass(function: SSAFunction) -> SSAFunction:
                 continue
             if is_copy or is_unconditional_value or len(uses) <= 1:
                 replacements[statement.target] = value
-                if has_phi_use:
-                    targets_with_phi_uses.add(statement.target)
-                else:
+                if not has_phi_use:
                     removed_assignments.add(statement.target)
 
     removed_phis: set[SSAValue] = set()
