@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -29,6 +30,14 @@ from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmu
 from nds_disassembly_toolkit.analysis.orchestration.doctor import (
     discover_emulator_executable,
     run_doctor,
+)
+from nds_disassembly_toolkit.analysis.orchestration.input import (
+    DSButton,
+    DSPoint,
+    ScreenLayoutProfile,
+    ScreenViewport,
+    WindowGeometry,
+    map_touch_point,
 )
 from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import MelonDSBackend
 from nds_disassembly_toolkit.analysis.orchestration.process import (
@@ -993,10 +1002,13 @@ class _ManagedScenarioContext:
         record: RuntimeSessionRecord,
         backend: Any,
         debugger: Any,
+        *,
+        host_driver: Any | None = None,
     ) -> None:
         self.record = record
         self.backend = backend
         self.debugger = debugger
+        self.host_driver = host_driver
         self.session_root = record.session_root
 
     def snapshot(self) -> RuntimeSnapshot:
@@ -1017,29 +1029,55 @@ class _ManagedScenarioContext:
     def window_ready(self) -> bool:
         return self.record.window_id is not None and self.record.display is not None
 
-    def press_button(self, button: object) -> None:
-        del button
-        raise RuntimeScenarioError(
-            "managed button input is unavailable for this backend/session"
-        )
+    def _require_host_driver(self) -> Any:
+        if self.host_driver is None:
+            raise RuntimeScenarioError(
+                "managed host input is unavailable for this backend/session"
+            )
+        return self.host_driver
 
-    def touch_tap(self, point: object) -> None:
-        del point
-        raise RuntimeScenarioError(
-            "managed touchscreen input is unavailable for this backend/session"
-        )
+    def _mapped_touch_point(self, point: DSPoint) -> tuple[int, int]:
+        driver = self._require_host_driver()
+        geometry = cast(WindowGeometry, driver.window_geometry(self.record))
+        profile = cast(ScreenLayoutProfile, self.backend.layout_profile(geometry))
+        return map_touch_point(point, profile.lower_screen)
 
-    def touch_drag(self, start: object, end: object, duration: float) -> None:
-        del start, end, duration
-        raise RuntimeScenarioError(
-            "managed touchscreen input is unavailable for this backend/session"
-        )
+    def press_button(self, button: DSButton) -> None:
+        driver = self._require_host_driver()
+        host_key = cast(str, self.backend.host_key_for(button))
+        driver.send_key(self.record, host_key)
 
-    def touch_flick(self, start: object, end: object, duration: float) -> None:
-        del start, end, duration
-        raise RuntimeScenarioError(
-            "managed touchscreen input is unavailable for this backend/session"
-        )
+    def touch_tap(self, point: DSPoint) -> None:
+        driver = self._require_host_driver()
+        x, y = self._mapped_touch_point(point)
+        driver.move_pointer(self.record, x, y)
+        driver.pointer_down(self.record)
+        driver.pointer_up(self.record)
+
+    def _touch_motion(
+        self,
+        start: DSPoint,
+        end: DSPoint,
+        duration: float,
+    ) -> None:
+        if duration <= 0:
+            raise RuntimeScenarioError("touch gesture duration must be positive")
+        driver = self._require_host_driver()
+        start_x, start_y = self._mapped_touch_point(start)
+        end_x, end_y = self._mapped_touch_point(end)
+        driver.move_pointer(self.record, start_x, start_y)
+        driver.pointer_down(self.record)
+        try:
+            time.sleep(duration)
+            driver.move_pointer(self.record, end_x, end_y)
+        finally:
+            driver.pointer_up(self.record)
+
+    def touch_drag(self, start: DSPoint, end: DSPoint, duration: float) -> None:
+        self._touch_motion(start, end, duration)
+
+    def touch_flick(self, start: DSPoint, end: DSPoint, duration: float) -> None:
+        self._touch_motion(start, end, duration)
 
     def _checkpoint_context(self) -> CheckpointContext:
         return CheckpointContext(
@@ -1119,6 +1157,7 @@ def _scenario_context(
     backend = _managed_backend(record.emulator)
     capabilities = backend.capabilities
     required_capabilities = _scenario_capabilities(definition)
+    host_driver: X11HostDriver | None = None
     for capability in sorted(required_capabilities):
         if not hasattr(capabilities, capability):
             raise RuntimeScenarioError(f"unknown required capability: {capability}")
@@ -1137,6 +1176,7 @@ def _scenario_context(
             raise RuntimeScenarioError(
                 "managed UI scenario window ownership could not be proven"
             )
+        host_driver = driver
     debugger = backend.connect_debugger(
         cpu=record.cpu,
         host=record.debugger_host,
@@ -1144,7 +1184,12 @@ def _scenario_context(
         timeout=5.0,
     )
     try:
-        yield _ManagedScenarioContext(record, backend, debugger)
+        yield _ManagedScenarioContext(
+            record,
+            backend,
+            debugger,
+            host_driver=host_driver,
+        )
     finally:
         close = getattr(debugger, "close", None)
         if callable(close):
