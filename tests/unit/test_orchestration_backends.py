@@ -193,10 +193,18 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
     class Debugger:
         def __init__(self) -> None:
             self.host_actions = 0
+            self.interrupts = 0
+            self.stops = 0
 
-        def run_host_action(self, action: object) -> object:
+        def begin_continue(self) -> None:
             self.host_actions += 1
-            return action()
+
+        def interrupt(self) -> None:
+            self.interrupts += 1
+
+        def wait_for_stop(self) -> object:
+            self.stops += 1
+            return object()
 
     host = Host()
     debugger = Debugger()
@@ -213,6 +221,8 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
         ("up", "Shift_R"),
     ]
     assert debugger.host_actions == 1
+    assert debugger.interrupts == 1
+    assert debugger.stops == 1
 
     destination.write_bytes(b"restored-state")
     backend.load_state(destination)
@@ -230,6 +240,8 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
         ("key", "F1"),
     ]
     assert debugger.host_actions == 3
+    assert debugger.interrupts == 3
+    assert debugger.stops == 3
 
 
 def test_desmume_state_requires_bound_managed_session(tmp_path: Path) -> None:
