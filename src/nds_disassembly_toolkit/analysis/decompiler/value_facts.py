@@ -455,7 +455,7 @@ def analyze_value_facts(
         changed = False
 
         for phi in phis:
-            incoming = tuple(
+            incoming_facts = tuple(
                 (
                     ValueFacts.unknown()
                     if item.value is None
@@ -463,7 +463,7 @@ def analyze_value_facts(
                 )
                 for item in phi.inputs
             )
-            updated = _join_facts(incoming)
+            updated = _join_facts(incoming_facts)
             if updated != facts_by_value[phi.output]:
                 facts_by_value[phi.output] = updated
                 changed = True
