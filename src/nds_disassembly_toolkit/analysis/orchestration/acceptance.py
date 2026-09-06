@@ -488,6 +488,11 @@ def run_acceptance_matrix(
         scenario.checkpoint.encode("utf-8")
     ).hexdigest()
 
+    resolved_cases = {
+        case.id: _resolve_case_scenario(scenario, case.parameters)
+        for case in matrix.cases
+    }
+
     results: list[AcceptanceCaseResult] = []
     saw_case_failure = False
     result_path: Path | None = None
@@ -519,7 +524,7 @@ def run_acceptance_matrix(
             results.append(prior_case)
             continue
 
-        resolved_scenario = _resolve_case_scenario(scenario, case.parameters)
+        resolved_scenario = resolved_cases[case.id]
         case_root = context.session_root / "cases" / case.id
         case_root.mkdir(parents=True, exist_ok=True)
 
