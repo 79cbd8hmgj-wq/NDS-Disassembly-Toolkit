@@ -1099,6 +1099,15 @@ def _record_merge(
     return merge_recovered_types(left, right)
 
 
+def _accumulate_type(
+    existing: RecoveredType,
+    candidate: RecoveredType,
+) -> tuple[RecoveredType, tuple[str, ...]]:
+    # UNKNOWN is absence of precision, not evidence that can erase a more
+    # precise fact discovered by another constraint in the same iteration.
+    return merge_recovered_types(existing, candidate)
+
+
 def propagate_prototypes(
     functions: tuple[SSAFunction, ...],
     environments: tuple[LocalTypeEnvironment, ...],
@@ -1221,8 +1230,29 @@ def propagate_prototypes(
                     next_blocked_values.add(value_key)
                     next_conflicts[identity].update(merge_conflicts)
                     break
-                next_return_types[identity] = merged
-                next_value_types[value_key] = merged
+                accumulated_return, return_conflicts = _accumulate_type(
+                    next_return_types[identity],
+                    merged,
+                )
+                accumulated_value, value_conflicts = _accumulate_type(
+                    next_value_types.get(value_key, UnknownType()),
+                    merged,
+                )
+                accumulated_conflicts = (
+                    *return_conflicts,
+                    *value_conflicts,
+                )
+                if accumulated_conflicts:
+                    next_return_types[identity] = UnknownType()
+                    next_value_types[value_key] = UnknownType()
+                    next_blocked_returns.add(identity)
+                    next_blocked_values.add(value_key)
+                    next_conflicts[identity].update(
+                        accumulated_conflicts
+                    )
+                    break
+                next_return_types[identity] = accumulated_return
+                next_value_types[value_key] = accumulated_value
 
         for constraint in calls:
             caller_function = function_map[constraint.caller]
@@ -1291,12 +1321,40 @@ def propagate_prototypes(
                     caller_value_key is not None
                     and caller_value_key not in blocked_values
                 ):
-                    next_value_types[caller_value_key] = merged
+                    accumulated, accumulation_conflicts = _accumulate_type(
+                        next_value_types.get(
+                            caller_value_key,
+                            UnknownType(),
+                        ),
+                        merged,
+                    )
+                    if accumulation_conflicts:
+                        next_value_types[caller_value_key] = UnknownType()
+                        next_blocked_values.add(caller_value_key)
+                        next_conflicts[constraint.caller].update(
+                            accumulation_conflicts
+                        )
+                    else:
+                        next_value_types[caller_value_key] = accumulated
                 if (
                     callee_value_key is not None
                     and callee_value_key not in blocked_values
                 ):
-                    next_value_types[callee_value_key] = merged
+                    accumulated, accumulation_conflicts = _accumulate_type(
+                        next_value_types.get(
+                            callee_value_key,
+                            UnknownType(),
+                        ),
+                        merged,
+                    )
+                    if accumulation_conflicts:
+                        next_value_types[callee_value_key] = UnknownType()
+                        next_blocked_values.add(callee_value_key)
+                        next_conflicts[constraint.callee].update(
+                            accumulation_conflicts
+                        )
+                    else:
+                        next_value_types[callee_value_key] = accumulated
 
             result = constraint.statement.result
             if result is None:
@@ -1341,9 +1399,31 @@ def propagate_prototypes(
                 continue
 
             if result_key not in blocked_values:
-                next_value_types[result_key] = merged
+                accumulated_result, result_conflicts = _accumulate_type(
+                    next_value_types.get(result_key, UnknownType()),
+                    merged,
+                )
+                if result_conflicts:
+                    next_value_types[result_key] = UnknownType()
+                    next_blocked_values.add(result_key)
+                    next_conflicts[constraint.caller].update(
+                        result_conflicts
+                    )
+                else:
+                    next_value_types[result_key] = accumulated_result
             if constraint.callee not in blocked_returns:
-                next_return_types[constraint.callee] = merged
+                accumulated_return, return_conflicts = _accumulate_type(
+                    next_return_types[constraint.callee],
+                    merged,
+                )
+                if return_conflicts:
+                    next_return_types[constraint.callee] = UnknownType()
+                    next_blocked_returns.add(constraint.callee)
+                    next_conflicts[constraint.callee].update(
+                        return_conflicts
+                    )
+                else:
+                    next_return_types[constraint.callee] = accumulated_return
 
         unchanged = (
             next_value_types == value_types
