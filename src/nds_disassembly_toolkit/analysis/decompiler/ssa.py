@@ -2,12 +2,36 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TypeAlias
 
 from nds_disassembly_toolkit.analysis.decompiler.model import (
+    AddressExpression,
+    AssignmentStatement,
+    BinaryExpression,
+    BranchStatement,
+    CallExpression,
+    CallStatement,
+    CompareExpression,
+    ConstantExpression,
     DecompiledFunction,
+    DecompilerVariable,
+    DecompilerVariableKind,
+    MemoryReadExpression,
+    MemoryWriteStatement,
+    RegisterExpression,
+    ReturnStatement,
     SourceRef,
+    UnaryExpression,
+    UnknownExpression,
+    UnknownStatement,
+    VariableExpression,
 )
-from nds_disassembly_toolkit.analysis.model import CFGEdgeKind, Register
+from nds_disassembly_toolkit.analysis.model import (
+    CFGEdge,
+    CFGEdgeKind,
+    InstructionSet,
+    Register,
+)
 
 _U32_MAX = 0xFFFFFFFF
 
@@ -258,4 +282,464 @@ def compute_dominator_info(function: DecompiledFunction) -> DominatorInfo:
             (address, frontiers[address])
             for address in reachable
         ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SSAReferenceExpression:
+    storage: SSAStorage
+    value: SSAValue | None
+    source: tuple[SourceRef, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SSAUnaryExpression:
+    operator: object
+    operand: SSAExpression
+    source: tuple[SourceRef, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SSABinaryExpression:
+    operator: object
+    left: SSAExpression
+    right: SSAExpression
+    source: tuple[SourceRef, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SSACompareExpression:
+    condition: object
+    left: SSAExpression
+    right: SSAExpression
+    source: tuple[SourceRef, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SSAMemoryReadExpression:
+    address: SSAExpression
+    width: int
+    source: tuple[SourceRef, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SSACallExpression:
+    name: str
+    target_address: int
+    target_instruction_set: InstructionSet
+    target_component: str | None
+    arguments: tuple[SSAExpression, ...] = ()
+    source: tuple[SourceRef, ...] = ()
+
+
+SSAExpression: TypeAlias = (
+    ConstantExpression
+    | AddressExpression
+    | UnknownExpression
+    | SSAReferenceExpression
+    | SSAUnaryExpression
+    | SSABinaryExpression
+    | SSACompareExpression
+    | SSAMemoryReadExpression
+    | SSACallExpression
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SSAAssignmentStatement:
+    target: SSAValue
+    value: SSAExpression
+    source: tuple[SourceRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SSAMemoryWriteStatement:
+    address: SSAExpression
+    value: SSAExpression
+    width: int
+    source: tuple[SourceRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SSACallStatement:
+    call: SSACallExpression
+    source: tuple[SourceRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SSAReturnStatement:
+    value: SSAExpression | None
+    source: tuple[SourceRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SSABranchStatement:
+    condition: SSAExpression | None
+    target_address: int
+    target_instruction_set: InstructionSet
+    source: tuple[SourceRef, ...]
+
+
+SSAStatement: TypeAlias = (
+    SSAAssignmentStatement
+    | SSAMemoryWriteStatement
+    | SSACallStatement
+    | SSAReturnStatement
+    | SSABranchStatement
+    | UnknownStatement
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SSABlock:
+    address: int
+    instruction_set: InstructionSet
+    phis: tuple[PhiNode, ...]
+    statements: tuple[SSAStatement, ...]
+    edges: tuple[CFGEdge, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SSAFunction:
+    component: str
+    address: int
+    instruction_set: InstructionSet
+    name: str
+    parameters: tuple[DecompilerVariable, ...]
+    locals: tuple[DecompilerVariable, ...]
+    blocks: tuple[SSABlock, ...]
+    warnings: tuple[str, ...] = ()
+
+    def block(self, address: int) -> SSABlock:
+        for block in self.blocks:
+            if block.address == address:
+                return block
+        raise KeyError(f"SSA block 0x{address:08X} does not exist")
+
+
+def _storage_sort_key(storage: SSAStorage) -> tuple[int, str]:
+    if storage.kind is SSAStorageKind.REGISTER:
+        assert storage.register is not None
+        return (0, storage.register.value)
+    if storage.kind is SSAStorageKind.STACK:
+        assert storage.stack_offset is not None
+        return (1, f"{storage.stack_offset:+011d}")
+    assert storage.temporary_name is not None
+    return (2, storage.temporary_name)
+
+
+def _storage_for_variable(variable: DecompilerVariable) -> SSAStorage:
+    if variable.register is not None:
+        return SSAStorage(SSAStorageKind.REGISTER, register=variable.register)
+    if variable.stack_offset is not None:
+        return SSAStorage(SSAStorageKind.STACK, stack_offset=variable.stack_offset)
+    if variable.kind is DecompilerVariableKind.TEMPORARY:
+        return SSAStorage(SSAStorageKind.TEMPORARY, temporary_name=variable.name)
+    raise ValueError(f"variable {variable.name!r} has no promotable storage")
+
+
+def _storage_for_target(
+    target: VariableExpression | RegisterExpression,
+) -> SSAStorage:
+    if isinstance(target, RegisterExpression):
+        return SSAStorage(SSAStorageKind.REGISTER, register=target.register)
+    return _storage_for_variable(target.variable)
+
+
+def _current_value(
+    storage: SSAStorage,
+    stacks: dict[SSAStorage, list[SSAValue]],
+) -> SSAValue | None:
+    stack = stacks.get(storage)
+    return stack[-1] if stack else None
+
+
+def _rename_expression(
+    expression: object,
+    stacks: dict[SSAStorage, list[SSAValue]],
+) -> SSAExpression:
+    if isinstance(expression, ConstantExpression | AddressExpression | UnknownExpression):
+        return expression
+    if isinstance(expression, RegisterExpression):
+        storage = SSAStorage(SSAStorageKind.REGISTER, register=expression.register)
+        return SSAReferenceExpression(
+            storage,
+            _current_value(storage, stacks),
+            expression.source,
+        )
+    if isinstance(expression, VariableExpression):
+        storage = _storage_for_variable(expression.variable)
+        return SSAReferenceExpression(
+            storage,
+            _current_value(storage, stacks),
+            expression.source,
+        )
+    if isinstance(expression, UnaryExpression):
+        return SSAUnaryExpression(
+            expression.operator,
+            _rename_expression(expression.operand, stacks),
+            expression.source,
+        )
+    if isinstance(expression, BinaryExpression):
+        return SSABinaryExpression(
+            expression.operator,
+            _rename_expression(expression.left, stacks),
+            _rename_expression(expression.right, stacks),
+            expression.source,
+        )
+    if isinstance(expression, CompareExpression):
+        return SSACompareExpression(
+            expression.condition,
+            _rename_expression(expression.left, stacks),
+            _rename_expression(expression.right, stacks),
+            expression.source,
+        )
+    if isinstance(expression, MemoryReadExpression):
+        return SSAMemoryReadExpression(
+            _rename_expression(expression.address, stacks),
+            expression.width,
+            expression.source,
+        )
+    if isinstance(expression, CallExpression):
+        return SSACallExpression(
+            expression.name,
+            expression.target_address,
+            expression.target_instruction_set,
+            expression.target_component,
+            tuple(_rename_expression(argument, stacks) for argument in expression.arguments),
+            expression.source,
+        )
+    raise TypeError(f"unsupported decompiler expression: {type(expression).__name__}")
+
+
+def _definition_sites(
+    function: DecompiledFunction,
+    reachable: tuple[int, ...],
+) -> dict[SSAStorage, set[int]]:
+    reachable_set = set(reachable)
+    sites: dict[SSAStorage, set[int]] = {}
+    for block in function.blocks:
+        if block.address not in reachable_set:
+            continue
+        for statement in block.statements:
+            if not isinstance(statement, AssignmentStatement):
+                continue
+            storage = _storage_for_target(statement.target)
+            sites.setdefault(storage, set()).add(block.address)
+    return sites
+
+
+def _place_phi_storages(
+    info: DominatorInfo,
+    definition_sites: dict[SSAStorage, set[int]],
+) -> dict[int, set[SSAStorage]]:
+    placements: dict[int, set[SSAStorage]] = {
+        address: set() for address in info.reachable_blocks
+    }
+    for storage in sorted(definition_sites, key=_storage_sort_key):
+        work = list(sorted(definition_sites[storage], reverse=True))
+        queued = set(definition_sites[storage])
+        while work:
+            address = work.pop()
+            for frontier in info.frontier(address):
+                if storage in placements[frontier]:
+                    continue
+                placements[frontier].add(storage)
+                if frontier not in queued:
+                    queued.add(frontier)
+                    work.append(frontier)
+                    work.sort(reverse=True)
+    return placements
+
+
+def _dominator_children(info: DominatorInfo) -> dict[int, tuple[int, ...]]:
+    children: dict[int, list[int]] = {
+        address: [] for address in info.reachable_blocks
+    }
+    for address in info.reachable_blocks:
+        parent = info.idom(address)
+        if parent is not None:
+            children[parent].append(address)
+    return {
+        address: tuple(sorted(child_addresses))
+        for address, child_addresses in children.items()
+    }
+
+
+def _new_value(
+    storage: SSAStorage,
+    source: tuple[SourceRef, ...],
+    counters: dict[SSAStorage, int],
+) -> SSAValue:
+    version = counters.get(storage, 0)
+    counters[storage] = version + 1
+    return SSAValue(storage, version, source)
+
+
+def _rename_statement(
+    statement: object,
+    stacks: dict[SSAStorage, list[SSAValue]],
+    counters: dict[SSAStorage, int],
+    pushed: list[SSAStorage],
+) -> SSAStatement:
+    if isinstance(statement, AssignmentStatement):
+        value = _rename_expression(statement.value, stacks)
+        storage = _storage_for_target(statement.target)
+        target = _new_value(storage, statement.source, counters)
+        stacks.setdefault(storage, []).append(target)
+        pushed.append(storage)
+        return SSAAssignmentStatement(target, value, statement.source)
+    if isinstance(statement, MemoryWriteStatement):
+        return SSAMemoryWriteStatement(
+            _rename_expression(statement.address, stacks),
+            _rename_expression(statement.value, stacks),
+            statement.width,
+            statement.source,
+        )
+    if isinstance(statement, CallStatement):
+        call = _rename_expression(statement.call, stacks)
+        if not isinstance(call, SSACallExpression):
+            raise TypeError("call statement did not produce an SSA call expression")
+        return SSACallStatement(call, statement.source)
+    if isinstance(statement, ReturnStatement):
+        value = (
+            None
+            if statement.value is None
+            else _rename_expression(statement.value, stacks)
+        )
+        return SSAReturnStatement(value, statement.source)
+    if isinstance(statement, BranchStatement):
+        condition = (
+            None
+            if statement.condition is None
+            else _rename_expression(statement.condition, stacks)
+        )
+        return SSABranchStatement(
+            condition,
+            statement.target_address,
+            statement.target_instruction_set,
+            statement.source,
+        )
+    if isinstance(statement, UnknownStatement):
+        return statement
+    raise TypeError(f"unsupported decompiler statement: {type(statement).__name__}")
+
+
+def build_ssa_function(function: DecompiledFunction) -> SSAFunction:
+    info = compute_dominator_info(function)
+    reachable = set(info.reachable_blocks)
+    successors = _reachable_successors(function)
+    predecessors = _predecessors(info.reachable_blocks, successors)
+    definitions = _definition_sites(function, info.reachable_blocks)
+    phi_storages = _place_phi_storages(info, definitions)
+    children = _dominator_children(info)
+    blocks_by_address = {block.address: block for block in function.blocks}
+
+    counters: dict[SSAStorage, int] = {}
+    stacks: dict[SSAStorage, list[SSAValue]] = {}
+    renamed_statements: dict[int, tuple[SSAStatement, ...]] = {}
+    phi_outputs: dict[tuple[int, SSAStorage], SSAValue] = {}
+    phi_inputs: dict[
+        tuple[int, SSAStorage],
+        dict[int, SSAValue | None],
+    ] = {}
+
+    def rename_block(address: int) -> None:
+        pushed: list[SSAStorage] = []
+        for storage in sorted(phi_storages[address], key=_storage_sort_key):
+            output = _new_value(storage, (), counters)
+            phi_outputs[(address, storage)] = output
+            stacks.setdefault(storage, []).append(output)
+            pushed.append(storage)
+
+        block = blocks_by_address[address]
+        statements: list[SSAStatement] = []
+        for statement in block.statements:
+            statements.append(
+                _rename_statement(statement, stacks, counters, pushed)
+            )
+        renamed_statements[address] = tuple(statements)
+
+        for successor in successors[address]:
+            if successor not in reachable:
+                continue
+            for storage in sorted(
+                phi_storages[successor],
+                key=_storage_sort_key,
+            ):
+                phi_inputs.setdefault((successor, storage), {})[address] = (
+                    _current_value(storage, stacks)
+                )
+
+        for child in children[address]:
+            rename_block(child)
+
+        for storage in reversed(pushed):
+            stack = stacks[storage]
+            stack.pop()
+            if not stack:
+                stacks.pop(storage)
+
+    rename_block(function.address)
+
+    # Unreachable blocks are retained for conservative fallback rendering, but
+    # processed only after reachable SSA so they cannot perturb reachable versions.
+    for block in sorted(function.blocks, key=lambda candidate: candidate.address):
+        if block.address in reachable:
+            continue
+        local_stacks: dict[SSAStorage, list[SSAValue]] = {}
+        local_pushed: list[SSAStorage] = []
+        statements: list[SSAStatement] = []
+        for statement in block.statements:
+            statements.append(
+                _rename_statement(
+                    statement,
+                    local_stacks,
+                    counters,
+                    local_pushed,
+                )
+            )
+        renamed_statements[block.address] = tuple(statements)
+
+    result_blocks: list[SSABlock] = []
+    for block in sorted(function.blocks, key=lambda candidate: candidate.address):
+        phis: list[PhiNode] = []
+        if block.address in reachable:
+            for storage in sorted(
+                phi_storages[block.address],
+                key=_storage_sort_key,
+            ):
+                output = phi_outputs[(block.address, storage)]
+                incoming = phi_inputs.get((block.address, storage), {})
+                phis.append(
+                    PhiNode(
+                        output,
+                        tuple(
+                            PhiInput(
+                                predecessor,
+                                incoming.get(predecessor),
+                            )
+                            for predecessor in predecessors[block.address]
+                        ),
+                    )
+                )
+        result_blocks.append(
+            SSABlock(
+                block.address,
+                block.instruction_set,
+                tuple(phis),
+                renamed_statements[block.address],
+                block.edges,
+            )
+        )
+
+    return SSAFunction(
+        component=function.component,
+        address=function.address,
+        instruction_set=function.instruction_set,
+        name=function.name,
+        parameters=function.parameters,
+        locals=function.locals,
+        blocks=tuple(result_blocks),
+        warnings=function.warnings,
     )
