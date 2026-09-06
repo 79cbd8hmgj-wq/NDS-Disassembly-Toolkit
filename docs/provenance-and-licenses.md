@@ -190,6 +190,51 @@ The Phase 7L branch audit found changes only in decompiler source, decompiler te
 documentation. It did not modify `analysis/decoder.py`, project schema code, runtime/orchestration
 code, dependency metadata, or game-specific policy.
 
+## Phase 7M interprocedural prototype-recovery boundary
+
+Phase 7M is independently authored toolkit code over the existing Phase 7E, Phase 7K, and Phase
+7L models. It adds explicit SSA heritage for the ABI return register `r0`, immutable recovered
+function prototypes, parameter/return type merging, component-safe direct-call constraints,
+bounded fixed-point propagation, used call-result source lowering, project-wide read-only
+prototype orchestration, and typed signature/call-result rendering.
+
+External reverse-engineering projects and type-inference literature were used only as
+architectural/reference material:
+
+- **Ghidra** informed the general concept that function prototypes, parameter storage, return
+  storage, and datatype propagation are separate analysis concerns. No Ghidra decompiler or
+  prototype implementation source is copied, translated, linked, or vendored.
+- **RetDec** informed high-level interprocedural-analysis boundaries and the distinction between
+  local HLL recovery and call-graph-wide refinement. No RetDec implementation source is
+  incorporated.
+- **Retypd / binary type-inference literature** informed the general use of monotone constraints
+  and conservative type joins. Phase 7M does not port Retypd's solver or reuse GPL-family
+  implementation source.
+- **angr** remains architecture/reference material for calling-convention and function-analysis
+  concepts. Phase 7M does not import angr, execute angr analyses, or add it as a runtime
+  dependency.
+
+Phase 7M deliberately reuses the existing Phase 7E `FunctionSummary`/decompiler parameter
+locations rather than implementing a second calling-convention detector. It does not infer
+variadic arguments, indirect/function-pointer targets, C++ method conventions, arbitrary stack
+argument ordering, library signatures, or general alias relationships.
+
+A call participates in interprocedural prototype propagation only when its target resolves to a
+unique `(component, runtime_address, instruction_set)` identity. Component-less targets that are
+ambiguous across overlapping Nintendo DS overlays remain unlinked. Conflicting integer widths,
+pointer/integer evidence, incompatible return sites, and other unsafe merges remain
+unknown/conflicted rather than being coerced into a source type.
+
+Recovered prototypes, call-result value types, and project-wide propagation results are derived
+on demand. They are not persisted into `.ndsre`. The project-wide prototype service uses only
+public read-only `AnalysisProject` query APIs; `project decompile` opens the project read-only
+and passes the derived prototype context into the existing decompiler.
+
+The Phase 7M branch audit found changes only in decompiler source, the `project decompile`
+presentation hook, decompiler/CLI tests, and Phase 7M documentation. It did not modify
+`analysis/decoder.py`, project schema/storage code, runtime/orchestration code, dependency
+metadata, or game-specific policy.
+
 ## Phase 7J investigation/prioritization boundary
 
 Phase 7J is independently authored toolkit code that combines existing toolkit-owned evidence rather than adding a new decoder, emulator integration, symbolic executor, decompiler, or persistence layer. It reads persisted `.ndsre` functions, CFG instruction semantics, strings, xrefs, symbols, and annotations through the public project API; optional runtime evidence is obtained by delegating to the existing Phase 7H2 `.ndstrace` comparison service; optional pseudo-C context is obtained by delegating to the existing Phase 7I decompiler service.
@@ -208,6 +253,7 @@ Phase 7J is read-only: it adds no `.ndsre` or `.ndstrace` schema migration, pers
 - Phase 7J changes neither `.ndsre` nor `.ndstrace` schema, persists no investigation ranking, and reuses the existing Phase 7H2 differential and Phase 7I decompiler boundaries;
 - Phase 7K adds derived SSA/value-fact/simplification state only; it changes neither persistence schema nor runtime dependencies and preserves Capstone confinement to the decoder;
 - Phase 7L adds derived type/pointer/structure evidence and typed rendering only; it changes neither persistence schema nor dependencies, and ambiguous layouts/call targets fall back conservatively;
+- Phase 7M adds derived function prototypes, call-result SSA heritage, and read-only interprocedural type propagation only; it changes neither persistence schema nor dependencies, and ambiguous/indirect call targets remain conservative;
 - the repository contains source, tests, documentation, schemas, and synthetic/headless test harness material, not commercial ROMs or extracted copyrighted game assets;
 - Bakugan remains the owner of B6RE-specific evidence, addresses, patches, and gameplay systems.
 
