@@ -27,7 +27,11 @@ def test_project_decompile_automatically_supplies_prototype_analysis(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    project = object()
+    class ProjectStub:
+        def functions(self) -> tuple[object, ...]:
+            return ()
+
+    project = ProjectStub()
     prototype_analysis = object()
     output = tmp_path / "decompiled.c"
     observed: dict[str, object] = {}
