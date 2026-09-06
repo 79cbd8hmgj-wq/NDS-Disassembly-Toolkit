@@ -166,3 +166,12 @@ Before adding code based on an external NDS or reverse-engineering project:
 6. if a direct dependency or licensed code reuse is intentional, preserve required notices/attribution and review whether the toolkit's distribution license must change;
 7. add the source and decision to this document;
 8. keep commercial ROMs, extracted copyrighted assets, and rebuilt ROM images out of the repository.
+
+
+## DeSmuME interoperability target
+
+Phase 7H3 tests interoperability with the external DeSmuME emulator from the upstream `TASEmulators/desmume` project. The managed live-gate lineage is pinned to upstream release tag `release_0_9_13`.
+
+DeSmuME is GPL-licensed software and remains an external executable/interoperability target. The MIT-licensed NDS Disassembly Toolkit does not vendor, copy, link, or redistribute DeSmuME implementation source. The toolkit implements its own generic orchestration and shared GDB-RSP client and communicates with the external emulator through documented/process-level interfaces.
+
+No DeSmuME source code is incorporated into this repository. CI may clone/build the pinned upstream release solely to exercise interoperability against a disposable synthetic Nintendo DS target.
