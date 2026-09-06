@@ -583,12 +583,12 @@ def _rename_statement(
     pushed: list[SSAStorage],
 ) -> SSAStatement:
     if isinstance(statement, AssignmentStatement):
-        value = _rename_expression(statement.value, stacks)
+        assigned_value = _rename_expression(statement.value, stacks)
         storage = _storage_for_target(statement.target)
         target = _new_value(storage, statement.source, counters)
         stacks.setdefault(storage, []).append(target)
         pushed.append(storage)
-        return SSAAssignmentStatement(target, value, statement.source)
+        return SSAAssignmentStatement(target, assigned_value, statement.source)
     if isinstance(statement, MemoryWriteStatement):
         return SSAMemoryWriteStatement(
             _rename_expression(statement.address, stacks),
@@ -602,12 +602,12 @@ def _rename_statement(
             raise TypeError("call statement did not produce an SSA call expression")
         return SSACallStatement(call, statement.source)
     if isinstance(statement, ReturnStatement):
-        value = (
+        return_value = (
             None
             if statement.value is None
             else _rename_expression(statement.value, stacks)
         )
-        return SSAReturnStatement(value, statement.source)
+        return SSAReturnStatement(return_value, statement.source)
     if isinstance(statement, BranchStatement):
         condition = (
             None
