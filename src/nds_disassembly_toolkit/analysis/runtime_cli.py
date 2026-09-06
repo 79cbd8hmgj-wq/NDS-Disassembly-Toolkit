@@ -32,10 +32,6 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
     spawn_owned_process,
     stop_owned_process,
 )
-from nds_disassembly_toolkit.analysis.orchestration.x11 import (
-    X11HostDriver,
-    find_x11_helpers,
-)
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     CaptureTraceStep,
     ScenarioDefinition,
@@ -43,6 +39,10 @@ from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     load_scenario,
     resume_scenario,
     run_scenario,
+)
+from nds_disassembly_toolkit.analysis.orchestration.x11 import (
+    X11HostDriver,
+    find_x11_helpers,
 )
 from nds_disassembly_toolkit.analysis.project import AnalysisProject, LocationAnnotation
 from nds_disassembly_toolkit.analysis.runtime import (
