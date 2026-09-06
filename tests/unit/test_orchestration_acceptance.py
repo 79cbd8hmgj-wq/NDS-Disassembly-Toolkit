@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind
-from nds_disassembly_toolkit.analysis.orchestration.input import DSButton
 from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
     AcceptanceCase,
     AcceptanceMatrix,
     load_matrix,
     run_acceptance_matrix,
 )
+from nds_disassembly_toolkit.analysis.orchestration.input import DSButton
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     ButtonStep,
     ScenarioDefinition,
@@ -81,7 +81,7 @@ class MatrixFactory:
     restore_calls: list[str] = field(default_factory=list)
     run_count: int = 0
 
-    def __call__(self, case: AcceptanceCase) -> "MatrixContext":
+    def __call__(self, case: AcceptanceCase) -> MatrixContext:
         self.run_count += 1
         return MatrixContext(
             factory=self,
@@ -144,7 +144,7 @@ class RestoreFailureFactory:
     calls: int = 0
     restore_calls: list[str] = field(default_factory=list)
 
-    def __call__(self, case: AcceptanceCase) -> "RestoreFailureContext":
+    def __call__(self, case: AcceptanceCase) -> RestoreFailureContext:
         self.calls += 1
         return RestoreFailureContext(
             factory=self,
