@@ -24,6 +24,7 @@ from nds_disassembly_toolkit.analysis.decompiler.model import (
     StatementNode,
     StructuredFunction,
     StructuredNode,
+    SwitchNode,
     UnaryExpression,
     UnaryOperator,
     UnknownExpression,
@@ -193,6 +194,18 @@ def _statement_line(statement: object) -> str:
     raise TypeError(f"unsupported decompiler statement: {type(statement).__name__}")
 
 
+def _node_terminates(node: StructuredNode) -> bool:
+    if isinstance(node, StatementNode):
+        return isinstance(node.statement, ReturnStatement)
+    if isinstance(node, GotoNode):
+        return True
+    return False
+
+
+def _body_terminates(nodes: tuple[StructuredNode, ...]) -> bool:
+    return bool(nodes) and _node_terminates(nodes[-1])
+
+
 def _render_nodes(
     nodes: tuple[StructuredNode, ...],
     *,
@@ -229,6 +242,38 @@ def _render_nodes(
                 lines.extend(_render_nodes(node.body, indent=indent + 1))
                 lines.append(f"{prefix}}}")
             continue
+        if isinstance(node, SwitchNode):
+            lines.append(
+                f"{prefix}switch ({_render_expression(node.expression)}) {{"
+            )
+            case_prefix = "    " * (indent + 1)
+            body_indent = indent + 2
+            body_prefix = "    " * body_indent
+            for case in node.cases:
+                for value in case.values:
+                    lines.append(
+                        f"{case_prefix}case {_constant(value)}:"
+                    )
+                lines.extend(
+                    _render_nodes(
+                        case.body,
+                        indent=body_indent,
+                    )
+                )
+                if not _body_terminates(case.body):
+                    lines.append(f"{body_prefix}break;")
+            if node.default_body:
+                lines.append(f"{case_prefix}default:")
+                lines.extend(
+                    _render_nodes(
+                        node.default_body,
+                        indent=body_indent,
+                    )
+                )
+                if not _body_terminates(node.default_body):
+                    lines.append(f"{body_prefix}break;")
+            lines.append(f"{prefix}}}")
+            continue
         raise TypeError(f"unsupported structured node: {type(node).__name__}")
     return lines
 
@@ -245,6 +290,14 @@ def _contains_value_return(nodes: tuple[StructuredNode, ...]) -> bool:
             continue
         if isinstance(node, LoopNode) and _contains_value_return(node.body):
             return True
+        if isinstance(node, SwitchNode):
+            if any(
+                _contains_value_return(case.body)
+                for case in node.cases
+            ):
+                return True
+            if _contains_value_return(node.default_body):
+                return True
     return False
 
 
