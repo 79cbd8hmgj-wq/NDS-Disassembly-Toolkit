@@ -126,7 +126,10 @@ def test_x11_driver_uses_argument_arrays_for_key_input(
 
     driver.send_key(session, "z")
 
-    assert calls == [["/usr/bin/xdotool", "key", "--window", "0xabc", "z"]]
+    assert calls == [
+        ["/usr/bin/xdotool", "windowfocus", "--sync", "0xabc"],
+        ["/usr/bin/xdotool", "key", "z"],
+    ]
 
 
 
