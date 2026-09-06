@@ -9,6 +9,7 @@ from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind
 from nds_disassembly_toolkit.analysis.orchestration.input import DSButton, DSPoint
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     JournalStepState,
+    ParameterReference,
     ScenarioJournal,
     ScenarioJournalStep,
     load_journal,
@@ -168,3 +169,65 @@ def test_atomic_journal_failure_preserves_previous_valid_file(
 
     assert load_journal(path) == original
     assert not path.with_suffix(path.suffix + ".tmp").exists()
+
+
+
+def test_load_scenario_parses_explicit_parameter_references(tmp_path: Path) -> None:
+    payload = _scenario()
+    payload["steps"] = [
+        {
+            "type": "memory_write",
+            "address": "0x02100020",
+            "expected_before": {"parameter": "before"},
+            "replacement": {"parameter": "replacement"},
+        },
+        {
+            "type": "capture_snapshot",
+            "label": {"parameter": "snapshot_label"},
+        },
+        {
+            "type": "capture_trace",
+            "output": {"parameter": "trace_name"},
+            "steps": 1,
+        },
+        {
+            "type": "wait",
+            "condition": {
+                "type": "memory_equals",
+                "address": "0x02100000",
+                "bytes": {"parameter": "expected_memory"},
+            },
+            "timeout": 1.0,
+        },
+        {
+            "type": "assert",
+            "condition": {
+                "type": "register_equals",
+                "register": "r0",
+                "value": {"parameter": "expected_r0"},
+            },
+        },
+    ]
+
+    scenario = load_scenario(_write(tmp_path / "parameterized.json", payload))
+
+    assert scenario.steps[0].replacement == ParameterReference("replacement")
+    assert scenario.steps[0].expected_before == ParameterReference("before")
+    assert scenario.steps[1].label == ParameterReference("snapshot_label")
+    assert scenario.steps[2].output == ParameterReference("trace_name")
+    assert scenario.steps[3].condition.expected == ParameterReference("expected_memory")
+    assert scenario.steps[4].condition.expected == ParameterReference("expected_r0")
+
+
+def test_parameter_reference_rejects_arbitrary_object_shape(tmp_path: Path) -> None:
+    payload = _scenario()
+    payload["steps"] = [
+        {
+            "type": "memory_write",
+            "address": "0x02100020",
+            "replacement": {"parameter": "value", "script": "bad"},
+        }
+    ]
+
+    with pytest.raises(RuntimeScenarioError):
+        load_scenario(_write(tmp_path / "bad-parameter.json", payload))
