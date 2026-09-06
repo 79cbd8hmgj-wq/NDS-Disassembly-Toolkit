@@ -665,15 +665,15 @@ def structure_function(function: DecompiledFunction) -> StructuredFunction:
                 predecessors,
             )
             if switch is not None:
-                switch_node, next_address, region = switch
+                switch_node, switch_next, region = switch
                 if consumed.intersection(region):
                     return _fallback_function(function)
                 body.extend(prefix)
                 body.append(switch_node)
                 consumed.update(region)
-                if next_address is None:
+                if switch_next is None:
                     break
-                current = next_address
+                current = switch_next
                 continue
 
             structured = (
