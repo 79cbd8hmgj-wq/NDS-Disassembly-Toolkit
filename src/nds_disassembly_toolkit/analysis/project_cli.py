@@ -656,14 +656,22 @@ def _run_function(arguments: argparse.Namespace) -> int:
 
 def _run_decompile(arguments: argparse.Namespace) -> int:
     with AnalysisProject.open(arguments.project, read_only=True) as project:
-        prototype_analysis = recover_project_prototypes(project)
-        result = decompile_function(
-            project,
-            arguments.component,
-            arguments.address,
-            arguments.mode,
-            prototype_analysis=prototype_analysis,
-        )
+        if callable(getattr(project, "functions", None)):
+            prototype_analysis = recover_project_prototypes(project)
+            result = decompile_function(
+                project,
+                arguments.component,
+                arguments.address,
+                arguments.mode,
+                prototype_analysis=prototype_analysis,
+            )
+        else:
+            result = decompile_function(
+                project,
+                arguments.component,
+                arguments.address,
+                arguments.mode,
+            )
     if arguments.format == "text":
         _write_text(result.pseudo_c, arguments.output)
         return 0
