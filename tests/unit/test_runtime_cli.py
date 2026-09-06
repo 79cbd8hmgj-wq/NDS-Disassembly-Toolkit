@@ -973,3 +973,167 @@ def test_managed_scenario_context_routes_ds_input_through_owned_host(
         ("down", 1),
         ("up", 1),
     ]
+
+
+
+def _managed_record(tmp_path: Path) -> object:
+    return runtime_cli.RuntimeSessionRecord(
+        schema_version=1,
+        session_id="session-a",
+        lifecycle=runtime_cli.RuntimeLifecycleState.CREATED,
+        emulator=runtime_cli.EmulatorKind.DESMUME,
+        emulator_executable=tmp_path / "desmume-cli",
+        emulator_sha256=None,
+        emulator_version=None,
+        rom_path=tmp_path / "game.nds",
+        rom_sha256="0" * 64,
+        cpu=RuntimeCpu.ARM9,
+        pid=None,
+        process_group=None,
+        process_start_identity=None,
+        debugger_host="127.0.0.1",
+        debugger_port=39001,
+        display=None,
+        window_id=None,
+        session_root=tmp_path / "session-a",
+        last_completed_step=None,
+        last_completed_case=None,
+    )
+
+
+def test_runtime_launch_desmume_owns_display_and_binds_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = _managed_record(tmp_path)
+    record.session_root.mkdir()
+    calls: list[object] = []
+
+    class Backend:
+        capabilities = SimpleNamespace(window_input=True)
+
+        def build_launch_spec(self, **kwargs: object) -> object:
+            calls.append(("launch-spec-display", kwargs["display"]))
+            return SimpleNamespace(argv=("desmume-cli",), environment=(), cwd=None)
+
+    lease = runtime_cli.X11DisplayLease(
+        display_number=104,
+        pid=9001,
+        process_group=9001,
+        start_identity="xvfb-start",
+        executable=Path("/usr/bin/Xvfb"),
+    )
+
+    class Driver:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(("driver-display", kwargs.get("display")))
+
+        def wait_for_window(self, running: object, *, timeout: float) -> str:
+            calls.append(("wait-window", running.display, timeout))
+            return "0xabc"
+
+    def fake_spawn(launch_record: object, spec: object) -> object:
+        del spec
+        calls.append(("spawn-display", launch_record.display))
+        return runtime_cli.replace(
+            launch_record,
+            lifecycle=runtime_cli.RuntimeLifecycleState.LAUNCHING,
+            pid=1234,
+            process_group=1234,
+            process_start_identity="emu-start",
+        )
+
+    monkeypatch.setattr(runtime_cli, "_managed_backend", lambda kind: Backend())
+    monkeypatch.setattr(runtime_cli, "create_session", lambda *args, **kwargs: record)
+    monkeypatch.setattr(runtime_cli, "start_x11_display", lambda: lease, raising=False)
+    monkeypatch.setattr(runtime_cli, "X11HostDriver", Driver)
+    monkeypatch.setattr(runtime_cli, "spawn_owned_process", fake_spawn)
+    monkeypatch.setattr(
+        runtime_cli,
+        "store_x11_display_lease",
+        lambda root, value: calls.append(("store-lease", root, value.display)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_cli,
+        "store_session",
+        lambda value: calls.append(("store-session", value.display, value.window_id)),
+        raising=False,
+    )
+
+    assert main(
+        [
+            "runtime",
+            "launch",
+            str(tmp_path / "game.nds"),
+            "--emulator",
+            "desmume",
+            "--cpu",
+            "arm9",
+            "--session-root",
+            str(tmp_path),
+            "--executable",
+            str(tmp_path / "desmume-cli"),
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["display"] == ":104"
+    assert payload["window_id"] == "0xabc"
+    assert ("launch-spec-display", ":104") in calls
+    assert ("spawn-display", ":104") in calls
+    assert ("store-lease", record.session_root, ":104") in calls
+
+
+def test_runtime_session_stop_releases_owned_display_after_emulator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = runtime_cli.replace(
+        _managed_record(tmp_path),
+        lifecycle=runtime_cli.RuntimeLifecycleState.LAUNCHING,
+        pid=1234,
+        process_group=1234,
+        process_start_identity="emu-start",
+        display=":104",
+        window_id="0xabc",
+    )
+    record.session_root.mkdir()
+    closed = runtime_cli.replace(
+        record,
+        lifecycle=runtime_cli.RuntimeLifecycleState.CLOSED,
+    )
+    lease = runtime_cli.X11DisplayLease(
+        display_number=104,
+        pid=9001,
+        process_group=9001,
+        start_identity="xvfb-start",
+        executable=Path("/usr/bin/Xvfb"),
+    )
+    order: list[str] = []
+
+    monkeypatch.setattr(runtime_cli, "load_session", lambda path: record)
+    monkeypatch.setattr(
+        runtime_cli,
+        "stop_owned_process",
+        lambda value: order.append("emulator") or closed,
+    )
+    monkeypatch.setattr(
+        runtime_cli,
+        "load_x11_display_lease",
+        lambda root: lease,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_cli,
+        "stop_x11_display",
+        lambda value: order.append("display"),
+        raising=False,
+    )
+
+    assert main(["runtime", "session", "stop", str(record.session_root)]) == 0
+
+    assert order == ["emulator", "display"]
+    assert json.loads(capsys.readouterr().out)["lifecycle"] == "closed"
