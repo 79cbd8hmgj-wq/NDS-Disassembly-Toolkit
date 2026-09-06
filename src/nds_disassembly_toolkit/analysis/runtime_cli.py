@@ -297,6 +297,7 @@ def add_runtime_parser(subparsers: Any) -> None:
         help="run a deterministic runtime acceptance matrix",
     )
     matrix_run.add_argument("matrix", type=Path)
+    matrix_run.add_argument("--session-root", type=Path)
     _add_output_argument(matrix_run)
 
     checkpoint = commands.add_parser(
