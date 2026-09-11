@@ -711,6 +711,143 @@ def load_scenario(path: Path) -> ScenarioDefinition:
     )
 
 
+def _parameter_reference_json(value: ParameterReference) -> dict[str, object]:
+    return {"parameter": value.name}
+
+
+def _address_or_parameter_json(value: int | ParameterReference) -> object:
+    if isinstance(value, ParameterReference):
+        return _parameter_reference_json(value)
+    return f"0x{value:08x}"
+
+
+def _bytes_or_parameter_json(value: bytes | ParameterReference) -> object:
+    if isinstance(value, ParameterReference):
+        return _parameter_reference_json(value)
+    return value.hex()
+
+
+def _string_or_parameter_json(value: str | ParameterReference) -> object:
+    if isinstance(value, ParameterReference):
+        return _parameter_reference_json(value)
+    return value
+
+
+def _predicate_json(predicate: PredicateDefinition) -> dict[str, object]:
+    payload: dict[str, object] = {"type": predicate.type}
+    if predicate.address is not None:
+        payload["address"] = f"0x{predicate.address:08x}"
+    if predicate.expected is not None:
+        if isinstance(predicate.expected, bytes):
+            payload["bytes"] = predicate.expected.hex()
+        elif isinstance(predicate.expected, ParameterReference):
+            payload["value" if predicate.register is not None else "bytes"] = (
+                _parameter_reference_json(predicate.expected)
+            )
+        else:
+            payload["value"] = f"0x{predicate.expected:08x}"
+    if predicate.mask is not None:
+        payload["mask"] = predicate.mask.hex()
+    if predicate.register is not None:
+        payload["register"] = predicate.register
+    if predicate.start is not None:
+        payload["start"] = f"0x{predicate.start:08x}"
+    if predicate.end is not None:
+        payload["end"] = f"0x{predicate.end:08x}"
+    if predicate.children:
+        payload["conditions"] = [_predicate_json(child) for child in predicate.children]
+    return payload
+
+
+def _action_condition_json(
+    precondition: PredicateDefinition | None,
+    postcondition: PredicateDefinition | None,
+    timeout: float,
+) -> dict[str, object]:
+    payload: dict[str, object] = {"timeout": timeout}
+    if precondition is not None:
+        payload["precondition"] = _predicate_json(precondition)
+    if postcondition is not None:
+        payload["postcondition"] = _predicate_json(postcondition)
+    return payload
+
+
+def _step_json(step: ScenarioStep) -> dict[str, object]:
+    payload: dict[str, object] = {"id": step.id, "type": step.type}
+    if isinstance(step, WaitStep):
+        payload["condition"] = _predicate_json(step.condition)
+        payload["timeout"] = step.timeout
+        payload["poll_interval"] = step.poll_interval
+    elif isinstance(step, ButtonStep):
+        payload["button"] = step.button.value
+        payload.update(_action_condition_json(step.precondition, step.postcondition, step.timeout))
+    elif isinstance(step, ButtonSequenceStep):
+        payload["buttons"] = [button.value for button in step.buttons]
+        payload.update(_action_condition_json(step.precondition, step.postcondition, step.timeout))
+    elif isinstance(step, TouchTapStep):
+        payload["point"] = [step.point.x, step.point.y]
+        payload.update(_action_condition_json(step.precondition, step.postcondition, step.timeout))
+    elif isinstance(step, (TouchDragStep, TouchFlickStep)):
+        payload["start"] = [step.start.x, step.start.y]
+        payload["end"] = [step.end.x, step.end.y]
+        payload["duration_ms"] = step.duration_ms
+        payload.update(_action_condition_json(step.precondition, step.postcondition, step.timeout))
+    elif isinstance(step, MemoryWriteStep):
+        payload["address"] = f"0x{step.address:08x}"
+        payload["replacement"] = _bytes_or_parameter_json(step.replacement)
+        if step.expected_before is not None:
+            payload["expected_before"] = _bytes_or_parameter_json(step.expected_before)
+        payload["verify_after"] = step.verify_after
+        payload.update(_action_condition_json(step.precondition, step.postcondition, step.timeout))
+    elif isinstance(step, CaptureSnapshotStep):
+        if step.label is not None:
+            payload["label"] = _string_or_parameter_json(step.label)
+    elif isinstance(step, CaptureTraceStep):
+        payload["output"] = _string_or_parameter_json(step.output)
+        if step.steps is not None:
+            payload["steps"] = step.steps
+        if step.events is not None:
+            payload["events"] = step.events
+        if step.break_address is not None:
+            payload["break"] = f"0x{step.break_address:08x}"
+        if step.memory:
+            payload["memory"] = [
+                {"address": f"0x{address:08x}", "length": length}
+                for address, length in step.memory
+            ]
+    elif isinstance(step, AssertStep):
+        payload["condition"] = _predicate_json(step.condition)
+        payload["timeout"] = step.timeout
+    elif isinstance(step, (CheckpointSaveStep, CheckpointRestoreStep)):
+        payload["name"] = step.name
+    else:  # pragma: no cover - exhaustive over ScenarioStep
+        raise RuntimeScenarioError(f"unsupported scenario step type: {step.type}")
+    return payload
+
+
+def _scenario_json(scenario: ScenarioDefinition) -> dict[str, object]:
+    return {
+        "schema_version": scenario.schema_version,
+        "name": scenario.name,
+        "backend": scenario.backend.value,
+        "cpu": scenario.cpu.value,
+        "required_capabilities": list(scenario.required_capabilities),
+        "checkpoint": scenario.checkpoint,
+        "steps": [_step_json(step) for step in scenario.steps],
+    }
+
+
+def store_scenario(path: Path, scenario: ScenarioDefinition) -> None:
+    """Persist a :class:`ScenarioDefinition` as the JSON format
+    :func:`load_scenario` reads back - the write side of that function,
+    for durably saving a scenario built programmatically (e.g. by a
+    downstream consumer's own runtime module)."""
+    rendered = json.dumps(_scenario_json(scenario), indent=2, sort_keys=True) + "\n"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(rendered, encoding="utf-8")
+    temporary.replace(path)
+
+
 def _journal_payload(journal: ScenarioJournal) -> dict[str, object]:
     return {
         "schema_version": journal.schema_version,

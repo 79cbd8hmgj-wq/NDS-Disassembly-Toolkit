@@ -8,16 +8,28 @@ import pytest
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind
 from nds_disassembly_toolkit.analysis.orchestration.input import DSButton, DSPoint
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
+    AssertStep,
+    ButtonSequenceStep,
+    ButtonStep,
     CaptureSnapshotStep,
     CaptureTraceStep,
+    CheckpointRestoreStep,
+    CheckpointSaveStep,
     JournalStepState,
     MemoryWriteStep,
     ParameterReference,
+    PredicateDefinition,
+    ScenarioDefinition,
     ScenarioJournal,
     ScenarioJournalStep,
+    TouchDragStep,
+    TouchFlickStep,
+    TouchTapStep,
+    WaitStep,
     load_journal,
     load_scenario,
     store_journal,
+    store_scenario,
 )
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
 from nds_disassembly_toolkit.errors import RuntimeScenarioError
@@ -80,6 +92,98 @@ def test_load_scenario_normalizes_ids_and_typed_values(tmp_path: Path) -> None:
     assert scenario.steps[2].button is DSButton.A
     assert scenario.steps[3].start == DSPoint(128, 170)
     assert scenario.steps[3].end == DSPoint(128, 40)
+
+
+def test_store_scenario_round_trips_a_loaded_scenario(tmp_path: Path) -> None:
+    original = load_scenario(_write(tmp_path / "scenario.json", _scenario()))
+
+    roundtrip_path = tmp_path / "roundtrip.json"
+    store_scenario(roundtrip_path, original)
+    reloaded = load_scenario(roundtrip_path)
+
+    assert reloaded == original
+    assert not roundtrip_path.with_suffix(".json.tmp").exists()
+
+
+def test_store_scenario_round_trips_every_step_and_predicate_kind(tmp_path: Path) -> None:
+    original = ScenarioDefinition(
+        schema_version=1,
+        name="comprehensive",
+        backend=EmulatorKind.DESMUME,
+        cpu=RuntimeCpu.ARM9,
+        required_capabilities=("save_state", "window_input"),
+        checkpoint="baseline",
+        steps=(
+            WaitStep(
+                id="wait-pc-range",
+                condition=PredicateDefinition(
+                    type="all_of",
+                    children=(
+                        PredicateDefinition(type="pc_in_range", start=0x02000000, end=0x02000100),
+                        PredicateDefinition(type="process_alive"),
+                    ),
+                ),
+                timeout=5.0,
+                poll_interval=0.1,
+            ),
+            ButtonStep(
+                id="press-a",
+                button=DSButton.A,
+                precondition=PredicateDefinition(type="window_ready"),
+                postcondition=PredicateDefinition(type="debugger_reachable"),
+                timeout=3.0,
+            ),
+            ButtonSequenceStep(
+                id="combo",
+                buttons=(DSButton.A, DSButton.B, DSButton.START),
+                timeout=2.0,
+            ),
+            TouchTapStep(id="tap", point=DSPoint(10, 20), timeout=1.0),
+            TouchDragStep(
+                id="drag", start=DSPoint(0, 0), end=DSPoint(50, 60), duration_ms=200, timeout=1.0
+            ),
+            TouchFlickStep(
+                id="flick", start=DSPoint(5, 5), end=DSPoint(1, 1), duration_ms=80, timeout=1.0
+            ),
+            MemoryWriteStep(
+                id="write",
+                address=0x02100020,
+                replacement=ParameterReference("replacement"),
+                expected_before=b"\x48",
+                verify_after=False,
+                precondition=PredicateDefinition(
+                    type="memory_masked_equals",
+                    address=0x02100020,
+                    expected=b"\x48",
+                    mask=b"\xff",
+                ),
+            ),
+            CaptureSnapshotStep(id="snap", label=ParameterReference("snapshot_label")),
+            CaptureTraceStep(
+                id="trace",
+                output="trace.ndstrace",
+                break_address=0x02012340,
+                memory=((0x02000000, 4), (0x02100000, 8)),
+            ),
+            AssertStep(
+                id="assert-register",
+                condition=PredicateDefinition(
+                    type="register_equals",
+                    register="r0",
+                    expected=ParameterReference("expected_r0"),
+                ),
+                timeout=4.0,
+            ),
+            CheckpointSaveStep(id="save", name="post-battle"),
+            CheckpointRestoreStep(id="restore", name="post-battle"),
+        ),
+    )
+
+    path = tmp_path / "comprehensive.json"
+    store_scenario(path, original)
+    reloaded = load_scenario(path)
+
+    assert reloaded == original
 
 
 @pytest.mark.parametrize(

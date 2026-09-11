@@ -112,6 +112,7 @@ from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     resume_scenario,
     run_scenario,
     store_journal,
+    store_scenario,
 )
 from nds_disassembly_toolkit.analysis.orchestration.watchdog import (
     HeartbeatRecord,
@@ -247,6 +248,7 @@ __all__ = [
     "stop_owned_process",
     "stop_watchdog",
     "store_journal",
+    "store_scenario",
     "store_watchdog_lease",
     "transition_session",
     "validate_checkpoint",
