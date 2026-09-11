@@ -281,6 +281,12 @@ def add_runtime_parser(subparsers: Any) -> None:
     doctor.add_argument("--emulator", choices=[kind.value for kind in EmulatorKind], required=True)
     doctor.add_argument("--rom", type=Path)
     doctor.add_argument("--require", action="append", default=[])
+    doctor.add_argument(
+        "--destructive",
+        action="store_true",
+        help="actually launch the emulator and connect a debugger to prove capabilities",
+    )
+    doctor.add_argument("--live-probe-timeout", type=_timeout, default=10.0)
     _add_output_argument(doctor)
 
     launch = commands.add_parser("launch", help="launch an isolated managed emulator")
@@ -1345,6 +1351,8 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             backend,
             rom=arguments.rom,
             require=frozenset(arguments.require),
+            destructive=arguments.destructive,
+            live_probe_timeout=arguments.live_probe_timeout,
         )
         _write_json(_doctor_json(report), arguments.output)
         return 0

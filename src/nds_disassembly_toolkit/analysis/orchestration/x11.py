@@ -30,11 +30,11 @@ class X11Helpers:
 # Preference order: ImageMagick's "import" is the most common X11 window
 # capture tool, "maim"/"scrot" are lighter-weight alternatives seen on
 # minimal container images.
-_CAPTURE_TOOL_CANDIDATES = ("import", "maim", "scrot")
+CAPTURE_TOOL_CANDIDATES = ("import", "maim", "scrot")
 
 
 def find_capture_tool() -> Path | None:
-    for name in _CAPTURE_TOOL_CANDIDATES:
+    for name in CAPTURE_TOOL_CANDIDATES:
         resolved = shutil.which(name)
         if resolved is not None:
             return Path(resolved)
