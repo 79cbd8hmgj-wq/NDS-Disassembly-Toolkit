@@ -53,6 +53,8 @@ def test_desmume_launch_spec_sets_managed_debugger_and_isolation(
 ) -> None:
     rom = tmp_path / "game.nds"
     rom.write_bytes(b"fixture")
+    session_root = tmp_path / "session"
+    session_root.mkdir()
     backend = DeSmuMEBackend()
 
     spec = backend.build_launch_spec(
@@ -61,24 +63,100 @@ def test_desmume_launch_spec_sets_managed_debugger_and_isolation(
         cpu=RuntimeCpu.ARM9,
         debugger_host="127.0.0.1",
         debugger_port=39011,
-        session_root=tmp_path,
+        session_root=session_root,
         display=":105",
     )
 
+    isolated_rom = session_root / "rom" / "game.nds"
     assert spec.argv == (
         "/usr/bin/desmume-cli",
         "--arm9gdb",
         "39011",
         "--disable-sound",
         "--nojoy",
-        str(rom),
+        str(isolated_rom),
     )
-    assert spec.cwd == tmp_path
+    assert spec.cwd == session_root
     environment = dict(spec.environment)
     assert environment["DISPLAY"] == ":105"
     assert environment["SDL_VIDEODRIVER"] == "x11"
-    assert environment["XDG_CONFIG_HOME"] == str(tmp_path / "config")
-    assert environment["XDG_DATA_HOME"] == str(tmp_path / "data")
+    assert environment["XDG_CONFIG_HOME"] == str(session_root / "config")
+    assert environment["XDG_DATA_HOME"] == str(session_root / "data")
+
+    # the isolated path must be usable in place of the real ROM
+    assert isolated_rom.is_file()
+    assert isolated_rom.read_bytes() == b"fixture"
+
+
+def test_desmume_battery_save_is_isolated_per_session(tmp_path: Path) -> None:
+    rom = tmp_path / "game.nds"
+    rom.write_bytes(b"fixture")
+    backend = DeSmuMEBackend()
+
+    session_a = tmp_path / "session-a"
+    session_b = tmp_path / "session-b"
+    session_a.mkdir()
+    session_b.mkdir()
+
+    backend.build_launch_spec(
+        executable=Path("/usr/bin/desmume-cli"),
+        rom=rom,
+        cpu=RuntimeCpu.ARM9,
+        debugger_host="127.0.0.1",
+        debugger_port=39011,
+        session_root=session_a,
+        display=None,
+    )
+    backend.build_launch_spec(
+        executable=Path("/usr/bin/desmume-cli"),
+        rom=rom,
+        cpu=RuntimeCpu.ARM9,
+        debugger_host="127.0.0.1",
+        debugger_port=39012,
+        session_root=session_b,
+        display=None,
+    )
+
+    save_a = backend.battery_save_path(rom, session_a)
+    save_b = backend.battery_save_path(rom, session_b)
+    assert save_a != save_b
+    assert save_a == session_a / "rom" / "game.dsv"
+    assert save_b == session_b / "rom" / "game.dsv"
+    assert backend.capabilities.battery_save_isolation is True
+
+
+def test_desmume_isolated_rom_falls_back_to_copy_when_symlink_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rom = tmp_path / "game.nds"
+    rom.write_bytes(b"fixture")
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    backend = DeSmuMEBackend()
+
+    def deny_symlink(*args: object, **kwargs: object) -> None:
+        raise OSError("symlinks are not permitted here")
+
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.orchestration.desmume_backend.os.symlink",
+        deny_symlink,
+    )
+
+    backend.build_launch_spec(
+        executable=Path("/usr/bin/desmume-cli"),
+        rom=rom,
+        cpu=RuntimeCpu.ARM9,
+        debugger_host="127.0.0.1",
+        debugger_port=39011,
+        session_root=session_root,
+        display=None,
+    )
+
+    isolated_rom = session_root / "rom" / "game.nds"
+    assert isolated_rom.is_file()
+    assert not isolated_rom.is_symlink()
+    assert isolated_rom.read_bytes() == b"fixture"
 
 
 
@@ -119,6 +197,9 @@ def test_melonds_launch_spec_writes_isolated_gdb_config(
     assert "Port = 39012" in rendered
     assert "BreakOnStartup = true" in rendered
     assert str(tmp_path / "saves") in rendered
+
+    assert backend.capabilities.battery_save_isolation is True
+    assert backend.battery_save_path(rom, tmp_path) == tmp_path / "saves" / "game.sav"
 
 
 

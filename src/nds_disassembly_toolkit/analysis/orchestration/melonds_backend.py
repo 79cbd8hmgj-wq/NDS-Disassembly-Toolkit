@@ -36,12 +36,18 @@ class MelonDSBackend:
             debugger_arm7=True,
             managed_launch=True,
             save_state=False,
-            battery_save_isolation=False,
+            battery_save_isolation=True,
             window_input=False,
             touchscreen_input=False,
             screenshot=False,
             debugger_handshake_mode=DebuggerHandshakeMode.INITIAL_ACK,
         )
+
+    def battery_save_path(self, rom: Path, session_root: Path) -> Path:
+        # build_launch_spec below already points SaveFilePath at this
+        # session's own "saves" directory, so every session's battery save
+        # lives under its own session_root regardless of ROM path collisions.
+        return session_root / "saves" / f"{rom.stem}.sav"
 
     def build_launch_spec(
         self,

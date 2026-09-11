@@ -1140,11 +1140,18 @@ class _ManagedScenarioContext:
         self._touch_motion(start, end, duration)
 
     def _checkpoint_context(self) -> CheckpointContext:
+        battery_save: Path | None = None
+        path_for = getattr(self.backend, "battery_save_path", None)
+        if callable(path_for):
+            battery_save = cast(
+                Path, path_for(self.record.rom_path, self.session_root)
+            )
         return CheckpointContext(
             checkpoint_root=self.session_root / "checkpoints",
             emulator=self.record.emulator,
             rom_sha256=self.record.rom_sha256,
             backend=self.backend,
+            battery_save=battery_save,
         )
 
     def save_checkpoint(
@@ -1457,6 +1464,9 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 emulator=record.emulator,
                 rom_sha256=record.rom_sha256,
                 backend=backend,
+                battery_save=backend.battery_save_path(
+                    record.rom_path, record.session_root
+                ),
             )
             checkpoint_path = context.checkpoint_root / arguments.name
             if arguments.runtime_checkpoint_command == "save":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from pathlib import Path
@@ -43,12 +44,23 @@ class DeSmuMEBackend:
             debugger_arm7=False,
             managed_launch=True,
             save_state=True,
-            battery_save_isolation=False,
+            battery_save_isolation=True,
             window_input=True,
             touchscreen_input=True,
             screenshot=False,
             debugger_handshake_mode=DebuggerHandshakeMode.DIRECT,
         )
+
+    @staticmethod
+    def _isolated_rom_path(rom: Path, session_root: Path) -> Path:
+        """A per-session path DeSmuME can open so its adjacent battery-save
+        file (same basename, .dsv extension) never collides with another
+        session sharing the same source ROM."""
+        return session_root / "rom" / rom.name
+
+    def battery_save_path(self, rom: Path, session_root: Path) -> Path:
+        isolated_rom = self._isolated_rom_path(rom, session_root)
+        return isolated_rom.with_suffix(".dsv")
 
     def build_launch_spec(
         self,
@@ -65,6 +77,15 @@ class DeSmuMEBackend:
             raise RuntimeLaunchError("DeSmuME managed launch supports ARM9 debugging only")
         if debugger_host != "127.0.0.1":
             raise RuntimeLaunchError("managed DeSmuME debugger must use loopback")
+        isolated_rom = self._isolated_rom_path(rom, session_root)
+        isolated_rom.parent.mkdir(parents=True, exist_ok=True)
+        if not isolated_rom.exists():
+            try:
+                os.symlink(rom, isolated_rom)
+            except OSError:
+                # Cross-device or a sandbox without symlink permission: fall
+                # back to a real copy so isolation still holds.
+                shutil.copyfile(rom, isolated_rom)
         environment = [
             ("XDG_CONFIG_HOME", str(session_root / "config")),
             ("XDG_DATA_HOME", str(session_root / "data")),
@@ -83,7 +104,7 @@ class DeSmuMEBackend:
                 str(debugger_port),
                 "--disable-sound",
                 "--nojoy",
-                str(rom),
+                str(isolated_rom),
             ),
             environment=tuple(environment),
             cwd=session_root,
