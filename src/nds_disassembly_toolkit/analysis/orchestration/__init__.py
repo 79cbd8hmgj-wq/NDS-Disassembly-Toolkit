@@ -77,6 +77,10 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
     stop_owned_process,
     transition_session,
 )
+from nds_disassembly_toolkit.analysis.orchestration.recovery import (
+    recover_session_from_checkpoint,
+    relaunch_dead_session,
+)
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     AssertStep,
     ButtonSequenceStep,
@@ -204,6 +208,8 @@ __all__ = [
     "map_touch_point",
     "mark_session_failed",
     "process_is_owned",
+    "recover_session_from_checkpoint",
+    "relaunch_dead_session",
     "restore_checkpoint",
     "resume_scenario",
     "run_acceptance_matrix",

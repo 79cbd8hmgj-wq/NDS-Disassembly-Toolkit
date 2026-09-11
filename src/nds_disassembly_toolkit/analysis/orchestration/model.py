@@ -99,7 +99,12 @@ _LIFECYCLE_TRANSITIONS: dict[RuntimeLifecycleState, frozenset[RuntimeLifecycleSt
     RuntimeLifecycleState.CLOSED: frozenset(),
     # A FAILED session can still own a live process (e.g. launch failed after
     # the emulator forked); STOPPING must stay reachable so it can be reaped.
-    RuntimeLifecycleState.FAILED: frozenset({RuntimeLifecycleState.STOPPING}),
+    # LAUNCHING is also reachable so a session whose process died can be
+    # relaunched from its last valid checkpoint instead of being permanently
+    # stuck (see orchestration.recovery).
+    RuntimeLifecycleState.FAILED: frozenset(
+        {RuntimeLifecycleState.STOPPING, RuntimeLifecycleState.LAUNCHING}
+    ),
 }
 
 

@@ -68,6 +68,12 @@ def test_failed_session_can_still_be_stopped_for_cleanup() -> None:
     validate_lifecycle_transition(RuntimeLifecycleState.FAILED, RuntimeLifecycleState.STOPPING)
 
 
+def test_failed_session_can_be_relaunched_for_recovery() -> None:
+    # A dead-process session marked FAILED by the watchdog must be able to
+    # relaunch from a checkpoint rather than being permanently stuck.
+    validate_lifecycle_transition(RuntimeLifecycleState.FAILED, RuntimeLifecycleState.LAUNCHING)
+
+
 def test_closed_is_terminal() -> None:
     for state in RuntimeLifecycleState:
         if state is RuntimeLifecycleState.CLOSED:
