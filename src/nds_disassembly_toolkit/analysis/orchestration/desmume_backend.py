@@ -28,10 +28,21 @@ from nds_disassembly_toolkit.errors import (
 
 
 class DeSmuMEBackend:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        slot_save_timeout: float = 5.0,
+        slot_poll_interval: float = 0.01,
+    ) -> None:
+        if slot_save_timeout <= 0:
+            raise ValueError("slot_save_timeout must be positive")
+        if slot_poll_interval <= 0:
+            raise ValueError("slot_poll_interval must be positive")
         self._runtime_record: Any | None = None
         self._host_driver: Any | None = None
         self._debugger: Any | None = None
+        self._slot_save_timeout = slot_save_timeout
+        self._slot_poll_interval = slot_poll_interval
 
     @property
     def kind(self) -> EmulatorKind:
@@ -169,7 +180,13 @@ class DeSmuMEBackend:
                 host.key_up(record, "F1")
             finally:
                 host.key_up(record, "Shift_R")
-            deadline = time.monotonic() + 5.0
+            deadline = time.monotonic() + self._slot_save_timeout
+            # A single (mtime, size) observation is not proof DeSmuME
+            # finished writing the slot file - a poll can land mid-write.
+            # Require the same candidate to report the same identity on two
+            # consecutive polls before treating it as settled.
+            settled_candidate: Path | None = None
+            settled_identity: tuple[int, int] | None = None
             while True:
                 after = self._slot_snapshot(directory)
                 changed = sorted(
@@ -177,17 +194,24 @@ class DeSmuMEBackend:
                     for path, identity in after.items()
                     if before.get(path) != identity
                 )
-                if len(changed) == 1:
-                    return changed[0]
                 if len(changed) > 1:
                     raise RuntimeCheckpointError(
                         "DeSmuME changed multiple managed save-state slot files"
                     )
+                if len(changed) == 1:
+                    candidate = changed[0]
+                    identity = after[candidate]
+                    if (candidate, identity) == (settled_candidate, settled_identity):
+                        return candidate
+                    settled_candidate, settled_identity = candidate, identity
+                else:
+                    settled_candidate, settled_identity = None, None
                 if time.monotonic() >= deadline:
                     raise RuntimeCheckpointError(
-                        "DeSmuME did not create or update managed save-state slot 1"
+                        "DeSmuME did not create or settle a managed save-state "
+                        "slot 1 file before the timeout"
                     )
-                time.sleep(0.01)
+                time.sleep(self._slot_poll_interval)
 
         return Path(debugger.run_host_action(action))
 

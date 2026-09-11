@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from nds_disassembly_toolkit.analysis.orchestration.desmume_backend import DeSmu
 from nds_disassembly_toolkit.analysis.orchestration.input import WindowGeometry
 from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import MelonDSBackend
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
-from nds_disassembly_toolkit.errors import RuntimeInputError
+from nds_disassembly_toolkit.errors import RuntimeCheckpointError, RuntimeInputError
 
 
 def test_backends_expose_explicit_debugger_dialects() -> None:
@@ -312,6 +313,117 @@ def test_desmume_bound_backend_saves_and_loads_isolated_slot(
         ("key", "F1"),
     ]
     assert debugger.host_actions == 3
+
+
+def test_desmume_slot_save_rejects_non_positive_timeouts() -> None:
+    with pytest.raises(ValueError, match="slot_save_timeout"):
+        DeSmuMEBackend(slot_save_timeout=0)
+    with pytest.raises(ValueError, match="slot_poll_interval"):
+        DeSmuMEBackend(slot_poll_interval=0)
+
+
+def test_desmume_slot_save_waits_for_size_to_settle_before_accepting(
+    tmp_path: Path,
+) -> None:
+    """A save-state file whose (mtime, size) identity is still changing
+    across polls must not be accepted until two consecutive polls agree."""
+    from itertools import chain, repeat
+    from types import SimpleNamespace
+
+    backend = DeSmuMEBackend(slot_poll_interval=0.001)
+    session_root = tmp_path / "session"
+    slot_dir = session_root / "config" / "desmume"
+    slot_dir.mkdir(parents=True)
+    slot = slot_dir / "game.ds1"
+    slot.write_bytes(b"placeholder")
+    record = SimpleNamespace(session_root=session_root, rom_path=tmp_path / "game.nds")
+
+    class Host:
+        def key_down(self, session: object, host_key: str) -> None:
+            pass
+
+        def key_up(self, session: object, host_key: str) -> None:
+            pass
+
+    class Debugger:
+        def run_host_action(self, action: object) -> object:
+            return action()
+
+    # Scripted identities: "before" (unchanged), then three distinct
+    # growing observations, then the same final identity twice - the
+    # implementation must not return before the repeated final identity.
+    script = iter(
+        chain(
+            [
+                {slot: (1, 10)},  # captured as "before"
+                {slot: (2, 20)},  # poll 1: changed, not yet settled
+                {slot: (3, 30)},  # poll 2: changed again
+                {slot: (4, 40)},  # poll 3: settled candidate A
+            ],
+            repeat({slot: (4, 40)}),  # poll 4+: identical -> must settle here
+        )
+    )
+    calls = {"n": 0}
+
+    def scripted_snapshot(directory: Path) -> dict[Path, tuple[int, int]]:
+        calls["n"] += 1
+        return next(script)
+
+    backend._slot_snapshot = scripted_snapshot  # type: ignore[method-assign]
+    backend.bind_managed_session(record, Host(), Debugger())
+    destination = tmp_path / "checkpoint-state.bin"
+    slot.write_bytes(b"final-content")
+
+    backend.save_state(destination)
+
+    # "before" + 3 growing polls + the settling poll = 5 calls minimum.
+    assert calls["n"] >= 5
+    assert destination.read_bytes() == b"final-content"
+
+
+def test_desmume_slot_save_times_out_if_never_settles(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    backend = DeSmuMEBackend(slot_save_timeout=0.05, slot_poll_interval=0.005)
+    session_root = tmp_path / "session"
+    slot_dir = session_root / "config" / "desmume"
+    slot_dir.mkdir(parents=True)
+    slot = slot_dir / "game.ds1"
+    record = SimpleNamespace(session_root=session_root, rom_path=tmp_path / "game.nds")
+    counter = {"n": 0}
+
+    class Host:
+        def key_down(self, session: object, host_key: str) -> None:
+            pass
+
+        def key_up(self, session: object, host_key: str) -> None:
+            pass
+
+    class Debugger:
+        def run_host_action(self, action: object) -> object:
+            return action()
+
+    def keep_rewriting() -> None:
+        # Never settle: every access changes the file, simulating a stub
+        # that keeps re-flushing the slot file forever.
+        import itertools
+
+        for i in itertools.count():
+            counter["n"] = i
+            slot.write_bytes(f"rev-{i}".encode())
+            time.sleep(0.004)
+            if i > 40:
+                return
+
+    import threading
+
+    writer = threading.Thread(target=keep_rewriting, daemon=True)
+    writer.start()
+    backend.bind_managed_session(record, Host(), Debugger())
+
+    with pytest.raises(RuntimeCheckpointError, match="did not create or settle"):
+        backend.save_state(tmp_path / "checkpoint-state.bin")
+    writer.join(timeout=1)
 
 
 def test_desmume_state_requires_bound_managed_session(tmp_path: Path) -> None:
