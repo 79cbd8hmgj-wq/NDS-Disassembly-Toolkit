@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import signal
 import sys
 import time
 from collections.abc import Iterator
@@ -24,6 +25,7 @@ from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
     load_matrix,
     run_acceptance_matrix,
 )
+from nds_disassembly_toolkit.analysis.orchestration.background import spawn_detached_process
 from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
     CheckpointContext,
     CheckpointMemoryFingerprint,
@@ -55,6 +57,10 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
     store_session,
     transition_session,
 )
+from nds_disassembly_toolkit.analysis.orchestration.recovery import (
+    recover_session_from_checkpoint,
+    relaunch_dead_session,
+)
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     CaptureTraceStep,
     ParameterReference,
@@ -63,6 +69,14 @@ from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     load_scenario,
     resume_scenario,
     run_scenario,
+)
+from nds_disassembly_toolkit.analysis.orchestration.watchdog import (
+    WatchdogLease,
+    check_health,
+    load_heartbeat,
+    run_watchdog_loop,
+    stop_watchdog,
+    store_watchdog_lease,
 )
 from nds_disassembly_toolkit.analysis.orchestration.x11 import (
     X11HostDriver,
@@ -104,6 +118,7 @@ from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
 from nds_disassembly_toolkit.errors import (
     RuntimeAnalysisError,
     RuntimeLifecycleError,
+    RuntimeOrchestrationError,
     RuntimeRecoveryError,
     RuntimeScenarioError,
 )
@@ -366,6 +381,48 @@ def add_runtime_parser(subparsers: Any) -> None:
     checkpoint_restore.add_argument("session", type=Path)
     checkpoint_restore.add_argument("name")
     _add_output_argument(checkpoint_restore)
+
+    watchdog = commands.add_parser(
+        "watchdog",
+        help="run or manage a background health watchdog for a managed session",
+    )
+    watchdog_commands = watchdog.add_subparsers(dest="runtime_watchdog_command")
+
+    watchdog_start = watchdog_commands.add_parser(
+        "start", help="launch a detached watchdog daemon for a session"
+    )
+    watchdog_start.add_argument("session", type=Path)
+    watchdog_start.add_argument("--interval", type=_timeout, default=15.0)
+    watchdog_start.add_argument(
+        "--checkpoint",
+        help="checkpoint name to restore after an automatic relaunch",
+    )
+    _add_output_argument(watchdog_start)
+
+    watchdog_stop = watchdog_commands.add_parser(
+        "stop", help="stop an owned watchdog daemon for a session"
+    )
+    watchdog_stop.add_argument("session", type=Path)
+    _add_output_argument(watchdog_stop)
+
+    watchdog_status = watchdog_commands.add_parser(
+        "status", help="report the last recorded watchdog heartbeat for a session"
+    )
+    watchdog_status.add_argument("session", type=Path)
+    _add_output_argument(watchdog_status)
+
+    watchdog_run = watchdog_commands.add_parser(
+        "run",
+        help="run the watchdog loop in the foreground (used internally by 'start')",
+    )
+    watchdog_run.add_argument("session", type=Path)
+    watchdog_run.add_argument("--interval", type=_timeout, default=15.0)
+    watchdog_run.add_argument(
+        "--checkpoint",
+        help="checkpoint name to restore after an automatic relaunch",
+    )
+    watchdog_run.add_argument("--max-ticks", type=_positive_int)
+    _add_output_argument(watchdog_run)
 
     diff = commands.add_parser("diff", help="compare two completed runtime traces")
     diff.add_argument("baseline", type=Path)
@@ -1339,6 +1396,148 @@ def _scenario_context(
             close()
 
 
+def _heartbeat_json(heartbeat: Any | None) -> dict[str, object]:
+    if heartbeat is None:
+        return {"heartbeat": None}
+    return {
+        "heartbeat": {
+            "timestamp": heartbeat.timestamp,
+            "process_alive": heartbeat.process_alive,
+            "window_ready": heartbeat.window_ready,
+            "debugger_reachable": heartbeat.debugger_reachable,
+            "consecutive_failures": heartbeat.consecutive_failures,
+            "healthy": heartbeat.healthy,
+        }
+    }
+
+
+_WATCHDOG_BOOTSTRAP = (
+    "import sys\n"
+    "from nds_disassembly_toolkit.cli import main\n"
+    "sys.exit(main())\n"
+)
+
+
+def _watchdog_recover(
+    record: RuntimeSessionRecord,
+    *,
+    checkpoint_name: str | None,
+) -> None:
+    """Best-effort recovery callback for an unhealthy watchdog tick.
+
+    Reloads the session fresh (it may have changed since the health check
+    that triggered this call) and does nothing if it turns out to already
+    be alive again. Any recovery failure is swallowed: the session stays
+    unhealthy and the next tick simply tries again, rather than crashing
+    the watchdog loop over a single bad attempt.
+    """
+    current = load_session(record.session_root)
+    if process_is_owned(current):
+        return
+    backend = _managed_backend(current.emulator)
+    try:
+        if checkpoint_name is not None:
+            checkpoint_context = CheckpointContext(
+                checkpoint_root=current.session_root / "checkpoints",
+                emulator=current.emulator,
+                rom_sha256=current.rom_sha256,
+                backend=backend,
+            )
+            checkpoint_path = checkpoint_context.checkpoint_root / checkpoint_name
+            recover_session_from_checkpoint(
+                current,
+                backend,
+                checkpoint_context=checkpoint_context,
+                checkpoint_path=checkpoint_path,
+            )
+        else:
+            relaunch_dead_session(current, backend)
+    except (RuntimeOrchestrationError, OSError):
+        pass
+
+
+def _run_watchdog_command(arguments: argparse.Namespace) -> int:
+    wd_command = arguments.runtime_watchdog_command
+    if wd_command is None:
+        raise ValueError("runtime watchdog requires start, stop, status, or run")
+
+    session_root = arguments.session
+
+    if wd_command == "status":
+        _write_json(_heartbeat_json(load_heartbeat(session_root)), arguments.output)
+        return 0
+
+    if wd_command == "stop":
+        stopped = stop_watchdog(session_root)
+        _write_json({"stopped": stopped}, arguments.output)
+        return 0
+
+    if wd_command == "start":
+        record = load_session(session_root)
+        if not process_is_owned(record):
+            raise RuntimeScenarioError(
+                "cannot start a watchdog: the managed session process is not "
+                "currently owned"
+            )
+        argv = [
+            sys.executable,
+            "-c",
+            _WATCHDOG_BOOTSTRAP,
+            "runtime",
+            "watchdog",
+            "run",
+            str(session_root),
+            "--interval",
+            str(arguments.interval),
+        ]
+        if arguments.checkpoint:
+            argv.extend(["--checkpoint", arguments.checkpoint])
+        lease = spawn_detached_process(argv, log_path=session_root / "watchdog.log")
+        store_watchdog_lease(
+            session_root,
+            WatchdogLease(
+                pid=lease.pid,
+                process_group=lease.process_group,
+                start_identity=lease.start_identity,
+                executable=lease.executable,
+            ),
+        )
+        _write_json({"pid": lease.pid}, arguments.output)
+        return 0
+
+    if wd_command == "run":
+        stop_requested = {"flag": False}
+
+        def _handle_stop_signal(signum: int, frame: object) -> None:
+            stop_requested["flag"] = True
+
+        signal.signal(signal.SIGTERM, _handle_stop_signal)
+        signal.signal(signal.SIGINT, _handle_stop_signal)
+
+        def check(previous_failures: int) -> Any:
+            record = load_session(session_root)
+            return check_health(
+                process_alive=lambda: process_is_owned(record),
+                previous_consecutive_failures=previous_failures,
+            )
+
+        def on_unhealthy(heartbeat: Any) -> None:
+            record = load_session(session_root)
+            _watchdog_recover(record, checkpoint_name=arguments.checkpoint)
+
+        run_watchdog_loop(
+            session_root=session_root,
+            check=check,
+            on_unhealthy=on_unhealthy,
+            interval=arguments.interval,
+            should_stop=lambda: stop_requested["flag"],
+            max_ticks=arguments.max_ticks,
+        )
+        return 0
+
+    raise ValueError("runtime watchdog requires start, stop, status, or run")
+
+
 def run_runtime_command(arguments: argparse.Namespace) -> int:
     command = arguments.runtime_command
     if command is None:
@@ -1536,6 +1735,8 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 if callable(close):
                     close()
 
+    if command == "watchdog":
+        return _run_watchdog_command(arguments)
 
     if command == "matrix":
         if arguments.runtime_matrix_command != "run":
