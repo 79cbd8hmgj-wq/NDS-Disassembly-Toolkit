@@ -25,7 +25,12 @@ from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
     load_matrix,
     run_acceptance_matrix,
 )
-from nds_disassembly_toolkit.analysis.orchestration.background import spawn_detached_process
+from nds_disassembly_toolkit.analysis.orchestration.background import (
+    DetachedProcessLease,
+    detached_process_is_owned,
+    spawn_detached_process,
+    stop_detached_process,
+)
 from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
     CheckpointContext,
     CheckpointMemoryFingerprint,
@@ -423,6 +428,36 @@ def add_runtime_parser(subparsers: Any) -> None:
     )
     watchdog_run.add_argument("--max-ticks", type=_positive_int)
     _add_output_argument(watchdog_run)
+
+    job = commands.add_parser(
+        "job",
+        help=(
+            "run any 'runtime' subcommand as a detached background job, so a "
+            "long scenario/matrix run does not block the calling agent"
+        ),
+    )
+    job_commands = job.add_subparsers(dest="runtime_job_command")
+
+    job_start = job_commands.add_parser(
+        "start", help="start a runtime subcommand as a background job"
+    )
+    job_start.add_argument("job_root", type=Path)
+    job_start.add_argument(
+        "command",
+        nargs=argparse.REMAINDER,
+        help="the 'runtime' subcommand and its arguments, e.g. scenario run SESSION SCENARIO",
+    )
+    _add_output_argument(job_start)
+
+    job_status = job_commands.add_parser(
+        "status", help="poll a background job's completion status and result"
+    )
+    job_status.add_argument("job_root", type=Path)
+    _add_output_argument(job_status)
+
+    job_stop = job_commands.add_parser("stop", help="stop a running background job")
+    job_stop.add_argument("job_root", type=Path)
+    _add_output_argument(job_stop)
 
     diff = commands.add_parser("diff", help="compare two completed runtime traces")
     diff.add_argument("baseline", type=Path)
@@ -1396,6 +1431,136 @@ def _scenario_context(
             close()
 
 
+_JOB_RECORD_FILENAME = "job.json"
+_JOB_RESULT_FILENAME = "result.json"
+_JOB_LOG_FILENAME = "job.log"
+_JOB_LOG_TAIL_BYTES = 8 * 1024
+
+# A background job (or the watchdog daemon) re-invokes this same CLI's
+# main() in a detached child process, so it inherits argument
+# parsing/dispatch/error handling for free instead of duplicating it.
+_CLI_REEXEC_BOOTSTRAP = (
+    "import sys\n"
+    "from nds_disassembly_toolkit.cli import main\n"
+    "sys.exit(main())\n"
+)
+
+
+def _job_record_path(job_root: Path) -> Path:
+    return job_root / _JOB_RECORD_FILENAME
+
+
+def _write_job_record(job_root: Path, payload: dict[str, object]) -> None:
+    path = _job_record_path(job_root)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _read_job_record(job_root: Path) -> dict[str, object] | None:
+    path = _job_record_path(job_root)
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("job record is malformed")
+    return payload
+
+
+def _job_lease_from_record(record: dict[str, object]) -> DetachedProcessLease:
+    return DetachedProcessLease(
+        pid=int(cast(int, record["pid"])),
+        process_group=int(cast(int, record["process_group"])),
+        start_identity=str(record["start_identity"]),
+        executable=Path(str(record["executable"])),
+    )
+
+
+def _run_job_command(arguments: argparse.Namespace) -> int:
+    job_command = arguments.runtime_job_command
+    if job_command is None:
+        raise ValueError("runtime job requires start, status, or stop")
+    job_root: Path = arguments.job_root
+
+    if job_command == "start":
+        command = list(arguments.command)
+        if command and command[0] == "--":
+            command = command[1:]
+        if not command:
+            raise ValueError(
+                "runtime job start requires a wrapped subcommand, e.g. "
+                "'runtime job start JOB_ROOT -- scenario run SESSION SCENARIO'"
+            )
+        job_root.mkdir(parents=True, exist_ok=True)
+        result_path = job_root / _JOB_RESULT_FILENAME
+        if result_path.exists() or _job_record_path(job_root).exists():
+            raise ValueError(
+                f"job_root already has a job recorded; use a fresh directory: {job_root}"
+            )
+        argv = [
+            sys.executable,
+            "-c",
+            _CLI_REEXEC_BOOTSTRAP,
+            "runtime",
+            *command,
+            "--output",
+            str(result_path),
+        ]
+        lease = spawn_detached_process(argv, log_path=job_root / _JOB_LOG_FILENAME)
+        _write_job_record(
+            job_root,
+            {
+                "pid": lease.pid,
+                "process_group": lease.process_group,
+                "start_identity": lease.start_identity,
+                "executable": str(lease.executable),
+                "argv": command,
+                "started_at": time.time(),
+            },
+        )
+        _write_json({"job_root": str(job_root), "pid": lease.pid}, arguments.output)
+        return 0
+
+    record = _read_job_record(job_root)
+    if record is None:
+        if job_command == "stop":
+            _write_json({"stopped": False}, arguments.output)
+            return 0
+        raise ValueError(f"no job recorded at: {job_root}")
+    lease = _job_lease_from_record(record)
+
+    if job_command == "status":
+        result_path = job_root / _JOB_RESULT_FILENAME
+        running = detached_process_is_owned(lease)
+        payload: dict[str, object] = {
+            "argv": record["argv"],
+            "started_at": record["started_at"],
+            "running": running,
+        }
+        if result_path.exists():
+            payload["status"] = "completed"
+            payload["result"] = json.loads(result_path.read_text(encoding="utf-8"))
+        elif running:
+            payload["status"] = "running"
+        else:
+            payload["status"] = "failed"
+            log_path = job_root / _JOB_LOG_FILENAME
+            if log_path.is_file():
+                data = log_path.read_bytes()
+                payload["log_tail"] = data[-_JOB_LOG_TAIL_BYTES:].decode(
+                    "utf-8", errors="replace"
+                )
+        _write_json(payload, arguments.output)
+        return 0
+
+    if job_command == "stop":
+        stopped = stop_detached_process(lease, grace_seconds=2.0)
+        _write_json({"stopped": stopped}, arguments.output)
+        return 0
+
+    raise ValueError("runtime job requires start, status, or stop")
+
+
 def _heartbeat_json(heartbeat: Any | None) -> dict[str, object]:
     if heartbeat is None:
         return {"heartbeat": None}
@@ -1409,13 +1574,6 @@ def _heartbeat_json(heartbeat: Any | None) -> dict[str, object]:
             "healthy": heartbeat.healthy,
         }
     }
-
-
-_WATCHDOG_BOOTSTRAP = (
-    "import sys\n"
-    "from nds_disassembly_toolkit.cli import main\n"
-    "sys.exit(main())\n"
-)
 
 
 def _watchdog_recover(
@@ -1482,7 +1640,7 @@ def _run_watchdog_command(arguments: argparse.Namespace) -> int:
         argv = [
             sys.executable,
             "-c",
-            _WATCHDOG_BOOTSTRAP,
+            _CLI_REEXEC_BOOTSTRAP,
             "runtime",
             "watchdog",
             "run",
@@ -1737,6 +1895,9 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
 
     if command == "watchdog":
         return _run_watchdog_command(arguments)
+
+    if command == "job":
+        return _run_job_command(arguments)
 
     if command == "matrix":
         if arguments.runtime_matrix_command != "run":
