@@ -1178,6 +1178,16 @@ class _ManagedScenarioContext:
             read_memory=self.read_memory,
         )
 
+    def capture_screenshot(self, destination: Path) -> bool:
+        """Best-effort window screenshot; returns False if unavailable."""
+        if self.host_driver is None:
+            return False
+        capture = getattr(self.host_driver, "capture_window", None)
+        if not callable(capture):
+            return False
+        capture(self.record, destination)
+        return True
+
     def capture_snapshot(self, label: str | None) -> None:
         resolved = "snapshot" if label is None else label
         if Path(resolved).name != resolved or resolved in {"", ".", ".."}:
@@ -1248,6 +1258,7 @@ def _owned_x11_driver(record: RuntimeSessionRecord) -> X11HostDriver:
         )
     driver = X11HostDriver(
         xdotool=helpers.xdotool,
+        capture_tool=helpers.capture_tool,
         display=record.display,
     )
     if not driver.window_is_owned(record):

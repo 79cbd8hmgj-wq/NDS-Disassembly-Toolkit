@@ -24,6 +24,21 @@ from nds_disassembly_toolkit.errors import RuntimeDisplayError, RuntimeInputErro
 class X11Helpers:
     xvfb: Path | None
     xdotool: Path | None
+    capture_tool: Path | None = None
+
+
+# Preference order: ImageMagick's "import" is the most common X11 window
+# capture tool, "maim"/"scrot" are lighter-weight alternatives seen on
+# minimal container images.
+_CAPTURE_TOOL_CANDIDATES = ("import", "maim", "scrot")
+
+
+def find_capture_tool() -> Path | None:
+    for name in _CAPTURE_TOOL_CANDIDATES:
+        resolved = shutil.which(name)
+        if resolved is not None:
+            return Path(resolved)
+    return None
 
 
 _DISPLAY_LEASE_FILENAME = "x11-display.json"
@@ -80,6 +95,7 @@ def find_x11_helpers() -> X11Helpers:
     return X11Helpers(
         xvfb=None if xvfb is None else Path(xvfb),
         xdotool=None if xdotool is None else Path(xdotool),
+        capture_tool=find_capture_tool(),
     )
 
 

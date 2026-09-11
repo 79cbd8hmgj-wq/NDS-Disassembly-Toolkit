@@ -47,7 +47,7 @@ class DeSmuMEBackend:
             battery_save_isolation=True,
             window_input=True,
             touchscreen_input=True,
-            screenshot=False,
+            screenshot=True,
             debugger_handshake_mode=DebuggerHandshakeMode.DIRECT,
         )
 

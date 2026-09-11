@@ -923,6 +923,34 @@ def test_managed_scenario_restore_checkpoint_enforces_regions(tmp_path: Path) ->
         context.restore_checkpoint("baseline")
 
 
+def test_capture_screenshot_returns_false_without_host_driver(tmp_path: Path) -> None:
+    context = runtime_cli._ManagedScenarioContext(
+        _managed_scenario_record(tmp_path), object(), object()
+    )
+    assert context.capture_screenshot(tmp_path / "shot.png") is False
+
+
+def test_capture_screenshot_delegates_to_bound_host_driver(tmp_path: Path) -> None:
+    class HostDriver:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, Path]] = []
+
+        def capture_window(self, record: object, destination: Path) -> None:
+            self.calls.append((record, destination))
+            destination.write_bytes(b"png-bytes")
+
+    record = _managed_scenario_record(tmp_path)
+    driver = HostDriver()
+    context = runtime_cli._ManagedScenarioContext(
+        record, object(), object(), host_driver=driver
+    )
+    destination = tmp_path / "shot.png"
+
+    assert context.capture_screenshot(destination) is True
+    assert destination.read_bytes() == b"png-bytes"
+    assert driver.calls == [(record, destination)]
+
+
 def test_runtime_resume_rejects_unowned_process_as_recovery_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -983,7 +1011,7 @@ def test_managed_ui_scenario_requires_owned_window(
     monkeypatch.setattr(
         runtime_cli,
         "find_x11_helpers",
-        lambda: SimpleNamespace(xdotool=Path("/usr/bin/xdotool")),
+        lambda: SimpleNamespace(xdotool=Path("/usr/bin/xdotool"), capture_tool=None),
     )
 
     with (
@@ -1240,7 +1268,7 @@ def test_runtime_launch_desmume_owns_display_and_binds_window(
     monkeypatch.setattr(
         runtime_cli,
         "find_x11_helpers",
-        lambda: SimpleNamespace(xdotool=Path("/usr/bin/xdotool")),
+        lambda: SimpleNamespace(xdotool=Path("/usr/bin/xdotool"), capture_tool=None),
     )
     monkeypatch.setattr(runtime_cli, "X11HostDriver", Driver)
     monkeypatch.setattr(runtime_cli, "spawn_owned_process", fake_spawn)

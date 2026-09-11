@@ -10,6 +10,8 @@ from nds_disassembly_toolkit.analysis.orchestration.scenario import (
 )
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeSnapshot
 
+_LOG_TAIL_BYTES = 64 * 1024
+
 
 class FailureEvidenceContext(Protocol):
     session_root: Path
@@ -61,6 +63,38 @@ def _write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
+def _copy_log_tail(source: Path, destination: Path) -> bool:
+    if not source.is_file():
+        return False
+    size = source.stat().st_size
+    with source.open("rb") as handle:
+        if size > _LOG_TAIL_BYTES:
+            handle.seek(size - _LOG_TAIL_BYTES)
+        data = handle.read()
+    destination.write_bytes(data)
+    return True
+
+
+def _process_info(context: FailureEvidenceContext) -> dict[str, object] | None:
+    record = getattr(context, "record", None)
+    if record is None:
+        return None
+    alive_method = getattr(context, "process_alive", None)
+    info: dict[str, object] = {
+        "pid": getattr(record, "pid", None),
+        "window_id": getattr(record, "window_id", None),
+        "display": getattr(record, "display", None),
+    }
+    lifecycle = getattr(record, "lifecycle", None)
+    info["lifecycle"] = None if lifecycle is None else str(getattr(lifecycle, "value", lifecycle))
+    if callable(alive_method):
+        try:
+            info["process_alive"] = bool(alive_method())
+        except Exception:
+            info["process_alive"] = None
+    return info
+
+
 def collect_failure_bundle(
     context: FailureEvidenceContext,
     *,
@@ -84,6 +118,35 @@ def collect_failure_bundle(
         _write_json(bundle / "registers.json", _snapshot_payload(snapshot))
     except Exception as exc:
         secondary_errors.append(f"snapshot: {exc}")
+
+    # Best-effort forensic extras: a window screenshot, tails of the
+    # emulator's own stdout/stderr, and whatever process/window metadata the
+    # context exposes. None of these are required for the bundle to be
+    # useful, so a missing capability or transient failure here must never
+    # mask the primary scenario error.
+    capture = getattr(context, "capture_screenshot", None)
+    if callable(capture):
+        try:
+            captured = capture(bundle / "screenshot.png")
+            if captured is False:
+                secondary_errors.append("screenshot: capability unavailable")
+        except Exception as exc:
+            secondary_errors.append(f"screenshot: {exc}")
+
+    try:
+        for name in ("emulator.stdout.log", "emulator.stderr.log"):
+            source = context.session_root / name
+            tail_destination = bundle / f"{Path(name).stem}.tail.log"
+            _copy_log_tail(source, tail_destination)
+    except Exception as exc:
+        secondary_errors.append(f"emulator-log: {exc}")
+
+    try:
+        process_info = _process_info(context)
+        if process_info is not None:
+            _write_json(bundle / "process.json", process_info)
+    except Exception as exc:
+        secondary_errors.append(f"process-info: {exc}")
 
     _write_json(
         bundle / "failure.json",

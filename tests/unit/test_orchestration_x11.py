@@ -40,6 +40,30 @@ def test_find_x11_helpers_reports_missing_tools(monkeypatch: pytest.MonkeyPatch)
     helpers = find_x11_helpers()
     assert helpers.xvfb == Path("/usr/bin/Xvfb")
     assert helpers.xdotool is None
+    assert helpers.capture_tool is None
+
+
+def test_find_x11_helpers_discovers_capture_tool_by_preference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.orchestration.x11.shutil.which",
+        lambda name: "/usr/bin/maim" if name == "maim" else None,
+    )
+    helpers = find_x11_helpers()
+    assert helpers.capture_tool == Path("/usr/bin/maim")
+
+
+def test_find_x11_helpers_prefers_import_over_other_capture_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    available = {"import": "/usr/bin/import", "scrot": "/usr/bin/scrot"}
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.orchestration.x11.shutil.which",
+        lambda name: available.get(name),
+    )
+    helpers = find_x11_helpers()
+    assert helpers.capture_tool == Path("/usr/bin/import")
 
 
 def test_driver_defaults_to_a_positive_command_timeout() -> None:
