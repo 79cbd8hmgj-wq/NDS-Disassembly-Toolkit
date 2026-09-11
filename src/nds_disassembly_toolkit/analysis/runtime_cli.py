@@ -100,6 +100,7 @@ from nds_disassembly_toolkit.analysis.runtime.trace_model import (
 )
 from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
 from nds_disassembly_toolkit.errors import (
+    RuntimeAnalysisError,
     RuntimeLifecycleError,
     RuntimeRecoveryError,
     RuntimeScenarioError,
@@ -1039,10 +1040,26 @@ class _ManagedScenarioContext:
         return process_is_owned(self.record)
 
     def debugger_reachable(self) -> bool:
+        """Prove RSP connectivity with a bounded round trip instead of assuming it.
+
+        Reads the register snapshot the debugger already exposes for scenario
+        steps; the underlying RSP socket carries its own connect/read timeout,
+        so a dead or hung stub fails this probe rather than hanging the caller.
+        """
+        try:
+            self.debugger.snapshot()
+        except (RuntimeAnalysisError, OSError):
+            return False
         return True
 
     def window_ready(self) -> bool:
-        return self.record.window_id is not None and self.record.display is not None
+        if self.record.window_id is None or self.record.display is None:
+            return False
+        if self.host_driver is None:
+            # No host driver was bound (e.g. a windowless backend); window
+            # metadata being present is the only signal available.
+            return True
+        return bool(self.host_driver.window_is_owned(self.record))
 
     def _require_host_driver(self) -> Any:
         if self.host_driver is None:

@@ -762,6 +762,98 @@ def test_managed_scenario_snapshot_writes_canonical_runtime_json(
     assert registers["pc"] == "0x02000044"
 
 
+def _managed_scenario_record(tmp_path: Path, **overrides: object) -> object:
+    fields = {
+        "session_root": tmp_path,
+        "cpu": RuntimeCpu.ARM9,
+        "emulator": runtime_cli.EmulatorKind.DESMUME,
+        "rom_sha256": "1" * 64,
+        "window_id": None,
+        "display": None,
+    }
+    fields.update(overrides)
+    return type("Record", (), fields)()
+
+
+def test_debugger_reachable_probes_real_snapshot_and_returns_true(
+    tmp_path: Path,
+) -> None:
+    class Debugger:
+        def snapshot(self) -> RuntimeSnapshot:
+            return _snapshot(0x02000044)
+
+    context = runtime_cli._ManagedScenarioContext(
+        _managed_scenario_record(tmp_path), object(), Debugger()
+    )
+    assert context.debugger_reachable() is True
+
+
+def test_debugger_reachable_returns_false_on_connection_error(tmp_path: Path) -> None:
+    class DeadDebugger:
+        def snapshot(self) -> RuntimeSnapshot:
+            raise RuntimeConnectionError("stub is gone")
+
+    context = runtime_cli._ManagedScenarioContext(
+        _managed_scenario_record(tmp_path), object(), DeadDebugger()
+    )
+    assert context.debugger_reachable() is False
+
+
+def test_debugger_reachable_returns_false_on_socket_timeout(tmp_path: Path) -> None:
+    class HungDebugger:
+        def snapshot(self) -> RuntimeSnapshot:
+            raise TimeoutError("timed out")
+
+    context = runtime_cli._ManagedScenarioContext(
+        _managed_scenario_record(tmp_path), object(), HungDebugger()
+    )
+    assert context.debugger_reachable() is False
+
+
+def test_window_ready_is_false_without_window_metadata(tmp_path: Path) -> None:
+    context = runtime_cli._ManagedScenarioContext(
+        _managed_scenario_record(tmp_path, window_id=None, display=None),
+        object(),
+        object(),
+    )
+    assert context.window_ready() is False
+
+
+def test_window_ready_true_without_host_driver_when_metadata_present(
+    tmp_path: Path,
+) -> None:
+    context = runtime_cli._ManagedScenarioContext(
+        _managed_scenario_record(tmp_path, window_id="0x1", display=":99"),
+        object(),
+        object(),
+    )
+    assert context.window_ready() is True
+
+
+def test_window_ready_consults_host_driver_when_bound(tmp_path: Path) -> None:
+    class HostDriver:
+        def __init__(self, owned: bool) -> None:
+            self.owned = owned
+            self.calls: list[object] = []
+
+        def window_is_owned(self, record: object) -> bool:
+            self.calls.append(record)
+            return self.owned
+
+    record = _managed_scenario_record(tmp_path, window_id="0x1", display=":99")
+    live_driver = HostDriver(True)
+    context = runtime_cli._ManagedScenarioContext(
+        record, object(), object(), host_driver=live_driver
+    )
+    assert context.window_ready() is True
+    assert live_driver.calls == [record]
+
+    stale_driver = HostDriver(False)
+    stale_context = runtime_cli._ManagedScenarioContext(
+        record, object(), object(), host_driver=stale_driver
+    )
+    assert stale_context.window_ready() is False
+
 
 def test_runtime_resume_rejects_unowned_process_as_recovery_error(
     tmp_path: Path,
