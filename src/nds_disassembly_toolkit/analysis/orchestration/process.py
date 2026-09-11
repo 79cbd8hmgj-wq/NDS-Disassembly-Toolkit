@@ -18,6 +18,7 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
     LaunchSpec,
     RuntimeLifecycleState,
     RuntimeSessionRecord,
+    validate_lifecycle_transition,
 )
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
 from nds_disassembly_toolkit.errors import RuntimeLaunchError, RuntimeOwnershipError
@@ -211,12 +212,32 @@ def process_is_owned(record: RuntimeSessionRecord) -> bool:
         return False
 
 
+def transition_session(
+    record: RuntimeSessionRecord,
+    new_state: RuntimeLifecycleState,
+) -> RuntimeSessionRecord:
+    """Validate and persist a lifecycle transition, returning the updated record."""
+    validate_lifecycle_transition(record.lifecycle, new_state)
+    updated = replace(record, lifecycle=new_state)
+    store_session(updated)
+    return updated
+
+
+def mark_session_failed(record: RuntimeSessionRecord) -> RuntimeSessionRecord | None:
+    """Best-effort mark a session FAILED on disk; never raises."""
+    try:
+        return transition_session(record, RuntimeLifecycleState.FAILED)
+    except Exception:
+        return None
+
+
 def spawn_owned_process(
     record: RuntimeSessionRecord,
     launch: LaunchSpec,
 ) -> RuntimeSessionRecord:
     if record.pid is not None:
         raise RuntimeLaunchError("runtime session already has a process identity")
+    validate_lifecycle_transition(record.lifecycle, RuntimeLifecycleState.LAUNCHING)
     environment = os.environ.copy()
     environment.update(dict(launch.environment))
     stdout_path = record.session_root / "emulator.stdout.log"
@@ -251,6 +272,7 @@ def spawn_owned_process(
     if start_identity is None or process_group is None:
         with suppress(OSError):
             process.terminate()
+        mark_session_failed(record)
         raise RuntimeLaunchError("managed emulator exited before process identity was established")
 
     running = replace(
@@ -263,6 +285,7 @@ def spawn_owned_process(
     if not process_is_owned(running):
         with suppress(OSError):
             os.killpg(process_group, signal.SIGTERM)
+        mark_session_failed(record)
         raise RuntimeOwnershipError("managed emulator ownership could not be proven after launch")
     store_session(running)
     return running
@@ -287,8 +310,7 @@ def stop_owned_process(
         raise RuntimeOwnershipError("runtime process ownership could not be proven")
     assert record.process_group is not None
 
-    stopping = replace(record, lifecycle=RuntimeLifecycleState.STOPPING)
-    store_session(stopping)
+    stopping = transition_session(record, RuntimeLifecycleState.STOPPING)
     try:
         os.killpg(record.process_group, signal.SIGTERM)
     except OSError as exc:
@@ -308,6 +330,5 @@ def stop_owned_process(
         while time.monotonic() < kill_deadline and _group_alive(record.process_group):
             time.sleep(0.01)
 
-    closed = replace(stopping, lifecycle=RuntimeLifecycleState.CLOSED)
-    store_session(closed)
+    closed = transition_session(stopping, RuntimeLifecycleState.CLOSED)
     return closed

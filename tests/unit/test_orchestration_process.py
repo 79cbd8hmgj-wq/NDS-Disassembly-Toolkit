@@ -5,6 +5,7 @@ import os
 import socket
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,12 +19,14 @@ from nds_disassembly_toolkit.analysis.orchestration.process import (
     allocate_loopback_port,
     create_session,
     load_session,
+    mark_session_failed,
     process_is_owned,
     spawn_owned_process,
     stop_owned_process,
+    transition_session,
 )
 from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
-from nds_disassembly_toolkit.errors import RuntimeOwnershipError
+from nds_disassembly_toolkit.errors import RuntimeLifecycleError, RuntimeOwnershipError
 
 
 def _rom(tmp_path: Path) -> Path:
@@ -134,6 +137,68 @@ def test_stop_refuses_pid_identity_mismatch(tmp_path: Path) -> None:
         os.kill(running.pid, 0)
     finally:
         stop_owned_process(running, grace_seconds=1.0)
+
+
+def test_transition_session_persists_new_lifecycle_state(tmp_path: Path) -> None:
+    session = create_session(
+        tmp_path,
+        emulator=EmulatorKind.MELONDS,
+        executable=Path(sys.executable),
+        rom=_rom(tmp_path),
+        cpu=RuntimeCpu.ARM9,
+    )
+    updated = transition_session(session, RuntimeLifecycleState.PREPARING)
+    assert updated.lifecycle is RuntimeLifecycleState.PREPARING
+    assert load_session(session.session_root).lifecycle is RuntimeLifecycleState.PREPARING
+
+
+def test_transition_session_rejects_illegal_jump(tmp_path: Path) -> None:
+    session = create_session(
+        tmp_path,
+        emulator=EmulatorKind.MELONDS,
+        executable=Path(sys.executable),
+        rom=_rom(tmp_path),
+        cpu=RuntimeCpu.ARM9,
+    )
+    with pytest.raises(RuntimeLifecycleError):
+        transition_session(session, RuntimeLifecycleState.RUNNING)
+    # the on-disk record must be untouched by the rejected transition
+    assert load_session(session.session_root).lifecycle is RuntimeLifecycleState.CREATED
+
+
+def test_mark_session_failed_is_best_effort_and_persists(tmp_path: Path) -> None:
+    session = create_session(
+        tmp_path,
+        emulator=EmulatorKind.MELONDS,
+        executable=Path(sys.executable),
+        rom=_rom(tmp_path),
+        cpu=RuntimeCpu.ARM9,
+    )
+    failed = mark_session_failed(session)
+    assert failed is not None
+    assert failed.lifecycle is RuntimeLifecycleState.FAILED
+    assert load_session(session.session_root).lifecycle is RuntimeLifecycleState.FAILED
+
+    # a second call from a terminal CLOSED state cannot legally reach FAILED
+    # again in one hop from CLOSED, so it must return None rather than raise
+    closed = replace(failed, lifecycle=RuntimeLifecycleState.CLOSED)
+    assert mark_session_failed(closed) is None
+
+
+def test_spawn_owned_process_rejects_illegal_starting_lifecycle(tmp_path: Path) -> None:
+    session = create_session(
+        tmp_path,
+        emulator=EmulatorKind.MELONDS,
+        executable=Path(sys.executable),
+        rom=_rom(tmp_path),
+        cpu=RuntimeCpu.ARM9,
+    )
+    closed = replace(session, lifecycle=RuntimeLifecycleState.CLOSED)
+    with pytest.raises(RuntimeLifecycleError):
+        spawn_owned_process(
+            closed,
+            LaunchSpec(argv=(sys.executable, "-c", "import time; time.sleep(60)")),
+        )
 
 
 def test_stop_owned_process_does_not_signal_unrelated_process(tmp_path: Path) -> None:

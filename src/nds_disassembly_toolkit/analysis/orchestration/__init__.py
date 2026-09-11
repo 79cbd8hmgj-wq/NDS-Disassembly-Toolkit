@@ -48,6 +48,7 @@ from nds_disassembly_toolkit.analysis.orchestration.model import (
     ProcessIdentity,
     RuntimeLifecycleState,
     RuntimeSessionRecord,
+    validate_lifecycle_transition,
 )
 from nds_disassembly_toolkit.analysis.orchestration.predicates import (
     AllOf,
@@ -70,9 +71,11 @@ from nds_disassembly_toolkit.analysis.orchestration.predicates import (
 from nds_disassembly_toolkit.analysis.orchestration.process import (
     create_session,
     load_session,
+    mark_session_failed,
     process_is_owned,
     spawn_owned_process,
     stop_owned_process,
+    transition_session,
 )
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     AssertStep,
@@ -106,6 +109,7 @@ from nds_disassembly_toolkit.errors import (
     RuntimeEnvironmentError,
     RuntimeInputError,
     RuntimeLaunchError,
+    RuntimeLifecycleError,
     RuntimeOrchestrationError,
     RuntimeOwnershipError,
     RuntimeRecoveryError,
@@ -165,6 +169,7 @@ __all__ = [
     "RuntimeEnvironmentError",
     "RuntimeInputError",
     "RuntimeLaunchError",
+    "RuntimeLifecycleError",
     "RuntimeLifecycleState",
     "RuntimeMemoryWrite",
     "RuntimeOrchestrationError",
@@ -197,6 +202,7 @@ __all__ = [
     "load_scenario",
     "load_session",
     "map_touch_point",
+    "mark_session_failed",
     "process_is_owned",
     "restore_checkpoint",
     "resume_scenario",
@@ -206,6 +212,8 @@ __all__ = [
     "spawn_owned_process",
     "stop_owned_process",
     "store_journal",
+    "transition_session",
     "validate_checkpoint",
+    "validate_lifecycle_transition",
     "wait_for_predicate",
 ]

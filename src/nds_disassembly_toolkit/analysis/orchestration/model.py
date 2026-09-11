@@ -5,6 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from nds_disassembly_toolkit.analysis.runtime.model import RuntimeCpu
+from nds_disassembly_toolkit.errors import RuntimeLifecycleError
 
 SESSION_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_VERSION = 1
@@ -41,6 +42,82 @@ class RuntimeLifecycleState(StrEnum):
     STOPPING = "stopping"
     CLOSED = "closed"
     FAILED = "failed"
+
+
+# Legal successor states for each lifecycle state. STOPPING and FAILED are
+# reachable from every non-terminal state so a session can always be torn
+# down or flagged broken, even mid-launch; every other edge models a real
+# forward step in bringing a managed emulator session up.
+_LIFECYCLE_TRANSITIONS: dict[RuntimeLifecycleState, frozenset[RuntimeLifecycleState]] = {
+    RuntimeLifecycleState.CREATED: frozenset(
+        {
+            RuntimeLifecycleState.PREPARING,
+            RuntimeLifecycleState.LAUNCHING,
+            RuntimeLifecycleState.FAILED,
+            RuntimeLifecycleState.STOPPING,
+        }
+    ),
+    RuntimeLifecycleState.PREPARING: frozenset(
+        {
+            RuntimeLifecycleState.LAUNCHING,
+            RuntimeLifecycleState.FAILED,
+            RuntimeLifecycleState.STOPPING,
+        }
+    ),
+    RuntimeLifecycleState.LAUNCHING: frozenset(
+        {
+            RuntimeLifecycleState.WAITING_FOR_RUNTIME,
+            RuntimeLifecycleState.READY,
+            RuntimeLifecycleState.FAILED,
+            RuntimeLifecycleState.STOPPING,
+        }
+    ),
+    RuntimeLifecycleState.WAITING_FOR_RUNTIME: frozenset(
+        {
+            RuntimeLifecycleState.READY,
+            RuntimeLifecycleState.FAILED,
+            RuntimeLifecycleState.STOPPING,
+        }
+    ),
+    RuntimeLifecycleState.READY: frozenset(
+        {
+            RuntimeLifecycleState.RUNNING,
+            RuntimeLifecycleState.FAILED,
+            RuntimeLifecycleState.STOPPING,
+        }
+    ),
+    RuntimeLifecycleState.RUNNING: frozenset(
+        {
+            RuntimeLifecycleState.READY,
+            RuntimeLifecycleState.FAILED,
+            RuntimeLifecycleState.STOPPING,
+        }
+    ),
+    RuntimeLifecycleState.STOPPING: frozenset(
+        {RuntimeLifecycleState.CLOSED, RuntimeLifecycleState.FAILED}
+    ),
+    RuntimeLifecycleState.CLOSED: frozenset(),
+    # A FAILED session can still own a live process (e.g. launch failed after
+    # the emulator forked); STOPPING must stay reachable so it can be reaped.
+    RuntimeLifecycleState.FAILED: frozenset({RuntimeLifecycleState.STOPPING}),
+}
+
+
+def validate_lifecycle_transition(
+    current: RuntimeLifecycleState,
+    new: RuntimeLifecycleState,
+) -> None:
+    """Raise ``RuntimeLifecycleError`` if ``current -> new`` is not a legal step.
+
+    Re-affirming the current state (``new is current``) is always a no-op.
+    """
+    if new is current:
+        return
+    allowed = _LIFECYCLE_TRANSITIONS.get(current, frozenset())
+    if new not in allowed:
+        raise RuntimeLifecycleError(
+            f"illegal runtime lifecycle transition: {current.value} -> {new.value}"
+        )
 
 
 @dataclass(frozen=True, slots=True)

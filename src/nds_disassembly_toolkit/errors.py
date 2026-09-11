@@ -86,6 +86,10 @@ class RuntimeOwnershipError(RuntimeOrchestrationError):
     """Raised when ownership of a managed runtime resource cannot be proven."""
 
 
+class RuntimeLifecycleError(RuntimeOrchestrationError):
+    """Raised when a runtime session lifecycle transition is illegal."""
+
+
 class RuntimeDisplayError(RuntimeOrchestrationError):
     """Raised when a managed display or emulator window cannot be used safely."""
 

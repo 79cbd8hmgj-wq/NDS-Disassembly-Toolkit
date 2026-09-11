@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from nds_disassembly_toolkit.analysis.model import CrossReference, FunctionCandidate, Symbol
-from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind, RuntimeSessionRecord
+from nds_disassembly_toolkit.analysis.orchestration import (
+    EmulatorKind,
+    RuntimeLifecycleState,
+    RuntimeSessionRecord,
+)
 from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
     AcceptanceCase,
     AcceptanceMatrixResult,
@@ -42,10 +46,12 @@ from nds_disassembly_toolkit.analysis.orchestration.melonds_backend import Melon
 from nds_disassembly_toolkit.analysis.orchestration.process import (
     create_session,
     load_session,
+    mark_session_failed,
     process_is_owned,
     spawn_owned_process,
     stop_owned_process,
     store_session,
+    transition_session,
 )
 from nds_disassembly_toolkit.analysis.orchestration.scenario import (
     CaptureTraceStep,
@@ -93,7 +99,11 @@ from nds_disassembly_toolkit.analysis.runtime.trace_model import (
     TraceSummary,
 )
 from nds_disassembly_toolkit.analysis.runtime.trace_store import TraceStore
-from nds_disassembly_toolkit.errors import RuntimeRecoveryError, RuntimeScenarioError
+from nds_disassembly_toolkit.errors import (
+    RuntimeLifecycleError,
+    RuntimeRecoveryError,
+    RuntimeScenarioError,
+)
 
 _MAX_STEP_COUNT = 256
 _MAX_TRACE_STEPS = 100000
@@ -1167,6 +1177,19 @@ class _ManagedScenarioContext:
         capture_trace(self.debugger, config, self.session_root / "traces" / step.output)
 
 
+def _try_transition(
+    record: RuntimeSessionRecord,
+    new_state: RuntimeLifecycleState,
+) -> RuntimeSessionRecord:
+    """Best-effort lifecycle transition: a session already past this point,
+    or one adopted from a bare fixture that skipped the launch flow, is left
+    untouched rather than raising."""
+    try:
+        return transition_session(record, new_state)
+    except RuntimeLifecycleError:
+        return record
+
+
 def _owned_x11_driver(record: RuntimeSessionRecord) -> X11HostDriver:
     helpers = find_x11_helpers()
     if helpers.xdotool is None:
@@ -1234,14 +1257,16 @@ def _scenario_context(
     )
     if host_driver is not None:
         _bind_managed_backend_runtime(backend, record, host_driver, debugger)
+    running_record = _try_transition(record, RuntimeLifecycleState.RUNNING)
     try:
         yield _ManagedScenarioContext(
-            record,
+            running_record,
             backend,
             debugger,
             host_driver=host_driver,
         )
     finally:
+        _try_transition(running_record, RuntimeLifecycleState.READY)
         close = getattr(debugger, "close", None)
         if callable(close):
             close()
@@ -1301,6 +1326,7 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 display=display,
             )
             running = spawn_owned_process(session_record, launch)
+            running = transition_session(running, RuntimeLifecycleState.WAITING_FOR_RUNTIME)
 
             if backend.capabilities.window_input:
                 helpers = find_x11_helpers()
@@ -1316,10 +1342,13 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 running = replace(running, window_id=window_id)
                 store_session(running)
 
+            running = transition_session(running, RuntimeLifecycleState.READY)
+
             _write_json(_session_json(running), arguments.output)
             return 0
         except BaseException:
             if running is not None:
+                mark_session_failed(running)
                 with suppress(Exception):
                     stop_owned_process(running)
             if display_lease is not None:
