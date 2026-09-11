@@ -338,3 +338,20 @@ The consolidated CI workflow builds the pinned stock melonDS core headlessly wit
 Python verification additionally covers `.ndstrace` schema/atomicity, read/write/access watchpoint orchestration, RSP watchpoint packets and cleanup, correlation/overlay ambiguity, memory differentials, CLI parsing/JSON, mismatch handling, and end-to-end offline workflows.
 
 No melonDS implementation source is copied, linked, translated, or vendored into the MIT toolkit; melonDS remains an external GPL process/build used for interoperability verification.
+
+## Runtime reliability hardening
+
+Phase 7H3's managed orchestration layer initially left several reliability gaps: synchronous-only execution, no automatic recovery from a dead emulator process, a stubbed debugger-reachability check, and other issues that made long, agent-driven runtime sessions fragile. This hardening pass addressed all of them without changing any existing public API:
+
+- **Background execution** — `runtime job start JOB_ROOT -- <any runtime subcommand>` runs any `runtime` command in a detached process and returns immediately; `job status`/`job stop` poll/terminate it. A long `scenario run` or `matrix run` no longer has to block the calling agent.
+- **Automatic relaunch from checkpoints** — `orchestration.recovery.relaunch_dead_session()`/`recover_session_from_checkpoint()` spawn a fresh emulator process for a session whose owned process has died, reusing the session's identity, and optionally restore a named checkpoint immediately after.
+- **Real `debugger_reachable()`** — `_ManagedScenarioContext.debugger_reachable()` now performs a bounded RSP register-snapshot round trip instead of unconditionally returning `True`.
+- **Real window health** — `window_ready()` consults the bound X11 host driver's `window_is_owned()` check instead of only checking that window metadata is non-`None`.
+- **Persistent heartbeat/watchdog** — `orchestration.watchdog` polls session health on an interval, persists a heartbeat every tick, and can auto-recover an unhealthy session; `runtime watchdog start/stop/status/run` runs it as a detached daemon.
+- **Session-isolated battery saves** — DeSmuME now launches against a per-session symlinked (or copied) ROM so its adjacent `.dsv` save never collides across sessions sharing a ROM path; both backends expose `battery_save_path()` so checkpoints capture/restore it.
+- **Enforced checkpoint verification regions** — `create_checkpoint(..., verification_regions=...)` persists the fingerprints instead of discarding them, and `restore_checkpoint(..., read_memory=...)` re-reads live memory and enforces them.
+- **First-class screenshots and richer failure bundles** — `find_x11_helpers()` discovers a capture tool (ImageMagick `import`, `maim`, or `scrot`); `collect_failure_bundle()` now also captures a best-effort screenshot, tails of the emulator's own stdout/stderr, and process/window metadata.
+- **Deeper `runtime doctor`** — `--destructive` actually launches the emulator, connects the debugger, and proves the RSP handshake instead of trusting static capability flags; always tears itself down.
+- **Hard deadlines on X11 subprocesses** — every `xdotool`/capture-tool invocation is now bounded by a configurable timeout instead of risking an indefinite hang.
+- **Hardened save-state slot discovery** — DeSmuME's quicksave-slot detection now requires two consecutive identical `(mtime, size)` observations before accepting a save as complete, instead of accepting the first observed change.
+- **Enforced lifecycle transitions** — `RuntimeLifecycleState` transitions are now validated against an explicit legal-transition table (`validate_lifecycle_transition()`), and sessions are actually driven through the previously-unused `WAITING_FOR_RUNTIME`/`READY`/`RUNNING`/`FAILED` states.
