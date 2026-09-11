@@ -27,6 +27,38 @@ class X11Helpers:
 
 
 _DISPLAY_LEASE_FILENAME = "x11-display.json"
+DEFAULT_X11_COMMAND_TIMEOUT = 5.0
+
+
+def _run_bounded(
+    argv: list[str],
+    *,
+    timeout: float,
+    env: dict[str, str] | None,
+    check: bool = False,
+    capture_output: bool = True,
+    text: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """subprocess.run wrapped with a hard deadline.
+
+    A hung xdotool/capture-tool child (e.g. a display that stopped
+    responding) must never block the calling thread indefinitely.
+    """
+    if timeout <= 0:
+        raise ValueError("X11 command timeout must be positive")
+    try:
+        return subprocess.run(
+            argv,
+            check=check,
+            capture_output=capture_output,
+            text=text,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeInputError(
+            f"X11 command timed out after {timeout}s: {' '.join(argv)}"
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,10 +246,14 @@ class X11HostDriver:
         xdotool: Path,
         capture_tool: Path | None = None,
         display: str | None = None,
+        command_timeout: float = DEFAULT_X11_COMMAND_TIMEOUT,
     ) -> None:
+        if command_timeout <= 0:
+            raise ValueError("X11 command timeout must be positive")
         self.xdotool = xdotool
         self.capture_tool = capture_tool
         self.display = display
+        self.command_timeout = command_timeout
 
     def _display_environment(
         self,
@@ -233,11 +269,9 @@ class X11HostDriver:
         return environment
 
     def _window_pid(self, window_id: str) -> int | None:
-        completed = subprocess.run(
+        completed = _run_bounded(
             [str(self.xdotool), "getwindowpid", window_id],
-            check=False,
-            capture_output=True,
-            text=True,
+            timeout=self.command_timeout,
             env=(
                 None
                 if self.display is None
@@ -264,7 +298,7 @@ class X11HostDriver:
         environment = self._display_environment(session)
         deadline = time.monotonic() + timeout
         while True:
-            completed = subprocess.run(
+            completed = _run_bounded(
                 [
                     str(self.xdotool),
                     "search",
@@ -272,9 +306,7 @@ class X11HostDriver:
                     "--pid",
                     str(session.pid),
                 ],
-                check=False,
-                capture_output=True,
-                text=True,
+                timeout=self.command_timeout,
                 env=environment,
             )
             if completed.returncode == 0:
@@ -294,16 +326,14 @@ class X11HostDriver:
 
     def window_geometry(self, session: RuntimeSessionRecord) -> WindowGeometry:
         window_id = self._require_owned_window(session)
-        completed = subprocess.run(
+        completed = _run_bounded(
             [
                 str(self.xdotool),
                 "getwindowgeometry",
                 "--shell",
                 window_id,
             ],
-            check=False,
-            capture_output=True,
-            text=True,
+            timeout=self.command_timeout,
             env=self._display_environment(session),
         )
         if completed.returncode != 0:
@@ -346,8 +376,9 @@ class X11HostDriver:
 
     def _focus_owned_window(self, session: RuntimeSessionRecord) -> str:
         window_id = self._require_owned_window(session)
-        subprocess.run(
+        _run_bounded(
             [str(self.xdotool), "windowfocus", "--sync", window_id],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )
@@ -357,8 +388,9 @@ class X11HostDriver:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
         window_id = self._focus_owned_window(session)
-        subprocess.run(
+        _run_bounded(
             [str(self.xdotool), "keydown", "--window", window_id, host_key],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )
@@ -367,8 +399,9 @@ class X11HostDriver:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
         window_id = self._focus_owned_window(session)
-        subprocess.run(
+        _run_bounded(
             [str(self.xdotool), "keyup", "--window", window_id, host_key],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )
@@ -377,8 +410,9 @@ class X11HostDriver:
         if not host_key:
             raise RuntimeInputError("host key must not be empty")
         window_id = self._focus_owned_window(session)
-        subprocess.run(
+        _run_bounded(
             [str(self.xdotool), "key", "--window", window_id, host_key],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )
@@ -391,7 +425,7 @@ class X11HostDriver:
         y: int,
     ) -> None:
         window_id = self._require_owned_window(session)
-        subprocess.run(
+        _run_bounded(
             [
                 str(self.xdotool),
                 "mousemove",
@@ -400,6 +434,7 @@ class X11HostDriver:
                 str(x),
                 str(y),
             ],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )
@@ -413,8 +448,9 @@ class X11HostDriver:
         self._require_owned_window(session)
         if button <= 0:
             raise RuntimeInputError("pointer button must be positive")
-        subprocess.run(
+        _run_bounded(
             [str(self.xdotool), "mousedown", str(button)],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )
@@ -428,8 +464,9 @@ class X11HostDriver:
         self._require_owned_window(session)
         if button <= 0:
             raise RuntimeInputError("pointer button must be positive")
-        subprocess.run(
+        _run_bounded(
             [str(self.xdotool), "mouseup", str(button)],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )
@@ -443,13 +480,14 @@ class X11HostDriver:
         if self.capture_tool is None:
             raise RuntimeInputError("X11 capture tool is unavailable")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
+        _run_bounded(
             [
                 str(self.capture_tool),
                 "-window",
                 window_id,
                 str(destination),
             ],
+            timeout=self.command_timeout,
             check=True,
             env=self._display_environment(session),
         )

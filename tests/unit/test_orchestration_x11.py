@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from nds_disassembly_toolkit.analysis.orchestration.x11 import (
+    DEFAULT_X11_COMMAND_TIMEOUT,
+    X11HostDriver,
     allocate_display_number,
     find_x11_helpers,
     sanitize_x11_environment,
 )
+from nds_disassembly_toolkit.errors import RuntimeInputError
 
 
 def test_sanitize_x11_environment_overrides_dummy_sdl() -> None:
@@ -36,6 +40,65 @@ def test_find_x11_helpers_reports_missing_tools(monkeypatch: pytest.MonkeyPatch)
     helpers = find_x11_helpers()
     assert helpers.xvfb == Path("/usr/bin/Xvfb")
     assert helpers.xdotool is None
+
+
+def test_driver_defaults_to_a_positive_command_timeout() -> None:
+    driver = X11HostDriver(xdotool=Path("/usr/bin/xdotool"))
+    assert driver.command_timeout == DEFAULT_X11_COMMAND_TIMEOUT
+    assert driver.command_timeout > 0
+
+
+def test_driver_rejects_non_positive_command_timeout() -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        X11HostDriver(xdotool=Path("/usr/bin/xdotool"), command_timeout=0)
+
+
+def test_hung_xdotool_call_raises_instead_of_blocking_forever(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from nds_disassembly_toolkit.analysis.orchestration import (
+        EmulatorKind,
+        RuntimeLifecycleState,
+        RuntimeSessionRecord,
+    )
+    from nds_disassembly_toolkit.analysis.runtime import RuntimeCpu
+
+    session = RuntimeSessionRecord(
+        schema_version=1,
+        session_id="session-a",
+        lifecycle=RuntimeLifecycleState.RUNNING,
+        emulator=EmulatorKind.MELONDS,
+        emulator_executable=Path("/usr/bin/melonDS"),
+        emulator_sha256=None,
+        emulator_version=None,
+        rom_path=tmp_path / "game.nds",
+        rom_sha256="0" * 64,
+        cpu=RuntimeCpu.ARM9,
+        pid=1234,
+        process_group=1234,
+        process_start_identity="start",
+        debugger_host="127.0.0.1",
+        debugger_port=39001,
+        display=":104",
+        window_id="0xabc",
+        session_root=tmp_path,
+        last_completed_step=None,
+        last_completed_case=None,
+    )
+    driver = X11HostDriver(xdotool=Path("/usr/bin/xdotool"), command_timeout=0.05)
+    monkeypatch.setattr(driver, "_window_pid", lambda window_id: 1234)
+
+    def hung_run(argv: list[str], **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0.05))
+
+    monkeypatch.setattr(
+        "nds_disassembly_toolkit.analysis.orchestration.x11.subprocess.run",
+        hung_run,
+    )
+
+    with pytest.raises(RuntimeInputError, match="timed out"):
+        driver.send_key(session, "z")
 
 
 def test_x11_driver_rejects_window_not_owned_by_session(
