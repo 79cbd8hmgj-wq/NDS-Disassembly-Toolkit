@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -25,6 +26,7 @@ from nds_disassembly_toolkit.analysis.orchestration.acceptance import (
 )
 from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
     CheckpointContext,
+    CheckpointMemoryFingerprint,
     CheckpointMetadata,
     create_checkpoint,
     restore_checkpoint,
@@ -343,6 +345,13 @@ def add_runtime_parser(subparsers: Any) -> None:
     )
     checkpoint_save.add_argument("session", type=Path)
     checkpoint_save.add_argument("name")
+    checkpoint_save.add_argument(
+        "--verify",
+        action="append",
+        type=_memory_region_spec,
+        default=[],
+        help="ADDRESS:LENGTH region to fingerprint; restore will re-verify it",
+    )
     _add_output_argument(checkpoint_save)
     checkpoint_restore = checkpoint_commands.add_parser(
         "restore",
@@ -1138,12 +1147,29 @@ class _ManagedScenarioContext:
             backend=self.backend,
         )
 
-    def save_checkpoint(self, name: str) -> None:
-        create_checkpoint(self._checkpoint_context(), name)
+    def save_checkpoint(
+        self,
+        name: str,
+        *,
+        verify: tuple[tuple[int, int], ...] = (),
+    ) -> None:
+        regions = tuple(
+            CheckpointMemoryFingerprint(
+                address=address,
+                length=length,
+                sha256=hashlib.sha256(self.read_memory(address, length)).hexdigest(),
+            )
+            for address, length in verify
+        )
+        create_checkpoint(self._checkpoint_context(), name, verification_regions=regions)
 
     def restore_checkpoint(self, name: str) -> None:
         context = self._checkpoint_context()
-        restore_checkpoint(context, context.checkpoint_root / name)
+        restore_checkpoint(
+            context,
+            context.checkpoint_root / name,
+            read_memory=self.read_memory,
+        )
 
     def capture_snapshot(self, label: str | None) -> None:
         resolved = "snapshot" if label is None else label
@@ -1434,7 +1460,26 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
             )
             checkpoint_path = context.checkpoint_root / arguments.name
             if arguments.runtime_checkpoint_command == "save":
-                checkpoint_path = create_checkpoint(context, arguments.name)
+                verify_specs: list[str] = getattr(arguments, "verify", [])
+                if verify_specs and debugger is None:
+                    raise RuntimeScenarioError(
+                        "checkpoint --verify requires a connected debugger"
+                    )
+                regions = []
+                for spec in verify_specs:
+                    address_text, _, length_text = spec.partition(":")
+                    address, length = int(address_text, 0), int(length_text, 0)
+                    data = cast(bytes, cast(Any, debugger).read_memory(address, length))
+                    regions.append(
+                        CheckpointMemoryFingerprint(
+                            address=address,
+                            length=length,
+                            sha256=hashlib.sha256(data).hexdigest(),
+                        )
+                    )
+                checkpoint_path = create_checkpoint(
+                    context, arguments.name, verification_regions=tuple(regions)
+                )
                 metadata = validate_checkpoint(checkpoint_path, context)
                 _write_json(
                     _checkpoint_metadata_json(metadata, checkpoint_path),
@@ -1442,7 +1487,13 @@ def run_runtime_command(arguments: argparse.Namespace) -> int:
                 )
                 return 0
             if arguments.runtime_checkpoint_command == "restore":
-                restore_checkpoint(context, checkpoint_path)
+                restore_checkpoint(
+                    context,
+                    checkpoint_path,
+                    read_memory=(
+                        None if debugger is None else cast(Any, debugger).read_memory
+                    ),
+                )
                 metadata = validate_checkpoint(checkpoint_path, context)
                 _write_json(
                     _checkpoint_metadata_json(metadata, checkpoint_path),

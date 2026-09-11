@@ -4,6 +4,7 @@ import hashlib
 import json
 import secrets
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -59,6 +60,7 @@ class CheckpointMetadata:
     state_sha256: str
     battery_save_filename: str | None = None
     battery_save_sha256: str | None = None
+    verification_regions: tuple[CheckpointMemoryFingerprint, ...] = ()
 
 
 def _sha256(path: Path) -> str:
@@ -83,6 +85,14 @@ def _validate_name(name: str) -> None:
         raise RuntimeCheckpointError("checkpoint name must be one safe path component")
 
 
+def _fingerprint_json(fingerprint: CheckpointMemoryFingerprint) -> dict[str, object]:
+    return {
+        "address": fingerprint.address,
+        "length": fingerprint.length,
+        "sha256": fingerprint.sha256,
+    }
+
+
 def _metadata_json(metadata: CheckpointMetadata) -> dict[str, object]:
     return {
         "schema_version": metadata.schema_version,
@@ -93,6 +103,9 @@ def _metadata_json(metadata: CheckpointMetadata) -> dict[str, object]:
         "state_sha256": metadata.state_sha256,
         "battery_save_filename": metadata.battery_save_filename,
         "battery_save_sha256": metadata.battery_save_sha256,
+        "verification_regions": [
+            _fingerprint_json(region) for region in metadata.verification_regions
+        ],
     }
 
 
@@ -127,6 +140,17 @@ def _load_metadata(path: Path) -> CheckpointMetadata:
         battery_save_sha256 = (
             None if battery_hash_value is None else str(battery_hash_value)
         )
+        raw_regions = payload.get("verification_regions", [])
+        if not isinstance(raw_regions, list):
+            raise RuntimeCheckpointError("checkpoint verification regions must be a list")
+        verification_regions = tuple(
+            CheckpointMemoryFingerprint(
+                address=int(region["address"]),
+                length=int(region["length"]),
+                sha256=str(region["sha256"]),
+            )
+            for region in raw_regions
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeCheckpointError("checkpoint metadata is incomplete or invalid") from exc
     if schema_version != CHECKPOINT_SCHEMA_VERSION:
@@ -139,6 +163,15 @@ def _load_metadata(path: Path) -> CheckpointMetadata:
         _validate_name(battery_save_filename)
     if (battery_save_filename is None) != (battery_save_sha256 is None):
         raise RuntimeCheckpointError("checkpoint battery-save metadata is incomplete")
+    for region in verification_regions:
+        if region.address < 0 or region.length <= 0:
+            raise RuntimeCheckpointError("checkpoint verification region is malformed")
+        if len(region.sha256) != 64 or any(
+            character not in _HEX_DIGITS for character in region.sha256
+        ):
+            raise RuntimeCheckpointError(
+                "checkpoint verification region hash must be 64 lowercase hex characters"
+            )
     return CheckpointMetadata(
         schema_version=schema_version,
         name=name,
@@ -148,6 +181,7 @@ def _load_metadata(path: Path) -> CheckpointMetadata:
         state_sha256=state_sha256,
         battery_save_filename=battery_save_filename,
         battery_save_sha256=battery_save_sha256,
+        verification_regions=verification_regions,
     )
 
 
@@ -157,7 +191,9 @@ def create_checkpoint(
     *,
     verification_regions: tuple[CheckpointMemoryFingerprint, ...] = (),
 ) -> Path:
-    del verification_regions
+    for region in verification_regions:
+        if region.address < 0 or region.length <= 0:
+            raise RuntimeCheckpointError("checkpoint verification region is malformed")
     _validate_name(name)
     root = context.checkpoint_root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -191,6 +227,7 @@ def create_checkpoint(
             state_sha256=_sha256(state),
             battery_save_filename=battery_save_filename,
             battery_save_sha256=battery_save_sha256,
+            verification_regions=verification_regions,
         )
         _store_metadata(temporary, metadata)
         temporary.replace(destination)
@@ -224,11 +261,38 @@ def validate_checkpoint(
     return metadata
 
 
+def verify_checkpoint_regions(
+    metadata: CheckpointMetadata,
+    *,
+    read_memory: Callable[[int, int], bytes],
+) -> None:
+    """Actually enforce a checkpoint's recorded memory-region fingerprints.
+
+    Re-reads each region from live memory and compares its hash against the
+    value captured when the checkpoint was created, raising
+    ``RuntimeCheckpointError`` on the first mismatch or short read.
+    """
+    for region in metadata.verification_regions:
+        observed = read_memory(region.address, region.length)
+        if len(observed) != region.length:
+            raise RuntimeCheckpointError(
+                f"checkpoint verification region 0x{region.address:08x} "
+                f"returned {len(observed)} bytes, expected {region.length}"
+            )
+        observed_sha256 = hashlib.sha256(observed).hexdigest()
+        if observed_sha256 != region.sha256:
+            raise RuntimeCheckpointError(
+                f"checkpoint verification region 0x{region.address:08x} "
+                "does not match restored memory"
+            )
+
+
 def restore_checkpoint(
     context: CheckpointContext,
     path: Path,
     *,
     predicates: tuple[CheckpointPredicate, ...] = (),
+    read_memory: Callable[[int, int], bytes] | None = None,
 ) -> None:
     metadata = validate_checkpoint(path, context)
     resolved = path.expanduser().resolve()
@@ -241,6 +305,13 @@ def restore_checkpoint(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(resolved / metadata.battery_save_filename, destination)
     context.backend.load_state(state)
+    if metadata.verification_regions:
+        if read_memory is None:
+            raise RuntimeCheckpointError(
+                "checkpoint declares verification regions but no read_memory "
+                "callable was provided to enforce them"
+            )
+        verify_checkpoint_regions(metadata, read_memory=read_memory)
     for predicate in predicates:
         if not predicate.evaluate(context):
             raise RuntimeCheckpointError("checkpoint restore verification failed")

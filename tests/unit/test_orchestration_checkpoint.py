@@ -8,9 +8,11 @@ import pytest
 from nds_disassembly_toolkit.analysis.orchestration import EmulatorKind
 from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
     CheckpointContext,
+    CheckpointMemoryFingerprint,
     create_checkpoint,
     restore_checkpoint,
     validate_checkpoint,
+    verify_checkpoint_regions,
 )
 from nds_disassembly_toolkit.errors import RuntimeCheckpointError
 
@@ -118,3 +120,86 @@ def test_checkpoint_hashes_and_restores_battery_save(tmp_path: Path) -> None:
     (path / "battery-save.bin").write_bytes(b"tampered")
     with pytest.raises(RuntimeCheckpointError, match="battery"):
         validate_checkpoint(path, context)
+
+
+def _sha256_hex(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_create_checkpoint_persists_verification_regions(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    live_memory = {0x02000000: b"\x01\x02\x03\x04"}
+    region = CheckpointMemoryFingerprint(
+        address=0x02000000,
+        length=4,
+        sha256=_sha256_hex(live_memory[0x02000000]),
+    )
+
+    path = create_checkpoint(context, "baseline", verification_regions=(region,))
+    metadata = validate_checkpoint(path, context)
+
+    assert metadata.verification_regions == (region,)
+
+
+def test_verify_checkpoint_regions_passes_when_memory_matches(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    region = CheckpointMemoryFingerprint(
+        address=0x02000000, length=4, sha256=_sha256_hex(b"\x01\x02\x03\x04")
+    )
+    path = create_checkpoint(context, "baseline", verification_regions=(region,))
+    metadata = validate_checkpoint(path, context)
+
+    verify_checkpoint_regions(metadata, read_memory=lambda addr, length: b"\x01\x02\x03\x04")
+
+
+def test_verify_checkpoint_regions_rejects_mismatched_memory(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    region = CheckpointMemoryFingerprint(
+        address=0x02000000, length=4, sha256=_sha256_hex(b"\x01\x02\x03\x04")
+    )
+    path = create_checkpoint(context, "baseline", verification_regions=(region,))
+    metadata = validate_checkpoint(path, context)
+
+    with pytest.raises(RuntimeCheckpointError, match="does not match"):
+        verify_checkpoint_regions(
+            metadata, read_memory=lambda addr, length: b"\xff\xff\xff\xff"
+        )
+
+
+def test_verify_checkpoint_regions_rejects_short_read(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    region = CheckpointMemoryFingerprint(
+        address=0x02000000, length=4, sha256=_sha256_hex(b"\x01\x02\x03\x04")
+    )
+    path = create_checkpoint(context, "baseline", verification_regions=(region,))
+    metadata = validate_checkpoint(path, context)
+
+    with pytest.raises(RuntimeCheckpointError, match="returned"):
+        verify_checkpoint_regions(metadata, read_memory=lambda addr, length: b"\x01\x02")
+
+
+def test_restore_checkpoint_enforces_verification_regions(tmp_path: Path) -> None:
+    region = CheckpointMemoryFingerprint(
+        address=0x02000000, length=4, sha256=_sha256_hex(b"\x01\x02\x03\x04")
+    )
+    context = _context(tmp_path)
+    path = create_checkpoint(context, "baseline", verification_regions=(region,))
+
+    # a caller that supplies no read_memory cannot claim the region was checked
+    with pytest.raises(RuntimeCheckpointError, match="read_memory"):
+        restore_checkpoint(context, path)
+
+    restore_checkpoint(context, path, read_memory=lambda addr, length: b"\x01\x02\x03\x04")
+
+    with pytest.raises(RuntimeCheckpointError, match="does not match"):
+        restore_checkpoint(context, path, read_memory=lambda addr, length: b"\x00\x00\x00\x00")
+
+
+def test_restore_checkpoint_without_regions_does_not_require_read_memory(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    path = create_checkpoint(context, "baseline")
+    restore_checkpoint(context, path)

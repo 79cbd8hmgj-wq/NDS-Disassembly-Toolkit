@@ -855,6 +855,74 @@ def test_window_ready_consults_host_driver_when_bound(tmp_path: Path) -> None:
     assert stale_context.window_ready() is False
 
 
+def test_managed_scenario_save_checkpoint_fingerprints_verify_regions(
+    tmp_path: Path,
+) -> None:
+    class Debugger:
+        def read_memory(self, address: int, length: int) -> bytes:
+            return bytes([address & 0xFF]) * length
+
+    class Backend:
+        def save_state(self, destination: Path) -> None:
+            destination.write_bytes(b"state")
+
+    record = _managed_scenario_record(tmp_path)
+    context = runtime_cli._ManagedScenarioContext(record, Backend(), Debugger())
+
+    context.save_checkpoint("baseline", verify=((0x02000000, 4),))
+
+    from nds_disassembly_toolkit.analysis.orchestration.checkpoint import (
+        CheckpointContext,
+        validate_checkpoint,
+    )
+
+    checkpoint_context = CheckpointContext(
+        checkpoint_root=tmp_path / "checkpoints",
+        emulator=runtime_cli.EmulatorKind.DESMUME,
+        rom_sha256="1" * 64,
+        backend=Backend(),
+    )
+    metadata = validate_checkpoint(tmp_path / "checkpoints" / "baseline", checkpoint_context)
+    assert len(metadata.verification_regions) == 1
+    region = metadata.verification_regions[0]
+    assert region.address == 0x02000000
+    assert region.length == 4
+    import hashlib
+
+    assert region.sha256 == hashlib.sha256(b"\x00\x00\x00\x00").hexdigest()
+
+
+def test_managed_scenario_restore_checkpoint_enforces_regions(tmp_path: Path) -> None:
+    class Debugger:
+        def __init__(self) -> None:
+            self.memory = b"\x01\x02\x03\x04"
+
+        def read_memory(self, address: int, length: int) -> bytes:
+            return self.memory
+
+    class Backend:
+        def save_state(self, destination: Path) -> None:
+            destination.write_bytes(b"state")
+
+        def load_state(self, source: Path) -> None:
+            pass
+
+    debugger = Debugger()
+    record = _managed_scenario_record(tmp_path)
+    context = runtime_cli._ManagedScenarioContext(record, Backend(), debugger)
+    context.save_checkpoint("baseline", verify=((0x02000000, 4),))
+
+    # live memory still matches: restore succeeds
+    context.restore_checkpoint("baseline")
+
+    # live memory has drifted: restore must now fail loudly
+    debugger.memory = b"\x00\x00\x00\x00"
+    from nds_disassembly_toolkit.errors import RuntimeCheckpointError
+
+    with pytest.raises(RuntimeCheckpointError, match="does not match"):
+        context.restore_checkpoint("baseline")
+
+
 def test_runtime_resume_rejects_unowned_process_as_recovery_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
